@@ -1,0 +1,53 @@
+@import '/fonts.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --navy: #0f2444;
+  --primary: #1a3c6e;
+  --accent: #2563eb;
+  --accent-dk: #1d4ed8;
+  --teal: #0891b2;
+  --success: #16a34a;
+  --warning: #f59e0b;
+  --danger: #dc2626;
+  --bg: #f0f4f8;
+  --surface: #ffffff;
+  --border: #e2e8f0;
+  --text: #0f172a;
+  --muted: #64748b;
+}
+
+html, body, #app { height: 100%; }
+body {
+  font-family: 'Inter', 'Noto Sans Devanagari', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  margin: 0;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+@layer components {
+  .pp-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold
+           transition-colors cursor-pointer border-none;
+  }
+  .pp-btn-primary { @apply bg-accent text-white hover:bg-accent-dk; }
+  .pp-btn-ghost   { @apply bg-slate-100 text-slate-700 hover:bg-slate-200; }
+  .pp-btn-success { @apply bg-success text-white hover:brightness-95; }
+  .pp-btn-danger  { @apply bg-danger text-white hover:brightness-95; }
+
+  .pp-card { @apply bg-white rounded-xl border border-slate-200 shadow-card; }
+  .pp-input {
+    @apply w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white
+           outline-none focus:border-accent focus:ring-2 focus:ring-accent/15;
+  }
+  .pp-label { @apply block text-xs font-semibold text-slate-500 mb-1; }
+  .pp-badge { @apply inline-block text-xs font-bold px-2 py-0.5 rounded-full; }
+}
