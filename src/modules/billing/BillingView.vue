@@ -10,6 +10,7 @@ import { getStateName, getStateCode, isGstinValid } from '@/services/gst'
 import { numberToWords } from '@/services/numberToWords'
 import { setPendingRTGS } from '@/services/rtgsBridge'
 import { openStatementPrint } from '@/services/billingStatements'
+import { getEwayEligibility, downloadEwayJson } from '@/services/ewayBill'
 import PpModal from '@/components/PpModal.vue'
 import type { Invoice, InvoiceItemLine, PayStatus, GstType } from '@/types/models'
 import { uid } from '@/data/util'
@@ -34,8 +35,19 @@ const quickItem = reactive<NewItem>({
 })
 const ITEM_UNITS = ['PCS', 'KG', 'MTR', 'NOS', 'BOX', 'SET', 'SQM', 'DOZEN']
 
+const ewayFrom = ref('')
+const ewayTo = ref('')
+const ewaySelected = ref<string[]>([])
+const ewayCheckAll = ref(false)
+
+function defaultEwayDates() {
+  const now = new Date()
+  ewayFrom.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
+  ewayTo.value = now.toISOString().slice(0, 10)
+}
+
 // State
-const activeTab = ref<'new' | 'history' | 'templates'>('new')
+const activeTab = ref<'new' | 'history' | 'templates' | 'eway'>('new')
 const search = ref('')
 const statusFilter = ref<'all' | PayStatus>('all')
 const histFrom = ref('')
@@ -264,6 +276,129 @@ const totalTax = computed(() => {
 const rawGrandTotal = computed(() => subTotal.value + totalTax.value)
 const grandTotal = computed(() => Math.round(rawGrandTotal.value))
 const roundOff = computed(() => grandTotal.value - rawGrandTotal.value)
+
+const formEwayEligibility = computed(() => getEwayEligibility({
+  doc_type: form.doc_type,
+  grand_total: grandTotal.value,
+  gst_type: form.gst_type,
+  is_deleted: false,
+}))
+
+const ewayCandidates = computed(() => {
+  let list = invoiceStore.list.filter((b) => {
+    if (b.is_deleted || b.firm_id !== firmStore.activeFirmId) return false
+    return getEwayEligibility(b).show
+  })
+  if (ewayFrom.value) list = list.filter((b) => b.date >= ewayFrom.value)
+  if (ewayTo.value) list = list.filter((b) => b.date <= ewayTo.value)
+  return list.sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+})
+
+function refreshEwaySelection() {
+  ewaySelected.value = ewayCandidates.value
+    .filter((b) => getEwayEligibility(b).autoSelect)
+    .map((b) => b.id)
+  ewayCheckAll.value = ewayCandidates.value.length > 0 && ewaySelected.value.length === ewayCandidates.value.length
+}
+
+function toggleEwaySelect(id: string) {
+  const i = ewaySelected.value.indexOf(id)
+  if (i >= 0) ewaySelected.value.splice(i, 1)
+  else ewaySelected.value.push(id)
+  ewayCheckAll.value = ewayCandidates.value.length > 0 && ewaySelected.value.length === ewayCandidates.value.length
+}
+
+function toggleEwayCheckAll() {
+  if (ewayCheckAll.value) {
+    ewaySelected.value = ewayCandidates.value.map((b) => b.id)
+  } else {
+    ewaySelected.value = []
+  }
+}
+
+function ewayLevelLabel(b: Invoice) {
+  const e = getEwayEligibility(b)
+  if (e.level === 'required') return 'Required'
+  if (e.level === 'suggested') return 'Suggested'
+  return '—'
+}
+
+function buildInvoiceDraftFromForm(): Invoice {
+  const validItems = form.items.filter((row) => row.name.trim() && row.qty > 0 && row.rate > 0)
+  const customerObj = partyStore.list.find((p) => !p.is_deleted && p.name.toLowerCase() === form.party_name.trim().toLowerCase())
+  return {
+    id: editingId.value || 'draft',
+    firm_id: firmStore.activeFirmId,
+    doc_type: form.doc_type,
+    bill_no: form.bill_no.trim() || 'DRAFT',
+    date: form.date,
+    party_id: form.party_id,
+    party_name: form.party_name.trim(),
+    party_snapshot: customerObj || { name: form.party_name.trim() },
+    sameAsBuyer: form.sameAsBuyer,
+    ship: form.sameAsBuyer ? null : { ...form.ship },
+    dispatch: form.dispatch,
+    lr: form.lr,
+    vehicle: form.vehicle,
+    transMode: form.transMode,
+    transporterName: form.transporterName,
+    transporterId: form.transporterId,
+    eway: form.eway,
+    dest: form.dest,
+    distance: form.distance,
+    gst_type: form.gst_type,
+    items: validItems,
+    sub: subTotal.value,
+    total_tax: totalTax.value,
+    round_off: roundOff.value,
+    grand_total: grandTotal.value,
+    amt_paid: form.amt_paid,
+    pay_status: form.pay_status,
+    notes: form.notes,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    is_deleted: false,
+  } as Invoice
+}
+
+function downloadSelectedEwayJson() {
+  const firm = firmStore.activeFirm
+  if (!firm) return alert('Active firm set karein')
+  const selected = ewayCandidates.value.filter((b) => ewaySelected.value.includes(b.id))
+  if (!selected.length) return alert('Kam se kam ek bill select karein')
+  try {
+    const n = downloadEwayJson(selected, firm)
+    alert(`${n} E-Way bill JSON download ho gaya. Upload: ewaybillgst.gov.in → Generate Bulk`)
+  } catch (e: any) {
+    alert(e.message || 'E-Way JSON failed')
+  }
+}
+
+function downloadFormEwayJson() {
+  const firm = firmStore.activeFirm
+  if (!firm) return alert('Active firm set karein')
+  if (!formEwayEligibility.value.show) {
+    return alert('Is bill par E-Way JSON nahi banta.\n\nSame state: ₹50,000+\nInter-state: sab amounts (₹50k se kam = suggested)')
+  }
+  if (!form.party_name.trim()) return alert('Pehle customer bharein')
+  const validItems = form.items.filter((row) => row.name.trim() && row.qty > 0 && row.rate > 0)
+  if (!validItems.length) return alert('Kam se kam ek valid item line chahiye')
+  if (!form.vehicle?.trim()) {
+    if (!confirm('Vehicle number khali hai. Phir bhi E-Way JSON banayein?')) return
+  }
+  try {
+    downloadEwayJson([buildInvoiceDraftFromForm()], firm)
+    alert('E-Way JSON download ho gaya')
+  } catch (e: any) {
+    alert(e.message || 'E-Way JSON failed')
+  }
+}
+
+watch(activeTab, (tab) => {
+  if (tab === 'eway') refreshEwaySelection()
+})
+
+watch([ewayFrom, ewayTo], () => refreshEwaySelection())
 
 // Payment handler auto-fills
 function onPayStatusChange() {
@@ -503,6 +638,10 @@ async function saveInvoice() {
     } else {
       const savedInvoice = await invoiceStore.add(invoiceData, usedAutoNumber)
       alert(`Invoice ${savedInvoice.bill_no} created successfully!`)
+      const el = getEwayEligibility(savedInvoice)
+      if (el.show) {
+        alert(`${el.reason}\n\nBilling → E-Way Bill tab se NIC JSON download karein.`)
+      }
     }
 
     // Refresh last sold rates for items
@@ -775,6 +914,7 @@ function applyBoxCalcPrefill() {
 }
 
 onMounted(() => {
+  defaultEwayDates()
   invoiceStore.load()
   partyStore.load()
   itemStore.load()
@@ -821,6 +961,10 @@ onMounted(() => {
           :class="['px-3 py-1.5 text-xs font-semibold rounded-md transition-colors', activeTab === 'templates' ? 'bg-white text-navy shadow-sm' : 'text-slate-600 hover:text-navy']">
           Templates
         </button>
+        <button @click="activeTab = 'eway'"
+          :class="['px-3 py-1.5 text-xs font-semibold rounded-md transition-colors', activeTab === 'eway' ? 'bg-white text-navy shadow-sm' : 'text-slate-600 hover:text-navy']">
+          E-Way Bill
+        </button>
       </div>
     </header>
 
@@ -836,6 +980,12 @@ onMounted(() => {
 
       <!-- Main Form Area -->
       <div class="lg:col-span-3 space-y-6">
+        <div v-if="formEwayEligibility.show" class="pp-card p-3 border border-amber-200 bg-amber-50 text-sm text-amber-900">
+          🚚 <strong>E-Way:</strong> {{ formEwayEligibility.reason }}
+          <span v-if="formEwayEligibility.level === 'suggested'" class="block text-xs mt-1 text-amber-800">
+            Inter-state ₹50,000 se kam — JSON optional hai; transport ho to bana lena.
+          </span>
+        </div>
         <div class="pp-card p-5 space-y-4">
           <!-- Doc type, Date & Invoice No -->
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -1077,6 +1227,14 @@ onMounted(() => {
             <button @click="saveInvoice" class="pp-btn pp-btn-primary flex-1">Save Bill</button>
             <button @click="saveAsTemplate" class="pp-btn pp-btn-ghost" title="Save as template">💾</button>
           </div>
+          <button
+            v-if="formEwayEligibility.show"
+            type="button"
+            class="pp-btn pp-btn-ghost w-full text-xs"
+            @click="downloadFormEwayJson"
+          >
+            🚚 Download E-Way JSON (this bill)
+          </button>
           <button @click="resetForm" class="pp-btn pp-btn-ghost w-full text-xs">Reset Form</button>
         </div>
       </div>
@@ -1163,7 +1321,87 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- TAB 3: TEMPLATES -->
+    <!-- TAB 3: E-WAY BILL JSON -->
+    <div v-if="activeTab === 'eway'" class="space-y-4">
+      <div class="pp-card p-5">
+        <h2 class="font-bold text-navy mb-2">🚚 E-Way Bill JSON (NIC Bulk Upload)</h2>
+        <p class="text-sm text-slate-500 mb-4">
+          JSON banane ke baad upload karein:
+          <strong>ewaybillgst.gov.in → Generate Bulk</strong>
+        </p>
+        <div class="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4 space-y-1">
+          <div><strong>Same state (intra):</strong> sirf bill ≥ ₹50,000</div>
+          <div><strong>Inter-state:</strong> har amount par JSON (₹50,000 se kam = <em>Suggested</em>, optional)</div>
+          <div>Transport details (vehicle, distance, LR) bill me bharein — JSON me jayenge.</div>
+        </div>
+        <div class="flex flex-wrap gap-3 items-end mb-4">
+          <div>
+            <label class="pp-label">From Date</label>
+            <input v-model="ewayFrom" type="date" class="pp-input !w-40" />
+          </div>
+          <div>
+            <label class="pp-label">To Date</label>
+            <input v-model="ewayTo" type="date" class="pp-input !w-40" />
+          </div>
+          <button type="button" class="pp-btn pp-btn-primary" @click="downloadSelectedEwayJson">📥 Download NIC JSON</button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-slate-50 text-slate-500 text-xs uppercase">
+              <tr>
+                <th class="px-3 py-2 w-8">
+                  <input v-model="ewayCheckAll" type="checkbox" class="rounded" @change="toggleEwayCheckAll" />
+                </th>
+                <th class="px-3 py-2 text-left">Date</th>
+                <th class="px-3 py-2 text-left">Bill No</th>
+                <th class="px-3 py-2 text-left">Customer</th>
+                <th class="px-3 py-2 text-left">Type</th>
+                <th class="px-3 py-2 text-right">Total</th>
+                <th class="px-3 py-2 text-center">Dist.</th>
+                <th class="px-3 py-2 text-left">Vehicle</th>
+                <th class="px-3 py-2 text-left">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!ewayCandidates.length">
+                <td colspan="9" class="text-center text-slate-400 py-10">
+                  Is date range me koi eligible bill nahi (Tax Invoice + amount rules).
+                </td>
+              </tr>
+              <tr v-for="b in ewayCandidates" :key="b.id" class="border-t border-slate-100 hover:bg-slate-50">
+                <td class="px-3 py-2">
+                  <input
+                    type="checkbox"
+                    class="rounded"
+                    :checked="ewaySelected.includes(b.id)"
+                    @change="toggleEwaySelect(b.id)"
+                  />
+                </td>
+                <td class="px-3 py-2">{{ b.date }}</td>
+                <td class="px-3 py-2 font-mono">{{ b.bill_no }}</td>
+                <td class="px-3 py-2">{{ b.party_name }}</td>
+                <td class="px-3 py-2">{{ b.gst_type === 'inter' ? 'Inter' : 'Intra' }}</td>
+                <td class="px-3 py-2 text-right tabular-nums">₹{{ n2(b.grand_total) }}</td>
+                <td class="px-3 py-2 text-center">{{ b.distance || 0 }}</td>
+                <td class="px-3 py-2">{{ b.vehicle || '—' }}</td>
+                <td class="px-3 py-2">
+                  <span
+                    :class="[
+                      'pp-badge text-[10px]',
+                      getEwayEligibility(b).level === 'required' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800',
+                    ]"
+                  >
+                    {{ ewayLevelLabel(b) }}
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: TEMPLATES -->
     <div v-if="activeTab === 'templates'" class="space-y-4">
       <div class="pp-card overflow-hidden">
         <table class="w-full text-sm">
