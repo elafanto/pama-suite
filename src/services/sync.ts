@@ -65,7 +65,6 @@ async function upsertCloudRow(
   const row: any = {
     id: rec.id,
     org_id: orgId,
-    firm_id: rec.firm_id || rec.id,
     is_deleted: rec.is_deleted,
     created_at: rec.created_at,
     updated_at: rec.updated_at,
