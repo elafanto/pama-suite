@@ -32,8 +32,12 @@ export const useInvoiceStore = defineStore('invoices', () => {
       await firmStore.update(firmId, { next_bill_no: nextNo })
     }
 
-    // Post to double-entry ledger
-    await accounting.postSaleToLedger(rec)
+    try {
+      await accounting.load()
+      await accounting.postSaleToLedger(rec)
+    } catch (e) {
+      console.warn('Ledger posting skipped:', e)
+    }
     await logActivity(firmId, 'create', 'invoice', rec.id, `Invoice ${rec.bill_no} created`)
 
     await load()

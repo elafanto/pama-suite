@@ -2,16 +2,15 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useFirmStore } from '@/stores/firm'
-import { usePartyStore } from '@/stores/parties'
-import { useItemStore } from '@/stores/items'
+import { usePartyStore, type NewParty } from '@/stores/parties'
+import { useItemStore, type NewItem } from '@/stores/items'
 import { useInvoiceStore } from '@/stores/invoices'
+import { useAccountingStore } from '@/stores/accounting'
 import { getStateName, getStateCode, isGstinValid } from '@/services/gst'
 import { numberToWords } from '@/services/numberToWords'
 import { setPendingRTGS } from '@/services/rtgsBridge'
 import { openStatementPrint } from '@/services/billingStatements'
 import PpModal from '@/components/PpModal.vue'
-import AiScanPanel from '@/components/AiScanPanel.vue'
-import type { ScanResult } from '@/services/aiScanner'
 import type { Invoice, InvoiceItemLine, PayStatus, GstType } from '@/types/models'
 import { uid } from '@/data/util'
 
@@ -22,6 +21,18 @@ const firmStore = useFirmStore()
 const partyStore = usePartyStore()
 const itemStore = useItemStore()
 const invoiceStore = useInvoiceStore()
+const accountingStore = useAccountingStore()
+
+const showQuickCust = ref(false)
+const showQuickItem = ref(false)
+const quickCust = reactive<NewParty>({
+  name: '', roles: ['customer'], gst: '', phone: '', email: '', addr: '',
+  city: '', pin: '', state: '05', is_consumer: false, bank: '', acno: '', ifsc: '', acname: '',
+})
+const quickItem = reactive<NewItem>({
+  name: '', unit: 'KG', hsn: '48043100', gst: 18, rate: 0, size: '', gsm: '', bf: '',
+})
+const ITEM_UNITS = ['PCS', 'KG', 'MTR', 'NOS', 'BOX', 'SET', 'SQM', 'DOZEN']
 
 // State
 const activeTab = ref<'new' | 'history' | 'templates'>('new')
@@ -278,26 +289,33 @@ const gstinFeedback = computed(() => {
   return { ok: false, msg: '⚠ Invalid GSTIN format' }
 })
 
-function applyScan(result: ScanResult) {
-  if (result.supplierName) {
-    form.party_name = result.supplierName
-    handleCustSelect()
-  }
-  if (result.billNo) form.bill_no = result.billNo
-  if (result.date) form.date = result.date
-  if (result.items?.length) {
-    form.items = []
-    for (const it of result.items) {
-      addRow({
-        name: it.name,
-        hsn: it.hsn || '48043100',
-        qty: it.qty || 0,
-        rate: it.rate || 0,
-        gst: it.gst ?? 18,
-      })
-    }
-  }
-  if (form.items.length === 0) addRow()
+function openQuickCust() {
+  Object.assign(quickCust, {
+    name: form.party_name.trim() || '', roles: ['customer'], gst: '', phone: '', email: '', addr: '',
+    city: '', pin: '', state: '05', is_consumer: false, bank: '', acno: '', ifsc: '', acname: '',
+  })
+  showQuickCust.value = true
+}
+
+async function saveQuickCust() {
+  if (!quickCust.name.trim()) return alert('Customer name required')
+  if (quickCust.gst && !quickCust.state) quickCust.state = quickCust.gst.slice(0, 2)
+  const p = await partyStore.add({ ...quickCust })
+  form.party_name = p.name
+  form.party_id = p.id
+  handleCustSelect()
+  showQuickCust.value = false
+}
+
+function openQuickItem() {
+  Object.assign(quickItem, { name: '', unit: 'KG', hsn: '48043100', gst: 18, rate: 0, size: '', gsm: '', bf: '' })
+  showQuickItem.value = true
+}
+
+async function saveQuickItem() {
+  if (!quickItem.name.trim()) return alert('Item name required')
+  await itemStore.add({ ...quickItem })
+  showQuickItem.value = false
 }
 
 function repeatLastBill() {
@@ -467,6 +485,7 @@ async function saveInvoice() {
     payment: form.payment,
     gst_type: form.gst_type,
     items: validItems,
+    taxBuckets: taxBuckets.value,
     sub: subTotal.value,
     total_tax: totalTax.value,
     round_off: roundOff.value,
@@ -496,9 +515,9 @@ async function saveInvoice() {
 
     resetForm()
     activeTab.value = 'history'
-  } catch (err) {
+  } catch (err: any) {
     console.error(err)
-    alert('Failed to save invoice.')
+    alert('Failed to save invoice: ' + (err?.message || String(err)))
   }
 }
 
@@ -759,6 +778,7 @@ onMounted(() => {
   invoiceStore.load()
   partyStore.load()
   itemStore.load()
+  accountingStore.load()
   if (!applyBoxCalcPrefill()) resetForm()
 
   // Load templates from localStorage
@@ -816,7 +836,6 @@ onMounted(() => {
 
       <!-- Main Form Area -->
       <div class="lg:col-span-3 space-y-6">
-        <AiScanPanel @scanned="applyScan" />
         <div class="pp-card p-5 space-y-4">
           <!-- Doc type, Date & Invoice No -->
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -843,7 +862,10 @@ onMounted(() => {
           <!-- Customer details -->
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-slate-100 pt-4">
             <div>
-              <label class="pp-label">Client / Buyer *</label>
+              <div class="flex items-center justify-between gap-2 mb-1">
+                <label class="pp-label !mb-0">Client / Buyer *</label>
+                <button type="button" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" @click="openQuickCust">+ Add Customer</button>
+              </div>
               <input v-model="form.party_name" list="customerList" @input="handleCustSelect" class="pp-input" placeholder="Search or type buyer name..." />
               <p v-if="gstinFeedback.msg" class="text-xs mt-1" :class="gstinFeedback.ok ? 'text-emerald-600' : 'text-amber-600'">{{ gstinFeedback.msg }}</p>
             </div>
@@ -898,9 +920,12 @@ onMounted(() => {
 
         <!-- Items Entry Table -->
         <div class="pp-card overflow-hidden">
-          <div class="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+          <div class="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
             <h2 class="font-bold text-navy">Goods Description &amp; Rows</h2>
-            <button @click="addRow()" class="pp-btn pp-btn-ghost !px-2.5 !py-1 text-xs">+ Add Row</button>
+            <div class="flex gap-2">
+              <button type="button" @click="openQuickItem" class="pp-btn pp-btn-ghost !px-2.5 !py-1 text-xs">+ Add Item</button>
+              <button @click="addRow()" class="pp-btn pp-btn-ghost !px-2.5 !py-1 text-xs">+ Add Row</button>
+            </div>
           </div>
           <div class="overflow-x-auto">
             <table class="w-full text-xs">
@@ -1262,6 +1287,48 @@ onMounted(() => {
         <div class="flex justify-end gap-2 pt-2">
           <button class="pp-btn pp-btn-ghost" @click="showStatementModal = false">Cancel</button>
           <button class="pp-btn pp-btn-primary" @click="generateStatementPDF">📄 Generate PDF</button>
+        </div>
+      </div>
+    </PpModal>
+
+    <PpModal v-if="showQuickCust" title="Add Customer" @close="showQuickCust = false">
+      <div class="space-y-3">
+        <div><label class="pp-label">Name *</label><input v-model="quickCust.name" class="pp-input" /></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="pp-label">GSTIN</label><input v-model="quickCust.gst" class="pp-input uppercase" /></div>
+          <div><label class="pp-label">Phone</label><input v-model="quickCust.phone" class="pp-input" /></div>
+        </div>
+        <div><label class="pp-label">Address</label><input v-model="quickCust.addr" class="pp-input" /></div>
+        <div class="grid grid-cols-3 gap-3">
+          <div><label class="pp-label">City</label><input v-model="quickCust.city" class="pp-input" /></div>
+          <div><label class="pp-label">PIN</label><input v-model="quickCust.pin" class="pp-input" /></div>
+          <div><label class="pp-label">State</label><input v-model="quickCust.state" class="pp-input" placeholder="05" /></div>
+        </div>
+        <div class="flex justify-end gap-2 pt-2">
+          <button class="pp-btn pp-btn-ghost" @click="showQuickCust = false">Cancel</button>
+          <button class="pp-btn pp-btn-primary" @click="saveQuickCust">Save Customer</button>
+        </div>
+      </div>
+    </PpModal>
+
+    <PpModal v-if="showQuickItem" title="Add Item" @close="showQuickItem = false">
+      <div class="space-y-3">
+        <div><label class="pp-label">Name *</label><input v-model="quickItem.name" class="pp-input" /></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="pp-label">HSN</label><input v-model="quickItem.hsn" class="pp-input" /></div>
+          <div><label class="pp-label">Unit</label>
+            <select v-model="quickItem.unit" class="pp-input">
+              <option v-for="u in ITEM_UNITS" :key="u" :value="u">{{ u }}</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="pp-label">Rate (₹)</label><input v-model.number="quickItem.rate" type="number" class="pp-input" /></div>
+          <div><label class="pp-label">GST %</label><input v-model.number="quickItem.gst" type="number" class="pp-input" /></div>
+        </div>
+        <div class="flex justify-end gap-2 pt-2">
+          <button class="pp-btn pp-btn-ghost" @click="showQuickItem = false">Cancel</button>
+          <button class="pp-btn pp-btn-primary" @click="saveQuickItem">Save Item</button>
         </div>
       </div>
     </PpModal>

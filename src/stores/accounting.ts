@@ -114,12 +114,10 @@ export const useAccountingStore = defineStore('accounting', () => {
   async function getNextVoucherNo(type: Voucher['type']): Promise<string> {
     const firmStore = useFirmStore()
     const firmId = firmStore.activeFirmId
-    const count = await db.vouchers
-      .where('[firm_id+type]')
-      .equals([firmId, type])
-      .filter((v) => !v.is_deleted)
-      .count()
-    return `${type}-${String(count + 1).padStart(4, '0')}`
+    const list = await db.vouchers
+      .filter((v) => v.firm_id === firmId && v.type === type && !v.is_deleted)
+      .toArray()
+    return `${type}-${String(list.length + 1).padStart(4, '0')}`
   }
 
   async function postVoucher(
