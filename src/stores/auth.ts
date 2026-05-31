@@ -1,24 +1,48 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { getSupabase, supabaseConfigured, isVercelDeploy } from '@/services/supabase'
+import {
+  getSupabase,
+  isSupabaseConfigured,
+  isHostedDeploy,
+  saveSupabaseKeys,
+  resetSupabaseClient,
+} from '@/services/supabase'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<{ id: string; email: string } | null>(null)
   const orgId = ref<string | null>(localStorage.getItem('pama_org_id'))
   const loading = ref(false)
   const error = ref('')
+  /** Bump after manual key save so computed isConfigured refreshes. */
+  const configVersion = ref(0)
 
-  const isConfigured = computed(() => supabaseConfigured)
+  const isConfigured = computed(() => {
+    configVersion.value
+    return isSupabaseConfigured()
+  })
   const isLoggedIn = computed(() => !!user.value)
-  const canSync = computed(() => supabaseConfigured && !!user.value && !!orgId.value)
+  const canSync = computed(() => isConfigured.value && !!user.value && !!orgId.value)
+
+  async function applySupabaseKeys(url: string, anon: string): Promise<boolean> {
+    if (!url.trim() || !anon.trim()) {
+      error.value = 'URL aur anon key dono bhari honi chahiye'
+      return false
+    }
+    saveSupabaseKeys(url, anon)
+    configVersion.value++
+    resetSupabaseClient()
+    await init()
+    return isSupabaseConfigured()
+  }
 
   /** Human-readable reason sync is blocked; null when sync is allowed. */
   const syncBlockReason = computed((): string | null => {
-    if (!supabaseConfigured) {
-      if (isVercelDeploy()) {
-        return 'Supabase keys missing on this Vercel site.\n\nFix: Vercel Dashboard → your project → Settings → Environment Variables → add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (from Supabase Dashboard → Settings → API), then Redeploy.\n\nNote: Vite bakes env vars at build time — adding vars alone is not enough; you must redeploy.'
+    configVersion.value
+    if (!isSupabaseConfigured()) {
+      if (isHostedDeploy()) {
+        return 'Supabase connect nahi hai.\n\nOption A (recommended): Neeche Settings me URL + anon key paste karein → Save & Connect.\n\nOption B: Vercel → Environment Variables → VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY → Redeploy.'
       }
-      return 'Supabase keys missing locally.\n\nFix: copy .env.example to .env.local, add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then restart npm run dev.'
+      return 'Supabase connect nahi hai.\n\nOption A: Neeche URL + anon key paste karein → Save & Connect.\n\nOption B: .env.local me keys → npm run dev restart.'
     }
     if (!user.value) {
       return 'Sign in required for cloud sync.\n\nGo to Login (/login) and sign in with your Supabase account.'
@@ -82,9 +106,7 @@ export const useAuthStore = defineStore('auth', () => {
     error.value = ''
     const sb = getSupabase()
     if (!sb) {
-      error.value = isVercelDeploy()
-        ? 'Supabase not configured on this site — add VITE_* keys in Vercel env vars and redeploy'
-        : 'Supabase not configured — copy .env.example to .env.local and restart dev server'
+      error.value = 'Pehle Settings → Cloud Sync me Supabase URL + anon key save karein (Save & Connect).'
       return false
     }
     loading.value = true
@@ -105,9 +127,7 @@ export const useAuthStore = defineStore('auth', () => {
     error.value = ''
     const sb = getSupabase()
     if (!sb) {
-      error.value = isVercelDeploy()
-        ? 'Supabase not configured on this site — add VITE_* keys in Vercel env vars and redeploy'
-        : 'Supabase not configured — copy .env.example to .env.local and restart dev server'
+      error.value = 'Pehle Settings → Cloud Sync me Supabase URL + anon key save karein (Save & Connect).'
       return false
     }
     loading.value = true
@@ -128,5 +148,8 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('pama_org_id')
   }
 
-  return { user, orgId, loading, error, isConfigured, isLoggedIn, canSync, syncBlockReason, init, signIn, signUp, signOut }
+  return {
+    user, orgId, loading, error, isConfigured, isLoggedIn, canSync, syncBlockReason,
+    init, signIn, signUp, signOut, applySupabaseKeys,
+  }
 })

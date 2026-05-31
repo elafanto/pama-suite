@@ -4,7 +4,7 @@ import { RouterLink } from 'vue-router'
 import PpModal from '@/components/PpModal.vue'
 import { useFirmStore, type NewFirm } from '@/stores/firm'
 import { useAuthStore } from '@/stores/auth'
-import { isVercelDeploy } from '@/services/supabase'
+import { getSupabaseConfig } from '@/services/supabase'
 import { useSettingsStore } from '@/stores/settings'
 import { exportAll, downloadBackup, importBackup } from '@/services/backup'
 import { runSync, runFullPullFromCloud, runFullPushToCloud } from '@/services/sync'
@@ -20,6 +20,9 @@ const editingId = ref<string | null>(null)
 const syncMsg = ref('')
 const importMsg = ref('')
 const geminiInput = ref(settings.geminiKey)
+const supabaseUrlInput = ref('')
+const supabaseAnonInput = ref('')
+const supabaseKeyMsg = ref('')
 
 const blank = (): NewFirm => ({
   name: '', gst: '', addr: '', city: '', state: '05', pin: '', phone: '', email: '',
@@ -103,7 +106,22 @@ function saveGemini() {
   alert('Gemini key saved')
 }
 
-onMounted(firmStore.load)
+async function saveSupabaseKeys() {
+  supabaseKeyMsg.value = ''
+  const ok = await auth.applySupabaseKeys(supabaseUrlInput.value, supabaseAnonInput.value)
+  if (ok) {
+    supabaseKeyMsg.value = 'Supabase connected! Ab Login karein, phir Sync dabayein.'
+  } else {
+    supabaseKeyMsg.value = auth.error || 'Save failed — URL aur anon key check karein'
+  }
+}
+
+onMounted(() => {
+  firmStore.load()
+  const cfg = getSupabaseConfig()
+  supabaseUrlInput.value = cfg.url
+  supabaseAnonInput.value = cfg.anon
+})
 </script>
 
 <template>
@@ -188,22 +206,31 @@ onMounted(firmStore.load)
       <p class="text-sm text-slate-500 mb-3">
         <span v-if="auth.canSync">Logged in as {{ auth.user?.email }} — sync pushes local changes to cloud.</span>
         <span v-else-if="auth.isConfigured && auth.isLoggedIn && !auth.orgId">
-          Signed in as {{ auth.user?.email }} — organization setup ho raha hai. Thodi der wait karein, ya dubara sign in karein.
+          Signed in as {{ auth.user?.email }} — organization setup ho raha hai. Thodi der wait karein.
         </span>
         <span v-else-if="auth.isConfigured">
-          Cloud sync ke liye pehle <RouterLink to="/login" class="text-accent font-semibold">Sign in</RouterLink> karein.
-          Sync button dabane par exact reason dikhega agar kuch missing ho.
-        </span>
-        <span v-else-if="isVercelDeploy()">
-          Is Vercel site par Supabase keys set nahi hain. Vercel Dashboard → Settings → Environment Variables mein
-          <code>VITE_SUPABASE_URL</code> aur <code>VITE_SUPABASE_ANON_KEY</code> add karein (Supabase Dashboard → Settings → API se),
-          phir <strong>Redeploy</strong> karein — sirf env add karne se kaam nahi chalega, build dubara chahiye.
+          Supabase connected. Cloud sync ke liye <RouterLink to="/login" class="text-accent font-semibold">Sign in</RouterLink> karein.
         </span>
         <span v-else>
-          Local par Supabase keys chahiye: <code>.env.example</code> ko <code>.env.local</code> mein copy karein, keys bharein,
-          phir <code>npm run dev</code> restart karein.
+          Pehle neeche Supabase keys save karein (Vercel par bhi kaam karta hai — redeploy ki zaroorat nahi).
         </span>
       </p>
+
+      <div v-if="!auth.isConfigured || !auth.canSync" class="mb-4 p-4 rounded-lg border border-slate-200 bg-slate-50 space-y-3">
+        <p class="text-xs text-slate-600">
+          Supabase Dashboard → <strong>Settings → API</strong> se copy karein:
+        </p>
+        <div>
+          <label class="pp-label">Project URL</label>
+          <input v-model="supabaseUrlInput" class="pp-input font-mono text-sm" placeholder="https://xxxxx.supabase.co" />
+        </div>
+        <div>
+          <label class="pp-label">anon public key</label>
+          <input v-model="supabaseAnonInput" type="password" class="pp-input font-mono text-sm" placeholder="eyJhbG..." />
+        </div>
+        <button type="button" class="pp-btn pp-btn-primary" @click="saveSupabaseKeys">Save &amp; Connect</button>
+        <p v-if="supabaseKeyMsg" class="text-sm text-green-700">{{ supabaseKeyMsg }}</p>
+      </div>
       <div class="flex flex-wrap gap-2">
         <button
           class="pp-btn pp-btn-primary"
