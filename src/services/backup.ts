@@ -27,14 +27,16 @@ export interface SuiteBackup {
 }
 
 export async function exportAll(): Promise<SuiteBackup> {
-  const firms = await db.firms.filter(r => !r.is_deleted).toArray()
-  const parties = await db.parties.filter(r => !r.is_deleted).toArray()
-  const items = await db.items.filter(r => !r.is_deleted).toArray()
-  const invoices = await db.invoices.filter(r => !r.is_deleted).toArray()
-  const purchases = await db.purchases.filter(r => !r.is_deleted).toArray()
-  const recipes = await db.recipes.filter(r => !r.is_deleted).toArray()
-  const accounts = await db.accounts.filter(r => !r.is_deleted).toArray()
-  const vouchers = await db.vouchers.filter(r => !r.is_deleted).toArray()
+  const [firms, parties, items, invoices, purchases, recipes, accounts, vouchers] = await Promise.all([
+    db.firms.toArray(),
+    db.parties.toArray(),
+    db.items.toArray(),
+    db.invoices.toArray(),
+    db.purchases.toArray(),
+    db.recipes.toArray(),
+    db.accounts.toArray(),
+    db.vouchers.toArray(),
+  ])
 
   let templates: unknown[] = []
   try { templates = JSON.parse(localStorage.getItem('pama_templates_suite') || '[]') } catch { /* */ }

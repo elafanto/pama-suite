@@ -111,7 +111,7 @@ onMounted(firmStore.load)
     <!-- Backup -->
     <section class="pp-card p-5 mb-5">
       <h2 class="font-bold text-navy mb-3">💾 Backup &amp; Import</h2>
-      <p class="text-sm text-slate-500 mb-4">Export full suite JSON or import from PamaTools <code>pama_tools_live.json</code> / unified backup.</p>
+      <p class="text-sm text-slate-500 mb-4">Export full suite JSON (including deleted records for restore) or import from PamaTools <code>pama_tools_live.json</code> / unified backup.</p>
       <div class="flex flex-wrap gap-2">
         <button class="pp-btn pp-btn-primary" @click="doExport">Download Backup</button>
         <label class="pp-btn pp-btn-ghost cursor-pointer">
