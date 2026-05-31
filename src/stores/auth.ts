@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { getSupabase, supabaseConfigured } from '@/services/supabase'
+import { getSupabase, supabaseConfigured, isVercelDeploy } from '@/services/supabase'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<{ id: string; email: string } | null>(null)
@@ -11,6 +11,23 @@ export const useAuthStore = defineStore('auth', () => {
   const isConfigured = computed(() => supabaseConfigured)
   const isLoggedIn = computed(() => !!user.value)
   const canSync = computed(() => supabaseConfigured && !!user.value && !!orgId.value)
+
+  /** Human-readable reason sync is blocked; null when sync is allowed. */
+  const syncBlockReason = computed((): string | null => {
+    if (!supabaseConfigured) {
+      if (isVercelDeploy()) {
+        return 'Supabase keys missing on this Vercel site.\n\nFix: Vercel Dashboard → your project → Settings → Environment Variables → add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (from Supabase Dashboard → Settings → API), then Redeploy.\n\nNote: Vite bakes env vars at build time — adding vars alone is not enough; you must redeploy.'
+      }
+      return 'Supabase keys missing locally.\n\nFix: copy .env.example to .env.local, add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then restart npm run dev.'
+    }
+    if (!user.value) {
+      return 'Sign in required for cloud sync.\n\nGo to Login (/login) and sign in with your Supabase account.'
+    }
+    if (!orgId.value) {
+      return 'Organization not ready yet.\n\nWait a few seconds after login, or sign out and sign in again. First login creates your org automatically.'
+    }
+    return null
+  })
 
   async function init() {
     const sb = getSupabase()
@@ -64,7 +81,12 @@ export const useAuthStore = defineStore('auth', () => {
   async function signIn(email: string, password: string) {
     error.value = ''
     const sb = getSupabase()
-    if (!sb) { error.value = 'Supabase not configured — add .env.local'; return false }
+    if (!sb) {
+      error.value = isVercelDeploy()
+        ? 'Supabase not configured on this site — add VITE_* keys in Vercel env vars and redeploy'
+        : 'Supabase not configured — copy .env.example to .env.local and restart dev server'
+      return false
+    }
     loading.value = true
     try {
       const { data: sessionData, error: err } = await sb.auth.signInWithPassword({ email, password })
@@ -82,7 +104,12 @@ export const useAuthStore = defineStore('auth', () => {
   async function signUp(email: string, password: string) {
     error.value = ''
     const sb = getSupabase()
-    if (!sb) { error.value = 'Supabase not configured'; return false }
+    if (!sb) {
+      error.value = isVercelDeploy()
+        ? 'Supabase not configured on this site — add VITE_* keys in Vercel env vars and redeploy'
+        : 'Supabase not configured — copy .env.example to .env.local and restart dev server'
+      return false
+    }
     loading.value = true
     try {
       const { error: err } = await sb.auth.signUp({ email, password })
@@ -101,5 +128,5 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('pama_org_id')
   }
 
-  return { user, orgId, loading, error, isConfigured, isLoggedIn, canSync, init, signIn, signUp, signOut }
+  return { user, orgId, loading, error, isConfigured, isLoggedIn, canSync, syncBlockReason, init, signIn, signUp, signOut }
 })

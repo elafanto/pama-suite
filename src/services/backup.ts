@@ -265,7 +265,6 @@ async function importLegacyBilling(data: any, mode: 'merge' | 'replace') {
   }
 
   for (const b of data.bills || []) {
-    if (b.isDeleted) continue
     const inv: Invoice = {
       id: b.id || uid(),
       firm_id: b.firmId || activeFirm || '',
@@ -285,21 +284,20 @@ async function importLegacyBilling(data: any, mode: 'merge' | 'replace') {
       grand_total: num(b.grandTotal), amt_paid: num(b.amtPaid),
       pay_status: b.payStatus || 'UNPAID', notes: b.notes || '',
       eway: b.eway || '', dest: b.dest || '',
-      created_at: b.createdAt || nowISO(), updated_at: nowISO(), is_deleted: false, _dirty: true,
+      created_at: b.createdAt || nowISO(), updated_at: nowISO(), is_deleted: !!(b.isDeleted || b.is_deleted), _dirty: true,
     }
     await db.invoices.put(inv)
     counts.invoices = (counts.invoices || 0) + 1
   }
 
   for (const p of data.purchases || []) {
-    if (p.isDeleted) continue
     await db.purchases.put({
       id: p.id || uid(), firm_id: p.firmId || activeFirm || '',
       supplier_name: p.supplierName || p.vendorName || '', supplier_id: p.vendorId || null,
       bill_no: p.billNo || '', date: p.date || '', gst_type: p.gstType || 'intra',
       items: p.items || [], sub: num(p.sub), total_tax: num(p.totalTax), round_off: num(p.roundOff),
       grand_total: num(p.grandTotal), amt_paid: num(p.amtPaid), pay_status: p.payStatus || 'UNPAID',
-      notes: p.notes || '', created_at: p.createdAt || nowISO(), updated_at: nowISO(), is_deleted: false, _dirty: true,
+      notes: p.notes || '', created_at: p.createdAt || nowISO(), updated_at: nowISO(), is_deleted: !!(p.isDeleted || p.is_deleted), _dirty: true,
     })
     counts.purchases = (counts.purchases || 0) + 1
   }
@@ -307,7 +305,6 @@ async function importLegacyBilling(data: any, mode: 'merge' | 'replace') {
   if (data.templates) localStorage.setItem('pama_templates_suite', JSON.stringify(data.templates))
 
   for (const a of data.accounts || []) {
-    if (a.isDeleted || a.is_deleted) continue
     const firmId = a.firmId || activeFirm || ''
     await db.accounts.put({
       id: a.id || `${firmId}_${a.code || uid()}`,
@@ -321,14 +318,13 @@ async function importLegacyBilling(data: any, mode: 'merge' | 'replace') {
       is_system: !!(a.isSystem ?? a.is_system),
       created_at: a.createdAt || a.created_at || nowISO(),
       updated_at: nowISO(),
-      is_deleted: false,
+      is_deleted: !!(a.isDeleted || a.is_deleted),
       _dirty: true,
     })
     counts.accounts = (counts.accounts || 0) + 1
   }
 
   for (const v of data.vouchers || []) {
-    if (v.isDeleted || v.is_deleted) continue
     const firmId = v.firmId || activeFirm || ''
     const type = LEGACY_VOUCHER_TYPES[v.type] || 'JOURNAL'
     await db.vouchers.put({
@@ -348,7 +344,7 @@ async function importLegacyBilling(data: any, mode: 'merge' | 'replace') {
       ref_type: v.refType || v.ref_type,
       created_at: v.createdAt || v.created_at || nowISO(),
       updated_at: nowISO(),
-      is_deleted: false,
+      is_deleted: !!(v.isDeleted || v.is_deleted),
       _dirty: true,
     })
     counts.vouchers = (counts.vouchers || 0) + 1

@@ -25,6 +25,80 @@ function isNewer(remote: string, local?: string): boolean {
   return new Date(remote).getTime() > new Date(local).getTime()
 }
 
+const PULL_PAGE_SIZE = 1000
+const EPOCH_ISO = '1970-01-01T00:00:00.000Z'
+
+/** Supabase returns max 1000 rows per request — paginate until all rows are fetched. */
+async function fetchAllOrgRows(
+  sb: NonNullable<ReturnType<typeof getSupabase>>,
+  table: string,
+  orgId: string,
+  sinceIso: string,
+  select: string,
+): Promise<any[]> {
+  const all: any[] = []
+  let from = 0
+  while (true) {
+    const { data, error } = await sb
+      .from(table)
+      .select(select)
+      .eq('org_id', orgId)
+      .gte('updated_at', sinceIso)
+      .order('updated_at', { ascending: true })
+      .range(from, from + PULL_PAGE_SIZE - 1)
+    if (error) throw error
+    if (!data?.length) break
+    all.push(...data)
+    if (data.length < PULL_PAGE_SIZE) break
+    from += PULL_PAGE_SIZE
+  }
+  return all
+}
+
+async function upsertCloudRow(
+  sb: NonNullable<ReturnType<typeof getSupabase>>,
+  orgId: string,
+  localName: SyncTable,
+  remoteName: string,
+  rec: any,
+): Promise<string | null> {
+  const row: any = {
+    id: rec.id,
+    org_id: orgId,
+    firm_id: rec.firm_id || rec.id,
+    is_deleted: rec.is_deleted,
+    created_at: rec.created_at,
+    updated_at: rec.updated_at,
+  }
+
+  if (localName === 'firms') {
+    Object.assign(row, {
+      name: rec.name, gst: rec.gst, addr: rec.addr, city: rec.city, state: rec.state,
+      pin: rec.pin, phone: rec.phone, email: rec.email,
+      bank_name: rec.bank_name, bank_acno: rec.bank_acno, bank_ifsc: rec.bank_ifsc,
+      prefix: rec.prefix, next_bill_no: rec.next_bill_no,
+    })
+  } else if (localName === 'parties') {
+    Object.assign(row, {
+      firm_id: rec.firm_id, name: rec.name, roles: rec.roles, gst: rec.gst,
+      phone: rec.phone, email: rec.email, addr: rec.addr, city: rec.city,
+      pin: rec.pin, state: rec.state, is_consumer: rec.is_consumer,
+      bank: rec.bank, acno: rec.acno, ifsc: rec.ifsc, acname: rec.acname,
+    })
+  } else if (localName === 'items') {
+    Object.assign(row, {
+      firm_id: rec.firm_id, name: rec.name, unit: rec.unit, hsn: rec.hsn,
+      gst: rec.gst, rate: rec.rate, size: rec.size, gsm: rec.gsm, bf: rec.bf,
+    })
+  } else {
+    row.firm_id = rec.firm_id
+    row.payload = rec
+  }
+
+  const { error } = await sb.from(remoteName).upsert(row)
+  return error?.message || null
+}
+
 /** Push all _dirty records to Supabase (jsonb payload tables). */
 export async function pushDirtyToCloud(): Promise<{ ok: boolean; pushed: number; error?: string }> {
   const auth = useAuthStore()
@@ -42,42 +116,36 @@ export async function pushDirtyToCloud(): Promise<{ ok: boolean; pushed: number;
     const dirty = await table.filter((r: any) => r._dirty === true).toArray()
 
     for (const rec of dirty) {
-      const row: any = {
-        id: rec.id,
-        org_id: orgId,
-        firm_id: rec.firm_id || rec.id,
-        is_deleted: rec.is_deleted,
-        created_at: rec.created_at,
-        updated_at: rec.updated_at,
-      }
+      const err = await upsertCloudRow(sb, orgId, localName, remoteName, rec)
+      if (err) return { ok: false, pushed, error: err }
 
-      if (localName === 'firms') {
-        Object.assign(row, {
-          name: rec.name, gst: rec.gst, addr: rec.addr, city: rec.city, state: rec.state,
-          pin: rec.pin, phone: rec.phone, email: rec.email,
-          bank_name: rec.bank_name, bank_acno: rec.bank_acno, bank_ifsc: rec.bank_ifsc,
-          prefix: rec.prefix, next_bill_no: rec.next_bill_no,
-        })
-      } else if (localName === 'parties') {
-        Object.assign(row, {
-          firm_id: rec.firm_id, name: rec.name, roles: rec.roles, gst: rec.gst,
-          phone: rec.phone, email: rec.email, addr: rec.addr, city: rec.city,
-          pin: rec.pin, state: rec.state, is_consumer: rec.is_consumer,
-          bank: rec.bank, acno: rec.acno, ifsc: rec.ifsc, acname: rec.acname,
-        })
-      } else if (localName === 'items') {
-        Object.assign(row, {
-          firm_id: rec.firm_id, name: rec.name, unit: rec.unit, hsn: rec.hsn,
-          gst: rec.gst, rate: rec.rate, size: rec.size, gsm: rec.gsm, bf: rec.bf,
-        })
-      } else {
-        row.firm_id = rec.firm_id
-        row.payload = rec
-      }
+      await table.update(rec.id, { _dirty: false })
+      pushed++
+    }
+  }
 
-      const { error } = await sb.from(remoteName).upsert(row)
-      if (error) return { ok: false, pushed, error: error.message }
+  return { ok: true, pushed }
+}
 
+/** Push every local record to cloud (use after import or when cloud is missing data). */
+export async function pushAllToCloud(): Promise<{ ok: boolean; pushed: number; error?: string }> {
+  const auth = useAuthStore()
+  const sb = getSupabase()
+  if (!sb || !auth.canSync || !auth.orgId) {
+    return { ok: false, pushed: 0, error: 'Login + Supabase required for cloud sync' }
+  }
+
+  let pushed = 0
+  const orgId = auth.orgId
+
+  for (const [localName, remoteName] of Object.entries(TABLE_MAP) as [SyncTable, string][]) {
+    const table = (db as any)[localName]
+    if (!table) continue
+    const rows = await table.toArray()
+
+    for (const rec of rows) {
+      const err = await upsertCloudRow(sb, orgId, localName, remoteName, rec)
+      if (err) return { ok: false, pushed, error: err }
       await table.update(rec.id, { _dirty: false })
       pushed++
     }
@@ -95,7 +163,7 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
   }
 
   const orgId = auth.orgId
-  const sinceIso = since || localStorage.getItem('pama_last_pull') || '1970-01-01T00:00:00.000Z'
+  const sinceIso = since || localStorage.getItem('pama_last_pull') || EPOCH_ISO
   let pulled = 0
 
   const merge = async <T extends { id: string; updated_at: string }>(
@@ -108,120 +176,125 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
     pulled++
   }
 
-  const { data: firms, error: fErr } = await sb
-    .from('firms')
-    .select('*')
-    .eq('org_id', orgId)
-    .gte('updated_at', sinceIso)
-  if (fErr) return { ok: false, pulled, error: fErr.message }
-  for (const r of firms || []) {
-    const firm: Firm = {
-      id: r.id,
-      name: r.name,
-      gst: r.gst || '',
-      addr: r.addr || '',
-      city: r.city || '',
-      state: r.state || '',
-      pin: r.pin || '',
-      phone: r.phone || '',
-      email: r.email || '',
-      bank_name: r.bank_name || '',
-      bank_acno: r.bank_acno || '',
-      bank_ifsc: r.bank_ifsc || '',
-      prefix: r.prefix,
-      next_bill_no: r.next_bill_no,
-      created_at: r.created_at,
-      updated_at: r.updated_at,
-      is_deleted: r.is_deleted,
-      _dirty: false,
-    }
-    await merge(db.firms, firm)
-  }
-
-  const { data: parties, error: pErr } = await sb
-    .from('parties')
-    .select('*')
-    .eq('org_id', orgId)
-    .gte('updated_at', sinceIso)
-  if (pErr) return { ok: false, pulled, error: pErr.message }
-  for (const r of parties || []) {
-    const party: Party = {
-      id: r.id,
-      firm_id: r.firm_id,
-      name: r.name,
-      roles: r.roles || [],
-      gst: r.gst || '',
-      phone: r.phone || '',
-      email: r.email || '',
-      addr: r.addr || '',
-      city: r.city || '',
-      pin: r.pin || '',
-      state: r.state || '',
-      is_consumer: r.is_consumer,
-      bank: r.bank || '',
-      acno: r.acno || '',
-      ifsc: r.ifsc || '',
-      acname: r.acname || '',
-      created_at: r.created_at,
-      updated_at: r.updated_at,
-      is_deleted: r.is_deleted,
-      _dirty: false,
-    }
-    await merge(db.parties, party)
-  }
-
-  const { data: items, error: iErr } = await sb
-    .from('items')
-    .select('*')
-    .eq('org_id', orgId)
-    .gte('updated_at', sinceIso)
-  if (iErr) return { ok: false, pulled, error: iErr.message }
-  for (const r of items || []) {
-    const item: Item = {
-      id: r.id,
-      firm_id: r.firm_id,
-      name: r.name,
-      unit: r.unit || 'PCS',
-      hsn: r.hsn || '',
-      gst: Number(r.gst) || 0,
-      rate: Number(r.rate) || 0,
-      size: r.size || '',
-      gsm: r.gsm || '',
-      bf: r.bf || '',
-      created_at: r.created_at,
-      updated_at: r.updated_at,
-      is_deleted: r.is_deleted,
-      _dirty: false,
-    }
-    await merge(db.items, item)
-  }
-
-  for (const name of PAYLOAD_TABLES) {
-    const { data: rows, error } = await sb
-      .from(TABLE_MAP[name])
-      .select('id, firm_id, payload, is_deleted, created_at, updated_at')
-      .eq('org_id', orgId)
-      .gte('updated_at', sinceIso)
-    if (error) return { ok: false, pulled, error: error.message }
-
-    const table = (db as any)[name] as { get: (id: string) => Promise<any>; put: (r: any) => Promise<void> }
-    for (const r of rows || []) {
-      const payload = r.payload as Invoice | Purchase | Recipe | Account | Voucher
-      const rec = {
-        ...payload,
+  try {
+    const firms = await fetchAllOrgRows(sb, 'firms', orgId, sinceIso, '*')
+    for (const r of firms) {
+      const firm: Firm = {
         id: r.id,
-        firm_id: r.firm_id,
-        is_deleted: r.is_deleted,
+        name: r.name,
+        gst: r.gst || '',
+        addr: r.addr || '',
+        city: r.city || '',
+        state: r.state || '',
+        pin: r.pin || '',
+        phone: r.phone || '',
+        email: r.email || '',
+        bank_name: r.bank_name || '',
+        bank_acno: r.bank_acno || '',
+        bank_ifsc: r.bank_ifsc || '',
+        prefix: r.prefix,
+        next_bill_no: r.next_bill_no,
         created_at: r.created_at,
         updated_at: r.updated_at,
+        is_deleted: r.is_deleted,
         _dirty: false,
       }
-      await merge(table, rec)
+      await merge(db.firms, firm)
     }
+
+    const parties = await fetchAllOrgRows(sb, 'parties', orgId, sinceIso, '*')
+    for (const r of parties) {
+      const party: Party = {
+        id: r.id,
+        firm_id: r.firm_id,
+        name: r.name,
+        roles: r.roles || [],
+        gst: r.gst || '',
+        phone: r.phone || '',
+        email: r.email || '',
+        addr: r.addr || '',
+        city: r.city || '',
+        pin: r.pin || '',
+        state: r.state || '',
+        is_consumer: r.is_consumer,
+        bank: r.bank || '',
+        acno: r.acno || '',
+        ifsc: r.ifsc || '',
+        acname: r.acname || '',
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        is_deleted: r.is_deleted,
+        _dirty: false,
+      }
+      await merge(db.parties, party)
+    }
+
+    const items = await fetchAllOrgRows(sb, 'items', orgId, sinceIso, '*')
+    for (const r of items) {
+      const item: Item = {
+        id: r.id,
+        firm_id: r.firm_id,
+        name: r.name,
+        unit: r.unit || 'PCS',
+        hsn: r.hsn || '',
+        gst: Number(r.gst) || 0,
+        rate: Number(r.rate) || 0,
+        size: r.size || '',
+        gsm: r.gsm || '',
+        bf: r.bf || '',
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        is_deleted: r.is_deleted,
+        _dirty: false,
+      }
+      await merge(db.items, item)
+    }
+
+    for (const name of PAYLOAD_TABLES) {
+      const rows = await fetchAllOrgRows(
+        sb,
+        TABLE_MAP[name],
+        orgId,
+        sinceIso,
+        'id, firm_id, payload, is_deleted, created_at, updated_at',
+      )
+      const table = (db as any)[name] as { get: (id: string) => Promise<any>; put: (r: any) => Promise<void> }
+      for (const r of rows) {
+        const payload = r.payload as Invoice | Purchase | Recipe | Account | Voucher
+        const rec = {
+          ...payload,
+          id: r.id,
+          firm_id: r.firm_id,
+          is_deleted: r.is_deleted,
+          created_at: r.created_at,
+          updated_at: r.updated_at,
+          _dirty: false,
+        }
+        await merge(table, rec)
+      }
+    }
+  } catch (e: any) {
+    return { ok: false, pulled, error: e?.message || 'Pull failed' }
   }
 
   localStorage.setItem('pama_last_pull', new Date().toISOString())
   return { ok: true, pulled }
+}
+
+/** Re-download all cloud data (fixes partial sync on new phone / after 1000-row limit). */
+export async function runFullPullFromCloud(): Promise<string> {
+  localStorage.removeItem('pama_last_pull')
+  const pull = await pullFromCloud(EPOCH_ISO)
+  if (!pull.ok) return pull.error || 'Full pull failed'
+  if (pull.pulled > 0) await reloadAllStores()
+  return pull.pulled ? `Full pull: ${pull.pulled} records` : 'Cloud has no data for this account'
+}
+
+/** Upload all local data to cloud (fixes phone missing data after PC import). */
+export async function runFullPushToCloud(): Promise<string> {
+  const push = await pushAllToCloud()
+  if (!push.ok) return push.error || 'Full push failed'
+  return push.pushed ? `Full push: ${push.pushed} records` : 'No local records to push'
 }
 
 export async function runSync(): Promise<string> {

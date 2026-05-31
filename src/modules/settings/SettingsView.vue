@@ -4,9 +4,10 @@ import { RouterLink } from 'vue-router'
 import PpModal from '@/components/PpModal.vue'
 import { useFirmStore, type NewFirm } from '@/stores/firm'
 import { useAuthStore } from '@/stores/auth'
+import { isVercelDeploy } from '@/services/supabase'
 import { useSettingsStore } from '@/stores/settings'
 import { exportAll, downloadBackup, importBackup } from '@/services/backup'
-import { runSync } from '@/services/sync'
+import { runSync, runFullPullFromCloud, runFullPushToCloud } from '@/services/sync'
 import { usePwaInstall } from '@/composables/usePwaInstall'
 import type { Firm } from '@/types/models'
 
@@ -68,7 +69,33 @@ async function onImport(e: Event) {
 }
 
 async function doSync() {
+  if (auth.syncBlockReason) {
+    alert(auth.syncBlockReason)
+    return
+  }
   syncMsg.value = await runSync()
+}
+
+async function doFullPull() {
+  if (auth.syncBlockReason) {
+    alert(auth.syncBlockReason)
+    return
+  }
+  if (!confirm('Cloud se SAARA data dubara download karein? Local changes overwrite ho sakte hain agar cloud naya hai.')) return
+  syncMsg.value = 'Pulling all records…'
+  syncMsg.value = await runFullPullFromCloud()
+  await firmStore.load()
+  location.reload()
+}
+
+async function doFullPush() {
+  if (auth.syncBlockReason) {
+    alert(auth.syncBlockReason)
+    return
+  }
+  if (!confirm('Is device ka SAARA local data cloud par upload karein? (Import ke baad zaroori)')) return
+  syncMsg.value = 'Pushing all records…'
+  syncMsg.value = await runFullPushToCloud()
 }
 
 function saveGemini() {
@@ -160,10 +187,44 @@ onMounted(firmStore.load)
       <h2 class="font-bold text-navy mb-2">☁️ Cloud Sync (Supabase)</h2>
       <p class="text-sm text-slate-500 mb-3">
         <span v-if="auth.canSync">Logged in as {{ auth.user?.email }} — sync pushes local changes to cloud.</span>
-        <span v-else-if="auth.isConfigured"><RouterLink to="/login" class="text-accent font-semibold">Sign in</RouterLink> to enable multi-device sync.</span>
-        <span v-else>Add <code>.env.local</code> with Supabase keys (see <code>.env.example</code>).</span>
+        <span v-else-if="auth.isConfigured && auth.isLoggedIn && !auth.orgId">
+          Signed in as {{ auth.user?.email }} — organization setup ho raha hai. Thodi der wait karein, ya dubara sign in karein.
+        </span>
+        <span v-else-if="auth.isConfigured">
+          Cloud sync ke liye pehle <RouterLink to="/login" class="text-accent font-semibold">Sign in</RouterLink> karein.
+          Sync button dabane par exact reason dikhega agar kuch missing ho.
+        </span>
+        <span v-else-if="isVercelDeploy()">
+          Is Vercel site par Supabase keys set nahi hain. Vercel Dashboard → Settings → Environment Variables mein
+          <code>VITE_SUPABASE_URL</code> aur <code>VITE_SUPABASE_ANON_KEY</code> add karein (Supabase Dashboard → Settings → API se),
+          phir <strong>Redeploy</strong> karein — sirf env add karne se kaam nahi chalega, build dubara chahiye.
+        </span>
+        <span v-else>
+          Local par Supabase keys chahiye: <code>.env.example</code> ko <code>.env.local</code> mein copy karein, keys bharein,
+          phir <code>npm run dev</code> restart karein.
+        </span>
       </p>
-      <button class="pp-btn pp-btn-primary" :disabled="!auth.canSync" @click="doSync">Sync Now</button>
+      <div class="flex flex-wrap gap-2">
+        <button
+          class="pp-btn pp-btn-primary"
+          :class="{ 'opacity-60': !auth.canSync }"
+          @click="doSync"
+        >Sync Now</button>
+        <button
+          class="pp-btn pp-btn-ghost"
+          :class="{ 'opacity-60': !auth.canSync }"
+          @click="doFullPull"
+        >Full Pull from Cloud</button>
+        <button
+          class="pp-btn pp-btn-ghost"
+          :class="{ 'opacity-60': !auth.canSync }"
+          @click="doFullPush"
+        >Full Push to Cloud</button>
+      </div>
+      <p class="text-xs text-slate-500 mt-3 leading-relaxed">
+        Data kam dikhe? Pehle PC par <strong>Full Push</strong>, phir phone par <strong>Full Pull</strong>.
+        Purana PamaTools data: <strong>Import JSON</strong> → OK (Replace) → phir <strong>Full Push</strong>.
+      </p>
       <p v-if="syncMsg" class="text-sm mt-2 text-slate-600">{{ syncMsg }}</p>
     </section>
 

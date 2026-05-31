@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRouter, RouterLink } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { isVercelDeploy } from '@/services/supabase'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -34,7 +35,15 @@ async function submit() {
       </div>
 
       <div v-if="!auth.isConfigured" class="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-900 mb-4">
-        Supabase not configured. Copy <code class="bg-white px-1 rounded">.env.example</code> → <code>.env.local</code> and add your project keys.
+        <template v-if="isVercelDeploy()">
+          Supabase is site par configure nahi hai. Vercel Dashboard → Environment Variables mein
+          <code class="bg-white px-1 rounded">VITE_SUPABASE_URL</code> aur
+          <code class="bg-white px-1 rounded">VITE_SUPABASE_ANON_KEY</code> add karein, phir Redeploy karein.
+        </template>
+        <template v-else>
+          Supabase not configured. Copy <code class="bg-white px-1 rounded">.env.example</code> → <code>.env.local</code>,
+          add your project keys, restart <code>npm run dev</code>.
+        </template>
         <RouterLink to="/dashboard" class="block mt-2 text-accent font-semibold">Continue offline →</RouterLink>
       </div>
 
