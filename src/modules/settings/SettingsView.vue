@@ -27,6 +27,7 @@ const supabaseKeyMsg = ref('')
 const blank = (): NewFirm => ({
   name: '', gst: '', addr: '', city: '', state: '05', pin: '', phone: '', email: '',
   bank_name: '', bank_acno: '', bank_ifsc: '',
+  prefix: 'INV', next_bill_no: 1,
 })
 const form = reactive<NewFirm>(blank())
 
@@ -40,6 +41,7 @@ function openEdit(f: Firm) {
   Object.assign(form, {
     name: f.name, gst: f.gst, addr: f.addr, city: f.city, state: f.state, pin: f.pin,
     phone: f.phone, email: f.email, bank_name: f.bank_name, bank_acno: f.bank_acno, bank_ifsc: f.bank_ifsc,
+    prefix: f.prefix || 'INV', next_bill_no: f.next_bill_no || 1,
   })
   showModal.value = true
 }
@@ -151,7 +153,7 @@ onMounted(() => {
             <div class="font-semibold text-navy">{{ f.name }}
               <span v-if="f.id === firmStore.activeFirmId" class="pp-badge bg-accent text-white ml-1">Active</span>
             </div>
-            <div class="text-xs text-slate-500">{{ f.gst || 'No GST' }} · {{ f.city || '—' }}</div>
+            <div class="text-xs text-slate-500">{{ f.gst || 'No GST' }} · {{ f.city || '—' }} · Bill: {{ f.prefix || 'INV' }}-xxxx (next {{ f.next_bill_no || 1 }})</div>
           </div>
           <button v-if="f.id !== firmStore.activeFirmId" class="pp-btn pp-btn-ghost !py-1.5" @click="firmStore.setActive(f.id)">Switch</button>
           <button class="pp-btn pp-btn-ghost !px-2 !py-1" @click="openEdit(f)">✏️</button>
@@ -278,6 +280,10 @@ onMounted(() => {
 
     <PpModal v-if="showModal" :title="editingId ? 'Edit Firm' : 'Add Firm'" @close="showModal = false">
       <div class="space-y-3">
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="pp-label">Bill Prefix</label><input v-model="form.prefix" class="pp-input uppercase" placeholder="INV" /></div>
+          <div><label class="pp-label">Next Bill No.</label><input v-model.number="form.next_bill_no" type="number" min="1" class="pp-input" /></div>
+        </div>
         <div><label class="pp-label">Firm Name *</label><input v-model="form.name" class="pp-input" /></div>
         <div class="grid grid-cols-2 gap-3">
           <div><label class="pp-label">GSTIN</label><input v-model="form.gst" class="pp-input uppercase" /></div>

@@ -1,5 +1,6 @@
 import { db } from '@/data/db'
 import { uid, nowISO } from '@/data/util'
+import { resolveNextSequence } from '@/services/invoiceNumber'
 import type { Party, Firm, Item, Invoice, Purchase, Recipe, Account, Voucher } from '@/types/models'
 
 export const BACKUP_FORMAT = 'pama_suite_backup'
@@ -348,6 +349,15 @@ async function importLegacyBilling(data: any, mode: 'merge' | 'replace') {
       _dirty: true,
     })
     counts.vouchers = (counts.vouchers || 0) + 1
+  }
+
+  const allFirms = await db.firms.filter((f) => !f.is_deleted).toArray()
+  for (const f of allFirms) {
+    const invs = await db.invoices.filter((i) => !i.is_deleted && i.firm_id === f.id).toArray()
+    const resolved = resolveNextSequence(f, invs)
+    if ((f.next_bill_no || 1) < resolved) {
+      await db.firms.put({ ...f, next_bill_no: resolved, updated_at: nowISO(), _dirty: true })
+    }
   }
 
   return { counts }

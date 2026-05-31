@@ -2,7 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { db } from '@/data/db'
 import { uid, nowISO } from '@/data/util'
-import type { Firm } from '@/types/models'
+import { resolveNextSequence } from '@/services/invoiceNumber'
+import type { Firm, Invoice } from '@/types/models'
 
 const ACTIVE_KEY = 'pama_active_firm'
 const plain = <X>(o: X): X => JSON.parse(JSON.stringify(o))
@@ -25,6 +26,7 @@ export const useFirmStore = defineStore('firm', () => {
         id: uid(), name: 'Pama Packaging', gst: '', addr: '', city: 'Jaspur',
         state: '05', pin: '', phone: '', email: '',
         bank_name: 'Union Bank of India', bank_acno: '663205090000180', bank_ifsc: '',
+        prefix: 'INV', next_bill_no: 1,
         created_at: now, updated_at: now, is_deleted: false, _dirty: true,
       }
       await db.firms.add(def)
@@ -33,6 +35,22 @@ export const useFirmStore = defineStore('firm', () => {
 
     if (!activeFirmId.value || !firms.value.find((f) => f.id === activeFirmId.value)) {
       setActive(firms.value[0].id)
+    }
+
+    for (const f of firms.value) {
+      if (!f.prefix || !f.next_bill_no) {
+        await db.firms.put(plain({
+          ...f,
+          prefix: f.prefix || 'INV',
+          next_bill_no: f.next_bill_no || 1,
+          updated_at: nowISO(),
+          _dirty: true,
+        }))
+      }
+    }
+    if (firms.value.some((f) => !f.prefix || !f.next_bill_no)) {
+      firms.value = (await db.firms.filter((x) => !x.is_deleted).toArray())
+        .sort((a, b) => a.name.localeCompare(b.name))
     }
   }
 
@@ -43,7 +61,16 @@ export const useFirmStore = defineStore('firm', () => {
 
   async function add(data: NewFirm): Promise<Firm> {
     const now = nowISO()
-    const rec = plain({ ...data, id: uid(), created_at: now, updated_at: now, is_deleted: false, _dirty: true }) as Firm
+    const rec = plain({
+      ...data,
+      prefix: data.prefix || 'INV',
+      next_bill_no: data.next_bill_no || 1,
+      id: uid(),
+      created_at: now,
+      updated_at: now,
+      is_deleted: false,
+      _dirty: true,
+    }) as Firm
     await db.firms.add(rec)
     await load()
     setActive(rec.id)
@@ -65,5 +92,15 @@ export const useFirmStore = defineStore('firm', () => {
     await load()
   }
 
-  return { firms, activeFirmId, activeFirm, load, setActive, add, update, remove }
+  async function syncBillSequence(firmId: string, invoices: Invoice[] = []) {
+    if (!firmId) return
+    const firm = firms.value.find((f) => f.id === firmId)
+    if (!firm) return
+    const resolved = resolveNextSequence(firm, invoices)
+    if ((firm.next_bill_no || 1) < resolved) {
+      await update(firmId, { next_bill_no: resolved })
+    }
+  }
+
+  return { firms, activeFirmId, activeFirm, load, setActive, add, update, remove, syncBillSequence }
 })

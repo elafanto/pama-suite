@@ -11,6 +11,8 @@ import { numberToWords } from '@/services/numberToWords'
 import { setPendingRTGS } from '@/services/rtgsBridge'
 import { openStatementPrint } from '@/services/billingStatements'
 import { getEwayEligibility, downloadEwayJson } from '@/services/ewayBill'
+import { downloadInvoicePdf, bulkDownloadInvoicePdf } from '@/services/invoicePdf'
+import { peekBillNo } from '@/services/invoiceNumber'
 import PpModal from '@/components/PpModal.vue'
 import type { Invoice, InvoiceItemLine, PayStatus, GstType } from '@/types/models'
 import { uid } from '@/data/util'
@@ -161,22 +163,52 @@ function resetForm() {
   editingId.value = null
   Object.assign(form, initialFormState())
   addRow()
-  autoInvoiceNumber()
 }
 
-// Auto-fills invoice number using active firm's next_bill_no
-function autoInvoiceNumber() {
-  const activeFirm = firmStore.activeFirm
-  if (activeFirm && !form.bill_no) {
-    const prefix = activeFirm.prefix || 'INV'
-    const nextNo = activeFirm.next_bill_no || 1
-    form.bill_no = `${prefix}-${String(nextNo).padStart(4, '0')}`
+const nextBillPreview = computed(() => {
+  const firm = firmStore.activeFirm
+  if (!firm || editingId.value) return ''
+  return peekBillNo(firm, invoiceStore.list)
+})
+
+const saveButtonLabel = computed(() => {
+  if (editingId.value) return 'Update Bill'
+  if (form.doc_type === 'INVOICE' && formEwayEligibility.value.show) return 'Save Bill + E-Way JSON'
+  return 'Save Bill'
+})
+
+function tryAutoEwayDownload(invoice: Invoice): string {
+  const firm = firmStore.activeFirm
+  if (!firm) return ''
+  const el = getEwayEligibility(invoice)
+  if (!el.show) return ''
+  if (!(invoice.vehicle || '').trim()) {
+    return '\n\nE-Way: vehicle number transport section me bharein, phir History se JSON download karein.'
+  }
+  try {
+    downloadEwayJson([invoice], firm)
+    return '\n\nE-Way JSON download ho gaya (1 bill). Upload: ewaybillgst.gov.in → Generate Bulk'
+  } catch (e: any) {
+    return `\n\nE-Way JSON error: ${e?.message || 'failed'}`
+  }
+}
+
+function downloadEwayForHistoryBill(inv: Invoice) {
+  const firm = firmStore.activeFirm
+  if (!firm) return alert('Active firm set karein')
+  const el = getEwayEligibility(inv)
+  if (!el.show) return alert('Is bill par E-Way JSON nahi banta (amount / type check karein).')
+  if (!(inv.vehicle || '').trim()) return alert('Is bill me vehicle number nahi — pehle bill edit karke transport bharein.')
+  try {
+    downloadEwayJson([inv], firm)
+    alert(`E-Way JSON downloaded for ${inv.bill_no}`)
+  } catch (e: any) {
+    alert(e.message || 'E-Way JSON failed')
   }
 }
 
 // Watch active firm to update sequence
 watch(() => firmStore.activeFirmId, () => {
-  autoInvoiceNumber()
   invoiceStore.load()
 })
 
@@ -323,44 +355,6 @@ function ewayLevelLabel(b: Invoice) {
   return '—'
 }
 
-function buildInvoiceDraftFromForm(): Invoice {
-  const validItems = form.items.filter((row) => row.name.trim() && row.qty > 0 && row.rate > 0)
-  const customerObj = partyStore.list.find((p) => !p.is_deleted && p.name.toLowerCase() === form.party_name.trim().toLowerCase())
-  return {
-    id: editingId.value || 'draft',
-    firm_id: firmStore.activeFirmId,
-    doc_type: form.doc_type,
-    bill_no: form.bill_no.trim() || 'DRAFT',
-    date: form.date,
-    party_id: form.party_id,
-    party_name: form.party_name.trim(),
-    party_snapshot: customerObj || { name: form.party_name.trim() },
-    sameAsBuyer: form.sameAsBuyer,
-    ship: form.sameAsBuyer ? null : { ...form.ship },
-    dispatch: form.dispatch,
-    lr: form.lr,
-    vehicle: form.vehicle,
-    transMode: form.transMode,
-    transporterName: form.transporterName,
-    transporterId: form.transporterId,
-    eway: form.eway,
-    dest: form.dest,
-    distance: form.distance,
-    gst_type: form.gst_type,
-    items: validItems,
-    sub: subTotal.value,
-    total_tax: totalTax.value,
-    round_off: roundOff.value,
-    grand_total: grandTotal.value,
-    amt_paid: form.amt_paid,
-    pay_status: form.pay_status,
-    notes: form.notes,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    is_deleted: false,
-  } as Invoice
-}
-
 function downloadSelectedEwayJson() {
   const firm = firmStore.activeFirm
   if (!firm) return alert('Active firm set karein')
@@ -374,24 +368,8 @@ function downloadSelectedEwayJson() {
   }
 }
 
-function downloadFormEwayJson() {
-  const firm = firmStore.activeFirm
-  if (!firm) return alert('Active firm set karein')
-  if (!formEwayEligibility.value.show) {
-    return alert('Is bill par E-Way JSON nahi banta.\n\nSame state: ₹50,000+\nInter-state: sab amounts (₹50k se kam = suggested)')
-  }
-  if (!form.party_name.trim()) return alert('Pehle customer bharein')
-  const validItems = form.items.filter((row) => row.name.trim() && row.qty > 0 && row.rate > 0)
-  if (!validItems.length) return alert('Kam se kam ek valid item line chahiye')
-  if (!form.vehicle?.trim()) {
-    if (!confirm('Vehicle number khali hai. Phir bhi E-Way JSON banayein?')) return
-  }
-  try {
-    downloadEwayJson([buildInvoiceDraftFromForm()], firm)
-    alert('E-Way JSON download ho gaya')
-  } catch (e: any) {
-    alert(e.message || 'E-Way JSON failed')
-  }
+function isEwayEligible(inv: Invoice) {
+  return getEwayEligibility(inv).show
 }
 
 watch(activeTab, (tab) => {
@@ -496,24 +474,58 @@ function payViaRtgs(inv: Invoice) {
   router.push('/banking')
 }
 
-function sharePDFViaWhatsApp() {
+function downloadPDF(inv?: Invoice) {
+  const bill = inv || previewInvoice.value
+  const firm = firmStore.activeFirm
+  if (!bill || !firm) return alert('Bill ya firm nahi mila')
+  try {
+    downloadInvoicePdf(bill, firm)
+  } catch (e: any) {
+    alert('PDF generation failed: ' + (e?.message || 'unknown error'))
+  }
+}
+
+async function bulkDownloadPDF() {
+  const firm = firmStore.activeFirm
+  if (!firm) return alert('Active firm set karein')
+  if (!selectedHistoryIds.value.length) return alert('Kam se kam ek bill select karein')
+  const selected = invoiceStore.list.filter((b) => selectedHistoryIds.value.includes(b.id))
+  if (!selected.length) return alert('Selected bills nahi mile')
+  try {
+    const n = await bulkDownloadInvoicePdf(selected, firm)
+    alert(`${n} PDF download ho gaye`)
+  } catch (e: any) {
+    alert('Bulk PDF failed: ' + (e?.message || 'unknown error'))
+  }
+}
+
+async function sharePDFViaWhatsApp() {
   const inv = previewInvoice.value
-  if (!inv) return
-  const text = encodeURIComponent(
-    `Invoice ${inv.bill_no} from ${firmStore.activeFirm?.name}\nCustomer: ${inv.party_name}\nTotal: ₹${inv.grand_total}\nDate: ${inv.date}`
+  const firm = firmStore.activeFirm
+  if (!inv || !firm) return
+  try {
+    downloadInvoicePdf(inv, firm)
+  } catch { /* continue to WhatsApp */ }
+  const msg = encodeURIComponent(
+    `Invoice ${inv.bill_no} dated ${inv.date}\nAmount: ₹${n2(inv.grand_total)}\n\nPDF download ho gaya — chat me attach karein.`,
   )
-  window.open(`https://wa.me/?text=${text}`, '_blank')
+  const phone = (inv.party_snapshot?.phone || '').replace(/\D/g, '')
+  const url = phone ? `https://wa.me/91${phone}?text=${msg}` : `https://wa.me/?text=${msg}`
+  window.open(url, '_blank')
 }
 
 function sharePDFViaEmail() {
   const inv = previewInvoice.value
   const firm = firmStore.activeFirm
   if (!inv || !firm) return
+  try {
+    downloadInvoicePdf(inv, firm)
+  } catch { /* continue to email */ }
   const subject = encodeURIComponent(`Invoice ${inv.bill_no} — ${firm.name}`)
   const body = encodeURIComponent(
-    `Dear ${inv.party_name},\n\nPlease find invoice ${inv.bill_no} dated ${inv.date} for ₹${inv.grand_total}.\n\nRegards,\n${firm.name}`
+    `Dear ${inv.party_name},\n\nPlease find attached invoice ${inv.bill_no} dated ${inv.date}.\n\nTotal Amount: ₹${n2(inv.grand_total)}\nPayment Status: ${inv.pay_status}\n\nKindly attach the downloaded PDF before sending.\n\nThank you.`,
   )
-  const to = encodeURIComponent(inv.party_snapshot?.email || '')
+  const to = inv.party_snapshot?.email || ''
   window.location.href = `mailto:${to}?subject=${subject}&body=${body}`
 }
 
@@ -555,22 +567,11 @@ async function saveInvoice() {
   const validItems = form.items.filter(row => row.name.trim() && row.qty > 0 && row.rate > 0)
   if (validItems.length === 0) return alert('At least one item with valid quantity and rate is required.')
 
-  if (isDuplicateBillNo.value) {
-    if (!confirm('This invoice number already exists. Save anyway with a different number?')) return
-    form.bill_no = ''
+  if (isDuplicateBillNo.value && editingId.value) {
+    if (!confirm('This invoice number already exists. Continue anyway?')) return
   }
 
-  // Handle auto numbering trigger
-  const activeFirm = firmStore.activeFirm
-  let finalBillNo = form.bill_no.trim()
-  let usedAutoNumber = false
-
-  if (!finalBillNo && activeFirm) {
-    const prefix = activeFirm.prefix || 'INV'
-    const nextNo = activeFirm.next_bill_no || 1
-    finalBillNo = `${prefix}-${String(nextNo).padStart(4, '0')}`
-    usedAutoNumber = true
-  }
+  if (editingId.value && !form.bill_no.trim()) return alert('Invoice number required')
 
   const customerObj = partyStore.list.find(p => !p.is_deleted && p.name.toLowerCase() === form.party_name.trim().toLowerCase())
 
@@ -582,7 +583,7 @@ async function saveInvoice() {
 
   const invoiceData: Omit<Invoice, 'id' | 'firm_id' | 'created_at' | 'updated_at' | 'is_deleted' | '_dirty'> = {
     doc_type: form.doc_type,
-    bill_no: finalBillNo,
+    bill_no: editingId.value ? form.bill_no.trim() : '',
     date: form.date,
     ref: form.ref,
     party_id: form.party_id,
@@ -631,29 +632,35 @@ async function saveInvoice() {
   }
 
   try {
-    if (editingId.value) {
+    const wasEditing = !!editingId.value
+    if (wasEditing) {
       const editReason = prompt('Enter the reason for modifying this invoice:') || 'Update'
-      await invoiceStore.update(editingId.value, { ...invoiceData, editReason })
+      await invoiceStore.update(editingId.value!, { ...invoiceData, editReason })
       alert('Invoice updated successfully!')
     } else {
-      const savedInvoice = await invoiceStore.add(invoiceData, usedAutoNumber)
-      alert(`Invoice ${savedInvoice.bill_no} created successfully!`)
-      const el = getEwayEligibility(savedInvoice)
-      if (el.show) {
-        alert(`${el.reason}\n\nBilling → E-Way Bill tab se NIC JSON download karein.`)
+      const savedInvoice = await invoiceStore.add(invoiceData, true)
+      const ewayNote = tryAutoEwayDownload(savedInvoice)
+      const firm = firmStore.activeFirm
+      if (firm) {
+        try {
+          downloadInvoicePdf(savedInvoice, firm)
+        } catch (pdfErr: any) {
+          console.warn('PDF after save failed', pdfErr)
+        }
       }
+      openPrintPreview(savedInvoice)
+      alert(`Invoice ${savedInvoice.bill_no} saved.${ewayNote}\n\nPDF download shuru ho gaya — preview me dubara PDF le sakte ho.`)
     }
 
-    // Refresh last sold rates for items
     validItems.forEach(async row => {
       const it = itemStore.list.find(item => !item.is_deleted && item.name.toLowerCase() === row.name.toLowerCase())
       if (it) {
-        await itemStore.update(it.id, { rate: row.rate }) // update rate profile
+        await itemStore.update(it.id, { rate: row.rate })
       }
     })
 
     resetForm()
-    activeTab.value = 'history'
+    if (wasEditing) activeTab.value = 'history'
   } catch (err: any) {
     console.error(err)
     alert('Failed to save invoice: ' + (err?.message || String(err)))
@@ -741,7 +748,6 @@ function copyInvoice(inv: Invoice) {
   })
 
   form.items = inv.items.map(row => ({ ...row }))
-  autoInvoiceNumber()
   activeTab.value = 'new'
   alert('Invoice copied as a new draft!')
 }
@@ -898,7 +904,6 @@ function applyBoxCalcPrefill() {
   try {
     const pre = JSON.parse(raw) as { party_name?: string; items?: Partial<InvoiceItemLine>[] }
     Object.assign(form, initialFormState())
-    autoInvoiceNumber()
     if (pre.party_name) {
       form.party_name = pre.party_name
       handleCustSelect()
@@ -913,9 +918,10 @@ function applyBoxCalcPrefill() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   defaultEwayDates()
-  invoiceStore.load()
+  await firmStore.load()
+  await invoiceStore.load()
   partyStore.load()
   itemStore.load()
   accountingStore.load()
@@ -982,8 +988,11 @@ onMounted(() => {
       <div class="lg:col-span-3 space-y-6">
         <div v-if="formEwayEligibility.show" class="pp-card p-3 border border-amber-200 bg-amber-50 text-sm text-amber-900">
           🚚 <strong>E-Way:</strong> {{ formEwayEligibility.reason }}
+          <span class="block text-xs mt-1 text-amber-800">
+            Save par ek saath NIC JSON download hoga (vehicle number transport me bharein).
+          </span>
           <span v-if="formEwayEligibility.level === 'suggested'" class="block text-xs mt-1 text-amber-800">
-            Inter-state ₹50,000 se kam — JSON optional hai; transport ho to bana lena.
+            Inter-state ₹50,000 se kam — JSON optional hai.
           </span>
         </div>
         <div class="pp-card p-5 space-y-4">
@@ -1000,8 +1009,22 @@ onMounted(() => {
             </div>
             <div>
               <label class="pp-label">Invoice Number</label>
-              <input v-model="form.bill_no" class="pp-input" :placeholder="firmStore.activeFirm ? 'Auto-increment' : 'INV-0001'" />
-              <span v-if="isDuplicateBillNo" class="text-xs text-danger font-semibold mt-1 block">⚠️ Duplicate Invoice Number</span>
+              <input
+                v-if="editingId"
+                v-model="form.bill_no"
+                class="pp-input"
+              />
+              <input
+                v-else
+                :value="nextBillPreview"
+                readonly
+                class="pp-input bg-slate-50 font-semibold text-navy"
+                :placeholder="nextBillPreview || 'INV-0001'"
+              />
+              <span v-if="!editingId" class="text-[10px] text-slate-500 mt-1 block">
+                Auto on save — next: <strong>{{ nextBillPreview || '—' }}</strong>
+              </span>
+              <span v-if="isDuplicateBillNo && editingId" class="text-xs text-danger font-semibold mt-1 block">⚠️ Duplicate Invoice Number</span>
             </div>
             <div>
               <label class="pp-label">Date</label>
@@ -1224,17 +1247,12 @@ onMounted(() => {
           </div>
 
           <div class="flex gap-2 pt-2">
-            <button @click="saveInvoice" class="pp-btn pp-btn-primary flex-1">Save Bill</button>
+            <button @click="saveInvoice" class="pp-btn pp-btn-primary flex-1">{{ saveButtonLabel }}</button>
             <button @click="saveAsTemplate" class="pp-btn pp-btn-ghost" title="Save as template">💾</button>
           </div>
-          <button
-            v-if="formEwayEligibility.show"
-            type="button"
-            class="pp-btn pp-btn-ghost w-full text-xs"
-            @click="downloadFormEwayJson"
-          >
-            🚚 Download E-Way JSON (this bill)
-          </button>
+          <p v-if="!editingId" class="text-[10px] text-slate-500 leading-relaxed">
+            Save par invoice number auto + PDF download (3 copies).
+          </p>
           <button @click="resetForm" class="pp-btn pp-btn-ghost w-full text-xs">Reset Form</button>
         </div>
       </div>
@@ -1258,14 +1276,19 @@ onMounted(() => {
         </select>
         <button
           v-if="selectedHistoryIds.length"
+          class="pp-btn pp-btn-primary !text-xs"
+          @click="bulkDownloadPDF"
+        >📥 Bulk PDF ({{ selectedHistoryIds.length }})</button>
+        <button
+          v-if="selectedHistoryIds.length"
           class="pp-btn pp-btn-danger !text-xs"
           @click="bulkDeleteHistory"
         >🗑️ Delete {{ selectedHistoryIds.length }} selected</button>
         <span class="ml-auto self-center text-sm text-slate-400">{{ filteredInvoices.length }} invoices found</span>
       </div>
 
-      <div class="pp-card overflow-hidden">
-        <table class="w-full text-sm">
+      <div class="pp-card overflow-x-auto">
+        <table class="w-full text-sm min-w-[900px]">
           <thead class="bg-slate-50 text-slate-500 text-xs uppercase font-semibold">
             <tr>
               <th class="w-8 px-2 py-2.5"></th>
@@ -1310,7 +1333,14 @@ onMounted(() => {
                   title="Pay via RTGS"
                 >🏦</button>
                 <button @click="openPaymentModal(inv)" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="Record Payment">💳</button>
-                <button @click="openPrintPreview(inv)" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="View Print Preview">👁️</button>
+                <button @click="openPrintPreview(inv)" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="Preview">👁️</button>
+                <button @click="downloadPDF(inv)" class="pp-btn pp-btn-primary !px-2 !py-1 text-xs font-semibold" title="Download PDF">PDF</button>
+                <button
+                  v-if="isEwayEligible(inv)"
+                  @click="downloadEwayForHistoryBill(inv)"
+                  class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs"
+                  title="Download E-Way JSON"
+                >🚚</button>
                 <button @click="editInvoice(inv)" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="Edit Bill">✏️</button>
                 <button @click="copyInvoice(inv)" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="Copy Draft">📋</button>
                 <button @click="deleteInvoice(inv)" class="pp-btn pp-btn-danger !px-2 !py-1 text-xs" title="Delete Bill">🗑️</button>
@@ -1326,8 +1356,9 @@ onMounted(() => {
       <div class="pp-card p-5">
         <h2 class="font-bold text-navy mb-2">🚚 E-Way Bill JSON (NIC Bulk Upload)</h2>
         <p class="text-sm text-slate-500 mb-4">
-          JSON banane ke baad upload karein:
-          <strong>ewaybillgst.gov.in → Generate Bulk</strong>
+          Naya bill: <strong>New Bill → Save Bill + E-Way JSON</strong> (ek bill, ek JSON).
+          Purane bills ke liye yahan se select karke bulk download karein.
+          Upload: <strong>ewaybillgst.gov.in → Generate Bulk</strong>
         </p>
         <div class="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4 space-y-1">
           <div><strong>Same state (intra):</strong> sirf bill ≥ ₹50,000</div>
@@ -1578,7 +1609,8 @@ onMounted(() => {
       <header class="flex items-center justify-between px-5 py-3 border-b border-slate-200 shrink-0">
         <h3 class="font-bold text-navy">Invoice Print Preview</h3>
         <div class="flex items-center gap-2 flex-wrap">
-          <button @click="printInvoice" class="pp-btn pp-btn-primary !py-1 text-xs">Print / PDF</button>
+          <button @click="downloadPDF()" class="pp-btn pp-btn-primary !py-1 text-xs">📄 Download PDF</button>
+          <button @click="printInvoice" class="pp-btn pp-btn-ghost !py-1 text-xs">🖨️ Print</button>
           <button @click="sharePDFViaWhatsApp" class="pp-btn pp-btn-ghost !py-1 text-xs">💬 WhatsApp</button>
           <button @click="sharePDFViaEmail" class="pp-btn pp-btn-ghost !py-1 text-xs">📧 Email</button>
           <button @click="showPrintPreview = false" class="pp-btn pp-btn-ghost !py-1 text-xs">✕ Close</button>
@@ -1762,7 +1794,7 @@ onMounted(() => {
       <div class="text-center border-b border-black pb-2 mb-3">
         <h1 class="text-lg font-bold uppercase tracking-wider">{{ firmStore.activeFirm?.name || 'PAMA PACKAGING' }}</h1>
         <p>{{ firmStore.activeFirm?.addr || '' }}</p>
-        <p>PIN: {{ firmStore.activeFirm?.pin || '-' }}${firmStore.activeFirm?.phone ? ' | Mob: ' + firmStore.activeFirm?.phone : ''} | Email: {{ firmStore.activeFirm?.email || '-' }}</p>
+        <p>PIN: {{ firmStore.activeFirm?.pin || '-' }}<template v-if="firmStore.activeFirm?.phone"> | Mob: {{ firmStore.activeFirm.phone }}</template> | Email: {{ firmStore.activeFirm?.email || '-' }}</p>
         <p class="font-bold mt-1">
           GSTIN: {{ firmStore.activeFirm?.gst || '-' }} | State: {{ getStateName(firmStore.activeFirm?.gst || firmStore.activeFirm?.state) }} (Code: {{ firmStore.activeFirm?.state || '-' }})
         </p>

@@ -5,6 +5,7 @@ import { createRepo } from '@/data/repo'
 import { useFirmStore } from './firm'
 import { useAccountingStore } from './accounting'
 import { logActivity } from '@/services/activityLog'
+import { allocateBillNo } from '@/services/invoiceNumber'
 import type { Invoice } from '@/types/models'
 
 const repo = createRepo<Invoice>(db.invoices)
@@ -17,20 +18,40 @@ export const useInvoiceStore = defineStore('invoices', () => {
     const firm = useFirmStore()
     list.value = await repo.all(firm.activeFirmId)
     loaded.value = true
+    await firm.syncBillSequence(firm.activeFirmId, list.value)
   }
 
-  async function add(data: Omit<Invoice, 'id' | 'firm_id' | 'created_at' | 'updated_at' | 'is_deleted' | '_dirty'>, autoNumberUsed: boolean): Promise<Invoice> {
+  async function add(
+    data: Omit<Invoice, 'id' | 'firm_id' | 'created_at' | 'updated_at' | 'is_deleted' | '_dirty'>,
+    useAutoNumber = true,
+  ): Promise<Invoice> {
     const firmStore = useFirmStore()
     const firmId = firmStore.activeFirmId
-    const activeFirm = firmStore.activeFirm
     const accounting = useAccountingStore()
 
-    const rec = await repo.create({ ...data, firm_id: firmId } as any)
+    if (!firmId) throw new Error('Active firm required')
 
-    if (autoNumberUsed && activeFirm) {
-      const nextNo = (activeFirm.next_bill_no || 1) + 1
-      await firmStore.update(firmId, { next_bill_no: nextNo })
+    await load()
+
+    const firm = firmStore.activeFirm
+    if (!firm) throw new Error('Active firm required')
+
+    let payload = { ...data }
+
+    if (useAutoNumber) {
+      const { billNo, nextSequenceAfter } = allocateBillNo(firm, list.value)
+      payload.bill_no = billNo
+      await firmStore.update(firmId, { next_bill_no: nextSequenceAfter })
+    } else if (!payload.bill_no?.trim()) {
+      throw new Error('Invoice number missing')
+    } else {
+      const dup = list.value.some(
+        (b) => !b.is_deleted && b.firm_id === firmId && b.bill_no === payload.bill_no.trim(),
+      )
+      if (dup) throw new Error(`Invoice number ${payload.bill_no} already exists`)
     }
+
+    const rec = await repo.create({ ...payload, firm_id: firmId, bill_no: payload.bill_no.trim() } as any)
 
     try {
       await accounting.load()
