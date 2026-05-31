@@ -10,6 +10,11 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  server: {
+    port: 5180,
+    strictPort: false,
+    open: false,
+  },
   plugins: [
     vue(),
     VitePWA({
@@ -22,16 +27,26 @@ export default defineConfig({
         theme_color: '#0f2444',
         background_color: '#0f2444',
         display: 'standalone',
+        orientation: 'portrait-primary',
         start_url: '/',
+        scope: '/',
+        categories: ['business', 'finance', 'productivity'],
+        lang: 'hi',
         icons: [
-          { src: 'pwa-192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'pwa-512.png', sizes: '512x512', type: 'image/png' },
-          { src: 'pwa-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+          { src: 'favicon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
+          { src: 'favicon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },
         ],
       },
       workbox: {
         navigateFallback: '/index.html',
         globPatterns: ['**/*.{js,css,html,svg,woff2}'],
+        runtimeCaching: [
+          {
+            urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,
+            handler: 'NetworkFirst',
+            options: { cacheName: 'supabase-api', networkTimeoutSeconds: 10 },
+          },
+        ],
       },
     }),
   ],

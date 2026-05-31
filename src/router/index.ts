@@ -10,7 +10,9 @@ const routes: RouteRecordRaw[] = [
   { path: '/items',     name: 'items',     component: () => import('@/modules/items/ItemsView.vue'),         meta: { title: 'Items', icon: '📦' } },
   { path: '/boxcalc',   name: 'boxcalc',   component: () => import('@/modules/boxcalc/BoxCalcView.vue'),     meta: { title: 'BoxCalc', icon: '🧮' } },
   { path: '/banking',   name: 'banking',   component: () => import('@/modules/banking/BankingView.vue'),     meta: { title: 'Banking', icon: '🏦' } },
+  { path: '/reports',   name: 'reports',   component: () => import('@/modules/reports/ReportsView.vue'),   meta: { title: 'Reports', icon: '📈' } },
   { path: '/settings',  name: 'settings',  component: () => import('@/modules/settings/SettingsView.vue'),   meta: { title: 'Settings', icon: '⚙️' } },
+  { path: '/login',     name: 'login',     component: () => import('@/modules/auth/LoginView.vue'),       meta: { title: 'Login', hidden: true } },
 ]
 
 export const router = createRouter({
@@ -18,4 +20,4 @@ export const router = createRouter({
   routes,
 })
 
-export const navItems = routes.filter(r => r.meta?.title)
+export const navItems = routes.filter(r => r.meta?.title && !r.meta?.hidden)

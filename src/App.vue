@@ -1,24 +1,75 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { RouterView, RouterLink, useRoute } from 'vue-router'
 import { navItems } from '@/router'
 import { useFirmStore } from '@/stores/firm'
+import { useAuthStore } from '@/stores/auth'
+import { runSync, startCloudRealtime, stopCloudRealtime } from '@/services/sync'
+import PwaInstallPrompt from '@/components/PwaInstallPrompt.vue'
 
 const route = useRoute()
+const auth = useAuthStore()
 const sidebarOpen = ref(false)
 const clock = ref('')
+const syncing = ref(false)
+const syncMsg = ref('')
+
+const cloudLabel = computed(() => {
+  if (!auth.isConfigured) return 'Local only'
+  if (auth.isLoggedIn && auth.canSync) return 'Cloud connected'
+  if (auth.isLoggedIn) return 'Signed in'
+  return 'Not signed in'
+})
 
 let timer: number
+let stopRealtime: (() => void) | null = null
+
 function tick() {
   const n = new Date()
   clock.value = [n.getHours(), n.getMinutes(), n.getSeconds()]
     .map(x => String(x).padStart(2, '0')).join(':')
 }
+
+async function cloudSync() {
+  syncing.value = true
+  syncMsg.value = ''
+  try {
+    syncMsg.value = await runSync()
+  } finally {
+    syncing.value = false
+  }
+}
+
+function onOnline() {
+  if (auth.canSync) cloudSync()
+}
+
+watch(
+  () => auth.canSync,
+  (can) => {
+    stopRealtime?.()
+    stopRealtime = null
+    if (can) {
+      cloudSync()
+      stopRealtime = startCloudRealtime((msg) => { syncMsg.value = msg })
+    } else {
+      stopCloudRealtime()
+    }
+  },
+  { immediate: true },
+)
+
 onMounted(async () => {
   await useFirmStore().load()
   tick(); timer = window.setInterval(tick, 1000)
+  window.addEventListener('online', onOnline)
 })
-onUnmounted(() => clearInterval(timer))
+onUnmounted(() => {
+  clearInterval(timer)
+  window.removeEventListener('online', onOnline)
+  stopRealtime?.()
+  stopCloudRealtime()
+})
 </script>
 
 <template>
@@ -26,19 +77,32 @@ onUnmounted(() => clearInterval(timer))
     <!-- Top navbar -->
     <header class="bg-navy text-white flex items-center px-4 gap-3 shadow-lg z-20 shrink-0" style="height:52px">
       <button class="lg:hidden text-xl px-1" @click="sidebarOpen = !sidebarOpen" aria-label="Menu">☰</button>
-      <RouterLink to="/dashboard" class="flex items-center gap-2.5 no-underline">
-        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-teal flex items-center justify-center text-lg">🏭</div>
-        <div class="leading-tight">
-          <div class="text-[15px] font-bold text-white">Pama Packaging</div>
-          <div class="text-[10px] text-sky-300">Business Suite</div>
+      <RouterLink to="/dashboard" class="flex items-center gap-2.5 no-underline min-w-0">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-teal flex items-center justify-center text-lg shrink-0">🏭</div>
+        <div class="leading-tight min-w-0">
+          <div class="text-[15px] font-bold text-white truncate">Pama Packaging</div>
+          <div class="text-[10px] text-sky-300 truncate">Business Suite</div>
         </div>
       </RouterLink>
-      <div class="ml-auto flex items-center gap-3">
+      <div class="ml-auto flex items-center gap-1.5 sm:gap-3 shrink-0">
+        <span class="text-[10px] sm:text-[11px] text-sky-300 max-w-[72px] sm:max-w-none truncate" :title="syncMsg || cloudLabel">☁️ {{ cloudLabel }}</span>
+        <button
+          v-if="auth.canSync"
+          type="button"
+          class="pp-btn pp-btn-ghost !py-1 !px-2 text-[10px] sm:text-xs text-sky-100 border border-white/20"
+          :disabled="syncing"
+          @click="cloudSync"
+        >
+          {{ syncing ? '…' : 'Sync' }}
+        </button>
+        <RouterLink
+          v-else-if="auth.isConfigured && !auth.isLoggedIn"
+          to="/login"
+          class="text-[10px] sm:text-xs font-semibold text-sky-200 hover:text-white no-underline"
+        >
+          Sign in
+        </RouterLink>
         <span class="hidden sm:block text-sky-300 text-sm tabular-nums">{{ clock }}</span>
-        <div class="flex items-center gap-2 bg-primary rounded-full pl-1.5 pr-3 py-1">
-          <div class="w-6 h-6 rounded-full bg-gradient-to-br from-accent to-teal flex items-center justify-center text-xs font-bold">AS</div>
-          <span class="hidden sm:block text-xs font-semibold text-slate-100">Anju Samant</span>
-        </div>
       </div>
     </header>
 
@@ -74,5 +138,6 @@ onUnmounted(() => clearInterval(timer))
         <RouterView />
       </main>
     </div>
+    <PwaInstallPrompt />
   </div>
 </template>

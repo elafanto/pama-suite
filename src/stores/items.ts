@@ -36,6 +36,11 @@ export const useItemStore = defineStore('items', () => {
     await load()
   }
 
+  async function restore(id: string) {
+    await repo.restore(id)
+    await load()
+  }
+
   /** Find or create an item by name (used by billing + box recipe handoff). */
   async function ensure(name: string, extra: Partial<Item> = {}): Promise<Item> {
     const key = name.trim().toLowerCase()
@@ -47,5 +52,5 @@ export const useItemStore = defineStore('items', () => {
     })
   }
 
-  return { list, loaded, load, add, update, remove, ensure }
+  return { list, loaded, load, add, update, remove, restore, ensure }
 })

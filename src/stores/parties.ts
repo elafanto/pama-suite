@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { db } from '@/data/db'
 import { createRepo } from '@/data/repo'
 import { useFirmStore } from './firm'
+import { logActivity } from '@/services/activityLog'
 import type { Party, PartyRole } from '@/types/models'
 
 const repo = createRepo<Party>(db.parties)
@@ -25,17 +26,27 @@ export const usePartyStore = defineStore('parties', () => {
   async function add(data: NewParty): Promise<Party> {
     const firm = useFirmStore()
     const rec = await repo.create({ ...data, firm_id: firm.activeFirmId } as any)
+    await logActivity(firm.activeFirmId, 'create', 'party', rec.id, `Party ${rec.name} added`)
     await load()
     return rec
   }
 
   async function update(id: string, patch: Partial<Party>) {
-    await repo.update(id, patch)
+    const rec = await repo.update(id, patch)
+    if (rec) await logActivity(rec.firm_id, 'update', 'party', rec.id, `Party ${rec.name} updated`)
     await load()
   }
 
   async function remove(id: string) {
+    const existing = await repo.get(id)
     await repo.remove(id)
+    if (existing) await logActivity(existing.firm_id, 'delete', 'party', id, `Party ${existing.name} deleted`)
+    await load()
+  }
+
+  async function restore(id: string) {
+    const rec = await repo.restore(id)
+    if (rec) await logActivity(rec.firm_id, 'restore', 'party', id, `Party ${rec.name} restored`)
     await load()
   }
 
@@ -61,5 +72,5 @@ export const usePartyStore = defineStore('parties', () => {
     })
   }
 
-  return { list, loaded, customers, vendors, load, add, update, remove, ensure }
+  return { list, loaded, customers, vendors, load, add, update, remove, restore, ensure }
 })

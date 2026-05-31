@@ -63,6 +63,14 @@ export function createRepo<T extends SyncFields>(table: Table<T, string>) {
       await table.put({ ...existing, is_deleted: true, updated_at: nowISO(), _dirty: true })
     },
 
+    async restore(id: string): Promise<T | undefined> {
+      const existing = await table.get(id)
+      if (!existing) return undefined
+      const rec = plain({ ...existing, is_deleted: false, updated_at: nowISO(), _dirty: true }) as T
+      await table.put(rec)
+      return rec
+    },
+
     /** Records pending push to cloud (for the future sync queue). */
     async dirty(): Promise<T[]> {
       return table.filter((r) => r._dirty === true).toArray()
