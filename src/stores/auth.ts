@@ -13,6 +13,7 @@ export const useAuthStore = defineStore('auth', () => {
   const orgId = ref<string | null>(localStorage.getItem('pama_org_id'))
   const loading = ref(false)
   const error = ref('')
+  const orgSetupError = ref('')
   /** Bump after manual key save so computed isConfigured refreshes. */
   const configVersion = ref(0)
 
@@ -48,7 +49,10 @@ export const useAuthStore = defineStore('auth', () => {
       return 'Sign in required for cloud sync.\n\nGo to Login (/login) and sign in with your Supabase account.'
     }
     if (!orgId.value) {
-      return 'Organization not ready yet.\n\nWait a few seconds after login, or sign out and sign in again. First login creates your org automatically.'
+      if (orgSetupError.value) {
+        return `Organization setup failed:\n\n${orgSetupError.value}\n\nFix: Supabase → SQL Editor → run supabase/migrations/003_bootstrap_user_org.sql\n\nPhir Settings me "Setup Organization" dabayein.`
+      }
+      return 'Organization not ready yet.\n\nSettings → Cloud Sync → "Setup Organization" dabayein.\n\nAgar error aaye to Supabase SQL migration 003 run karein (see SETUP.md).'
     }
     return null
   })
@@ -84,22 +88,78 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function loadOrg() {
+  async function loadOrg(): Promise<boolean> {
     const sb = getSupabase()
-    if (!sb || !user.value) return
-    const { data: prof } = await sb.from('profiles').select('org_id').eq('id', user.value.id).maybeSingle()
+    if (!sb || !user.value) return false
+    orgSetupError.value = ''
+
+    const { data: prof, error: profErr } = await sb
+      .from('profiles')
+      .select('org_id')
+      .eq('id', user.value.id)
+      .maybeSingle()
+
+    if (profErr) {
+      orgSetupError.value = profErr.message
+      orgId.value = null
+      localStorage.removeItem('pama_org_id')
+      return false
+    }
+
     if (prof?.org_id) {
       orgId.value = prof.org_id
       localStorage.setItem('pama_org_id', prof.org_id)
-      return
+      return true
     }
-    // First login: create org + profile
+
+    orgId.value = null
+    localStorage.removeItem('pama_org_id')
+
+    const displayName = user.value.email.split('@')[0] || 'User'
+    const { data: bootId, error: bootErr } = await sb.rpc('bootstrap_user_org', { display_name: displayName })
+
+    if (!bootErr && bootId) {
+      orgId.value = bootId as string
+      localStorage.setItem('pama_org_id', bootId as string)
+      return true
+    }
+
+    // Fallback if RPC not deployed yet (only migration 001/002)
     const { data: org, error: orgErr } = await sb.from('orgs').insert({ name: 'Pama Packaging' }).select().single()
-    if (orgErr || !org) return
-    await sb.from('org_members').insert({ org_id: org.id, user_id: user.value.id, role: 'owner' })
-    await sb.from('profiles').upsert({ id: user.value.id, org_id: org.id, display_name: user.value.email.split('@')[0] })
+    if (orgErr || !org) {
+      orgSetupError.value = bootErr?.message || orgErr?.message || 'Could not create organization'
+      return false
+    }
+    const { error: memErr } = await sb.from('org_members').insert({ org_id: org.id, user_id: user.value.id, role: 'owner' })
+    if (memErr) {
+      orgSetupError.value = memErr.message
+      return false
+    }
+    const { error: profUpErr } = await sb.from('profiles').upsert({
+      id: user.value.id,
+      org_id: org.id,
+      display_name: displayName,
+    })
+    if (profUpErr) {
+      orgSetupError.value = profUpErr.message
+      return false
+    }
     orgId.value = org.id
     localStorage.setItem('pama_org_id', org.id)
+    return true
+  }
+
+  async function ensureOrgSetup(): Promise<boolean> {
+    if (!user.value) {
+      error.value = 'Pehle login karein'
+      return false
+    }
+    loading.value = true
+    try {
+      return await loadOrg()
+    } finally {
+      loading.value = false
+    }
   }
 
   async function signIn(email: string, password: string) {
@@ -149,7 +209,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   return {
-    user, orgId, loading, error, isConfigured, isLoggedIn, canSync, syncBlockReason,
-    init, signIn, signUp, signOut, applySupabaseKeys,
+    user, orgId, loading, error, orgSetupError, isConfigured, isLoggedIn, canSync, syncBlockReason,
+    init, signIn, signUp, signOut, applySupabaseKeys, ensureOrgSetup,
   }
 })

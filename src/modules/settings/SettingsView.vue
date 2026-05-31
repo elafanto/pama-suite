@@ -116,6 +116,12 @@ async function saveSupabaseKeys() {
   }
 }
 
+async function setupOrg() {
+  syncMsg.value = 'Setting up organization…'
+  const ok = await auth.ensureOrgSetup()
+  syncMsg.value = ok ? 'Organization ready — ab Sync kar sakte hain.' : (auth.orgSetupError || auth.error || 'Setup failed')
+}
+
 onMounted(() => {
   firmStore.load()
   const cfg = getSupabaseConfig()
@@ -237,6 +243,11 @@ onMounted(() => {
           :class="{ 'opacity-60': !auth.canSync }"
           @click="doSync"
         >Sync Now</button>
+        <button
+          v-if="auth.isLoggedIn && !auth.canSync"
+          class="pp-btn pp-btn-ghost"
+          @click="setupOrg"
+        >Setup Organization</button>
         <button
           class="pp-btn pp-btn-ghost"
           :class="{ 'opacity-60': !auth.canSync }"
