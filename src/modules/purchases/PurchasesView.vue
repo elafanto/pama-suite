@@ -65,7 +65,14 @@ function addRow(data: Partial<PurchaseItemLine> = {}) {
     qty: data.qty || 0,
     unit: data.unit || 'KG',
     rate: data.rate || 0,
-    gst: data.gst !== undefined ? data.gst : 18
+    gst: data.gst !== undefined ? data.gst : 18,
+    is_kraft_reel: data.is_kraft_reel || false,
+    reel_no: data.reel_no || '',
+    deckle_size: data.deckle_size || '',
+    gsm: data.gsm || '',
+    bf: data.bf || '',
+    color: data.color || 'NATURAL_BROWN',
+    reel_weight: data.reel_weight || data.qty || 0,
   })
 }
 
@@ -140,6 +147,15 @@ function onRowItemSelect(idx: number) {
   }
 }
 
+function toggleKraftReel(idx: number) {
+  const row = form.items[idx]
+  if (row.is_kraft_reel) {
+    row.unit = 'KG'
+    row.reel_weight = row.reel_weight || row.qty || 0
+    row.hsn = row.hsn || '48043100'
+  }
+}
+
 // Totals calculations
 const subtotal = computed(() => {
   return form.items.reduce((sum, item) => {
@@ -187,6 +203,11 @@ async function savePurchase() {
     alert('Please add at least one valid line item')
     return
   }
+  const badReel = validItems.find(it => it.is_kraft_reel && (!it.reel_no?.trim() || !it.deckle_size?.trim() || !it.gsm?.trim() || !it.bf?.trim() || !(it.reel_weight || it.qty)))
+  if (badReel) {
+    alert('Kraft reel line me Reel No, Deckle, GSM, BF aur Reel Weight required hai.')
+    return
+  }
 
   // Ensure vendor exists
   const vendor = await partyStore.ensure(form.supplier_name, 'vendor')
@@ -196,7 +217,7 @@ async function savePurchase() {
     if (!it.item_id) {
       const match = itemStore.list.find(i => i.name.toLowerCase() === it.name.trim().toLowerCase())
       if (!match) {
-        await itemStore.add({
+        const added = await itemStore.add({
           name: it.name.trim(),
           unit: it.unit,
           hsn: it.hsn,
@@ -204,8 +225,9 @@ async function savePurchase() {
           rate: it.rate,
           size: '',
           gsm: '',
-          bf: ''
+          bf: it.bf || ''
         })
+        it.item_id = added.id
       }
     }
   }
@@ -431,7 +453,7 @@ onMounted(() => {
           <h2 class="text-md font-semibold text-slate-800 border-b pb-2 mb-4">Item Breakdown</h2>
           
           <div class="overflow-x-auto">
-            <table class="w-full text-left border-collapse min-w-[600px]">
+            <table class="w-full text-left border-collapse min-w-[980px]">
               <thead>
                 <tr class="border-b text-slate-500 font-semibold text-xs uppercase bg-slate-50">
                   <th class="py-2 px-3">Item Description</th>
@@ -440,6 +462,7 @@ onMounted(() => {
                   <th class="py-2 px-3 w-24">Unit</th>
                   <th class="py-2 px-3 w-24">Rate (₹)</th>
                   <th class="py-2 px-3 w-20">GST %</th>
+                  <th class="py-2 px-3 w-28">Kraft Reel</th>
                   <th class="py-2 px-3 text-right w-28">Total Amount</th>
                   <th class="py-2 px-3 w-10"></th>
                 </tr>
@@ -482,11 +505,50 @@ onMounted(() => {
                       <option :value="28">28%</option>
                     </select>
                   </td>
+                  <td class="py-2 px-1">
+                    <label class="flex items-center gap-2 text-xs font-semibold">
+                      <input type="checkbox" v-model="item.is_kraft_reel" @change="toggleKraftReel(idx)" />
+                      Reel Stock
+                    </label>
+                  </td>
                   <td class="py-2 px-3 text-right font-mono font-medium">
                     ₹ {{ n2(item.qty * item.rate) }}
                   </td>
                   <td class="py-2 px-1 text-center">
                     <button @click="removeRow(idx)" class="text-rose-500 hover:text-rose-700 text-lg">✕</button>
+                  </td>
+                </tr>
+                <tr v-for="(item, idx) in form.items.filter(i => i.is_kraft_reel)" :key="`reel-${idx}-${item.name}`" class="bg-amber-50/50">
+                  <td colspan="9" class="px-3 py-3">
+                    <div class="grid grid-cols-2 md:grid-cols-6 gap-3">
+                      <div>
+                        <label class="pp-label">Reel No *</label>
+                        <input v-model="item.reel_no" class="pp-input" placeholder="Reel/batch no" />
+                      </div>
+                      <div>
+                        <label class="pp-label">Deckle Size *</label>
+                        <input v-model="item.deckle_size" class="pp-input" placeholder="e.g. 52 inch" />
+                      </div>
+                      <div>
+                        <label class="pp-label">GSM *</label>
+                        <input v-model="item.gsm" class="pp-input" placeholder="120" />
+                      </div>
+                      <div>
+                        <label class="pp-label">BF *</label>
+                        <input v-model="item.bf" class="pp-input" placeholder="18" />
+                      </div>
+                      <div>
+                        <label class="pp-label">Color</label>
+                        <select v-model="item.color" class="pp-input">
+                          <option value="NATURAL_BROWN">Natural Brown</option>
+                          <option value="GY">GY</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label class="pp-label">Reel Weight KG *</label>
+                        <input type="number" v-model.number="item.reel_weight" class="pp-input text-right" placeholder="0" />
+                      </div>
+                    </div>
                   </td>
                 </tr>
               </tbody>

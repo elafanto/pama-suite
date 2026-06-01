@@ -31,6 +31,7 @@ Open the URL shown in the terminal (usually `http://localhost:5173`).
    - `002_realtime_and_org_bootstrap.sql` — Realtime + first-login fix
    - `003_bootstrap_user_org.sql` — RPC function for org auto-setup
    - `004_inventory_and_firm_sync_fields.sql` — stock fields + firm sync columns
+   - `005_production_tracking.sql` — reel stock, production jobs, stages, stock ledger
 
 5. Go to **Authentication** → **Providers** → enable **Email** (password sign-in).
 6. Go to **Settings** → **API** and copy:
@@ -115,6 +116,7 @@ npm run preview
 | `/boxcalc` | Corrugated costing & recipes |
 | `/banking` | RTGS/NEFT email generator |
 | `/inventory` | Live stock on-hand, low-stock alerts, stock value |
+| `/production` | Reel stock, production jobs, daily stage entries, waste tracking |
 | `/reports` | GSTR-1, outstanding aging, cash book, item sales, activity log |
 | `/recycle-bin` | Restore soft-deleted parties/items/invoices/purchases |
 | `/settings` | Firms, backup/import, cloud sync, Gemini key, PWA install |

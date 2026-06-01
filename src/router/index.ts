@@ -9,6 +9,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/banking',   name: 'banking',   component: () => import('@/modules/banking/BankingView.vue'),     meta: { title: 'Banking', icon: '🏦', group: 'Sales & Purchase' } },
 
   { path: '/inventory', name: 'inventory', component: () => import('@/modules/inventory/InventoryView.vue'), meta: { title: 'Inventory', icon: '📊', group: 'Inventory & Masters' } },
+  { path: '/production', name: 'production', component: () => import('@/modules/production/ProductionView.vue'), meta: { title: 'Production', icon: '🏭', group: 'Inventory & Masters' } },
   { path: '/items',     name: 'items',     component: () => import('@/modules/items/ItemsView.vue'),         meta: { title: 'Items', icon: '📦', group: 'Inventory & Masters' } },
   { path: '/parties',   name: 'parties',   component: () => import('@/modules/parties/PartiesView.vue'),     meta: { title: 'Parties', icon: '👥', group: 'Inventory & Masters' } },
 

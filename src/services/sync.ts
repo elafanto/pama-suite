@@ -7,7 +7,19 @@ import { allocateBillNo, findDuplicateBillNoGroups, resolveNextSequence } from '
 import type { Firm, Party, Item, Invoice, Purchase, Recipe, Account, Voucher } from '@/types/models'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 
-type SyncTable = 'firms' | 'parties' | 'items' | 'invoices' | 'purchases' | 'recipes' | 'accounts' | 'vouchers'
+type SyncTable =
+  | 'firms'
+  | 'parties'
+  | 'items'
+  | 'invoices'
+  | 'purchases'
+  | 'recipes'
+  | 'accounts'
+  | 'vouchers'
+  | 'reel_stocks'
+  | 'production_jobs'
+  | 'production_stages'
+  | 'stock_movements'
 
 const TABLE_MAP: Record<SyncTable, string> = {
   firms: 'firms',
@@ -18,9 +30,23 @@ const TABLE_MAP: Record<SyncTable, string> = {
   recipes: 'recipes',
   accounts: 'accounts',
   vouchers: 'vouchers',
+  reel_stocks: 'reel_stocks',
+  production_jobs: 'production_jobs',
+  production_stages: 'production_stages',
+  stock_movements: 'stock_movements',
 }
 
-const PAYLOAD_TABLES: SyncTable[] = ['invoices', 'purchases', 'recipes', 'accounts', 'vouchers']
+const PAYLOAD_TABLES: SyncTable[] = [
+  'invoices',
+  'purchases',
+  'recipes',
+  'accounts',
+  'vouchers',
+  'reel_stocks',
+  'production_jobs',
+  'production_stages',
+  'stock_movements',
+]
 
 function isNewer(remote: string, local?: string): boolean {
   if (!local) return true

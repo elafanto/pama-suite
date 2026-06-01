@@ -157,6 +157,13 @@ export interface PurchaseItemLine {
   unit: string
   rate: number
   gst: number                 // %
+  is_kraft_reel?: boolean
+  reel_no?: string
+  deckle_size?: string
+  gsm?: string
+  bf?: string
+  color?: 'GY' | 'NATURAL_BROWN' | string
+  reel_weight?: number
 }
 
 export interface Purchase extends BaseRecord {
@@ -210,5 +217,90 @@ export interface ActivityLog extends BaseRecord {
   entity_id: string
   summary: string
   meta?: Record<string, unknown>
+}
+
+export type ReelColor = 'GY' | 'NATURAL_BROWN' | string
+export type ReelStatus = 'active' | 'consumed'
+
+export interface ReelStock extends BaseRecord {
+  reel_no: string
+  supplier_id: string | null
+  supplier_name: string
+  purchase_id?: string
+  purchase_bill_no?: string
+  deckle_size: string
+  gsm: string
+  bf: string
+  color: ReelColor
+  opening_weight: number
+  current_weight: number
+  rate: number
+  status: ReelStatus
+}
+
+export type ProductionJobStatus = 'open' | 'in_progress' | 'ready' | 'dispatched' | 'closed'
+export interface ProductionJob extends BaseRecord {
+  date: string
+  customer_id: string | null
+  customer_name: string
+  job_no: string
+  item_id: string | null
+  box_name: string
+  box_size: string
+  target_qty: number
+  status: ProductionJobStatus
+  notes: string
+}
+
+export type ProductionStage =
+  | 'corrugation'
+  | 'paper_cutting'
+  | 'pasting'
+  | 'thin_blade'
+  | 'printer_slotter'
+  | 'stitching'
+  | 'dispatch'
+
+export type ProductionStockType =
+  | 'raw_reel'
+  | '2ply'
+  | 'cut_sheet'
+  | 'pasted_sheet'
+  | 'trimmed_sheet'
+  | 'printed_sheet'
+  | 'finished_box'
+  | 'waste'
+
+export interface ProductionStageEntry extends BaseRecord {
+  job_id: string
+  date: string
+  stage: ProductionStage
+  input_stock_type: ProductionStockType
+  input_ref_id?: string
+  input_qty: number
+  input_weight: number
+  output_stock_type: ProductionStockType
+  output_qty: number
+  output_weight: number
+  waste_qty: number
+  waste_weight: number
+  notes: string
+}
+
+export interface StockMovement extends BaseRecord {
+  date: string
+  source: 'purchase' | 'production' | 'dispatch' | 'adjustment'
+  ref_id: string
+  stock_type: ProductionStockType
+  stock_ref_id?: string
+  job_id?: string
+  customer_id?: string | null
+  qty_in: number
+  qty_out: number
+  weight_in: number
+  weight_out: number
+  waste_qty: number
+  waste_weight: number
+  notes?: string
 }
 

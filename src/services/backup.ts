@@ -2,7 +2,10 @@ import { db } from '@/data/db'
 import { uid, nowISO } from '@/data/util'
 import { allocateBillNo, findDuplicateBillNoGroups, resolveNextSequence } from '@/services/invoiceNumber'
 import { normalizeGstType } from '@/services/gst'
-import type { Party, Firm, Item, Invoice, Purchase, Recipe, Account, Voucher, ActivityLog } from '@/types/models'
+import type {
+  Party, Firm, Item, Invoice, Purchase, Recipe, Account, Voucher, ActivityLog,
+  ReelStock, ProductionJob, ProductionStageEntry, StockMovement,
+} from '@/types/models'
 
 export const BACKUP_FORMAT = 'pama_suite_backup'
 export const BACKUP_VERSION = 1
@@ -20,6 +23,10 @@ export interface SuiteBackup {
   accounts: Account[]
   vouchers: Voucher[]
   activity_log: ActivityLog[]
+  reel_stocks?: ReelStock[]
+  production_jobs?: ProductionJob[]
+  production_stages?: ProductionStageEntry[]
+  stock_movements?: StockMovement[]
   settings?: {
     geminiKey?: string
     bankEmail?: string
@@ -30,7 +37,10 @@ export interface SuiteBackup {
 }
 
 export async function exportAll(): Promise<SuiteBackup> {
-  const [firms, parties, items, invoices, purchases, recipes, accounts, vouchers, activity_log] = await Promise.all([
+  const [
+    firms, parties, items, invoices, purchases, recipes, accounts, vouchers, activity_log,
+    reel_stocks, production_jobs, production_stages, stock_movements,
+  ] = await Promise.all([
     db.firms.toArray(),
     db.parties.toArray(),
     db.items.toArray(),
@@ -40,6 +50,10 @@ export async function exportAll(): Promise<SuiteBackup> {
     db.accounts.toArray(),
     db.vouchers.toArray(),
     db.activity_log.toArray(),
+    db.reel_stocks.toArray(),
+    db.production_jobs.toArray(),
+    db.production_stages.toArray(),
+    db.stock_movements.toArray(),
   ])
 
   let templates: unknown[] = []
@@ -53,6 +67,7 @@ export async function exportAll(): Promise<SuiteBackup> {
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
     firms, parties, items, invoices, purchases, recipes, accounts, vouchers, activity_log,
+    reel_stocks, production_jobs, production_stages, stock_movements,
     settings: {
       geminiKey: localStorage.getItem('pama_gemini_key') || '',
       bankEmail: localStorage.getItem('pama_bank_email') || '',
@@ -120,6 +135,10 @@ async function importSuiteBackup(data: any, mode: 'merge' | 'replace'): Promise<
   await upsertAll(db.accounts, data.accounts || [], 'accounts')
   await upsertAll(db.vouchers, data.vouchers || [], 'vouchers')
   await upsertAll(db.activity_log, data.activity_log || [], 'activity_log')
+  await upsertAll(db.reel_stocks, data.reel_stocks || [], 'reel_stocks')
+  await upsertAll(db.production_jobs, data.production_jobs || [], 'production_jobs')
+  await upsertAll(db.production_stages, data.production_stages || [], 'production_stages')
+  await upsertAll(db.stock_movements, data.stock_movements || [], 'stock_movements')
 
   if (data.settings) {
     if (data.settings.geminiKey) localStorage.setItem('pama_gemini_key', data.settings.geminiKey)

@@ -5,6 +5,7 @@ import { createRepo } from '@/data/repo'
 import { useFirmStore } from './firm'
 import { useAccountingStore } from './accounting'
 import { logActivity } from '@/services/activityLog'
+import { createReelsFromPurchase, reversePurchaseReels } from '@/services/production'
 import type { Purchase } from '@/types/models'
 
 const repo = createRepo<Purchase>(db.purchases)
@@ -28,6 +29,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
 
     // Post to double-entry ledger
     await accounting.postPurchaseToLedger(rec)
+    await createReelsFromPurchase(rec)
     await logActivity(firmId, 'create', 'purchase', rec.id, `Purchase ${rec.bill_no} from ${rec.supplier_name}`)
 
     await load()
@@ -39,6 +41,8 @@ export const usePurchaseStore = defineStore('purchases', () => {
     if (rec) {
       const accounting = useAccountingStore()
       await accounting.postPurchaseToLedger(rec)
+      await reversePurchaseReels(id)
+      await createReelsFromPurchase(rec)
       await logActivity(rec.firm_id, 'update', 'purchase', rec.id, `Purchase ${rec.bill_no} updated`)
     }
     await load()
@@ -47,6 +51,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
   async function remove(id: string) {
     const existing = await repo.get(id)
     await repo.remove(id)
+    await reversePurchaseReels(id)
     const accounting = useAccountingStore()
     await accounting.reverseLedgerByRef(id)
     if (existing) {
@@ -97,6 +102,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
     if (rec) {
       const accounting = useAccountingStore()
       await accounting.postPurchaseToLedger(rec)
+      await createReelsFromPurchase(rec)
       await logActivity(rec.firm_id, 'restore', 'purchase', id, `Purchase ${rec.bill_no} restored`)
     }
     await load()
