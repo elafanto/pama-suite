@@ -27,7 +27,10 @@ Open the URL shown in the terminal (usually `http://localhost:5173`).
 
    `supabase/migrations/001_initial_schema.sql`
 
-4. Then run **`supabase/migrations/002_realtime_and_org_bootstrap.sql`** (first-login fix + Realtime sync).
+4. Run these migrations **in order** (paste each in SQL Editor):
+   - `002_realtime_and_org_bootstrap.sql` — Realtime + first-login fix
+   - `003_bootstrap_user_org.sql` — RPC function for org auto-setup
+   - `004_inventory_and_firm_sync_fields.sql` — stock fields + firm sync columns
 
 5. Go to **Authentication** → **Providers** → enable **Email** (password sign-in).
 6. Go to **Settings** → **API** and copy:
@@ -111,8 +114,10 @@ npm run preview
 | `/items` | Product / box catalogue |
 | `/boxcalc` | Corrugated costing & recipes |
 | `/banking` | RTGS/NEFT email generator |
-| `/reports` | GSTR-1, outstanding, cash book, activity log |
-| `/settings` | Firms, backup, sync, Gemini key |
+| `/inventory` | Live stock on-hand, low-stock alerts, stock value |
+| `/reports` | GSTR-1, outstanding aging, cash book, item sales, activity log |
+| `/recycle-bin` | Restore soft-deleted parties/items/invoices/purchases |
+| `/settings` | Firms, backup/import, cloud sync, Gemini key, PWA install |
 | `/login` | Supabase auth |
 
 ## Troubleshooting

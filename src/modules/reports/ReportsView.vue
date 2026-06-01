@@ -26,6 +26,33 @@ const accountingStore = useAccountingStore()
 const firmStore = useFirmStore()
 
 const activity = ref<ActivityLog[]>([])
+const activitySearch = ref('')
+const activityEntityFilter = ref('all')
+const activityPage = ref(1)
+const ACTIVITY_PAGE_SIZE = 50
+
+const filteredActivity = computed(() => {
+  const q = activitySearch.value.toLowerCase().trim()
+  const ef = activityEntityFilter.value
+  return activity.value.filter((a) => {
+    if (ef !== 'all' && a.entity_type !== ef) return false
+    if (!q) return true
+    return (a.summary || '').toLowerCase().includes(q) || (a.action || '').toLowerCase().includes(q)
+  })
+})
+const pagedActivity = computed(() => {
+  const start = (activityPage.value - 1) * ACTIVITY_PAGE_SIZE
+  return filteredActivity.value.slice(start, start + ACTIVITY_PAGE_SIZE)
+})
+const activityTotalPages = computed(() => Math.max(1, Math.ceil(filteredActivity.value.length / ACTIVITY_PAGE_SIZE)))
+
+const ACTION_COLOR: Record<string, string> = {
+  create: 'bg-emerald-100 text-emerald-700',
+  update: 'bg-blue-100 text-blue-700',
+  delete: 'bg-red-100 text-red-700',
+  restore: 'bg-amber-100 text-amber-700',
+}
+
 const deletedTab = ref<'all' | 'bills' | 'parties' | 'items' | 'purchases' | 'templates'>('all')
 const deletedRows = ref<{ type: string; name: string; id: string; date: string; entity: string }[]>([])
 
@@ -34,7 +61,7 @@ onMounted(async () => {
   await Promise.all([invoiceStore.load(), partyStore.load(), itemStore.load(), purchaseStore.load()])
   await accountingStore.load()
   const firmId = firmStore.activeFirmId
-  if (firmId) activity.value = await recentActivity(firmId, 30)
+  if (firmId) activity.value = await recentActivity(firmId, 2000)
   await loadDeleted()
 })
 
@@ -244,14 +271,48 @@ function exportOutstanding() {
     </div>
 
     <!-- Activity -->
-    <div v-if="tab === 'activity'" class="pp-card">
-      <ul class="divide-y">
-        <li v-for="a in activity" :key="a.id" class="p-3 text-sm">
-          <span class="text-slate-400 text-xs">{{ a.created_at.slice(0, 16) }}</span>
-          <span class="ml-2 font-medium">{{ a.summary }}</span>
-        </li>
-      </ul>
-      <p v-if="!activity.length" class="p-6 text-center text-slate-400">No activity logged yet</p>
+    <div v-if="tab === 'activity'" class="space-y-3">
+      <div class="flex flex-wrap gap-2">
+        <input v-model="activitySearch" class="pp-input max-w-xs" placeholder="Search activity…" />
+        <select v-model="activityEntityFilter" class="pp-input max-w-[160px]">
+          <option value="all">All types</option>
+          <option value="invoice">Invoices</option>
+          <option value="purchase">Purchases</option>
+          <option value="party">Parties</option>
+          <option value="item">Items</option>
+        </select>
+        <span class="ml-auto self-center text-sm text-slate-400">{{ filteredActivity.length }} records</span>
+      </div>
+      <div class="pp-card overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+            <tr>
+              <th class="text-left p-3">Time</th>
+              <th class="text-left p-3">Action</th>
+              <th class="text-left p-3">Type</th>
+              <th class="text-left p-3">Summary</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="a in pagedActivity" :key="a.id" class="border-t border-slate-100 hover:bg-slate-50">
+              <td class="p-3 text-slate-400 whitespace-nowrap text-xs">{{ a.created_at.slice(0,16).replace('T',' ') }}</td>
+              <td class="p-3">
+                <span :class="['pp-badge', ACTION_COLOR[a.action] || 'bg-slate-100 text-slate-600']">{{ a.action }}</span>
+              </td>
+              <td class="p-3 text-slate-600 capitalize">{{ a.entity_type }}</td>
+              <td class="p-3 text-slate-700">{{ a.summary }}</td>
+            </tr>
+            <tr v-if="!pagedActivity.length">
+              <td colspan="4" class="p-8 text-center text-slate-400">No activity logged yet</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-if="activityTotalPages > 1" class="flex items-center justify-center gap-2">
+        <button class="pp-btn pp-btn-ghost !py-1.5" :disabled="activityPage <= 1" @click="activityPage--">← Prev</button>
+        <span class="text-sm text-slate-500">Page {{ activityPage }} / {{ activityTotalPages }}</span>
+        <button class="pp-btn pp-btn-ghost !py-1.5" :disabled="activityPage >= activityTotalPages" @click="activityPage++">Next →</button>
+      </div>
     </div>
 
     <!-- Deleted -->

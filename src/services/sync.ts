@@ -201,7 +201,7 @@ export async function pushAllToCloud(): Promise<{ ok: boolean; pushed: number; e
 }
 
 /** Pull cloud records updated after `since` and merge into Dexie when remote is newer. */
-export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pulled: number; error?: string }> {
+export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pulled: number; _maxCloudTs?: string; error?: string }> {
   const auth = useAuthStore()
   const sb = getSupabase()
   if (!sb || !auth.canSync || !auth.orgId) {
@@ -211,11 +211,14 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
   const orgId = auth.orgId
   const sinceIso = since || localStorage.getItem('pama_last_pull') || EPOCH_ISO
   let pulled = 0
+  let _maxCloudTs = ''
 
   const merge = async <T extends { id: string; updated_at: string }>(
     table: { get: (id: string) => Promise<T | undefined>; put: (r: T) => Promise<unknown> },
     row: T,
   ) => {
+    // Track highest cloud timestamp to anchor next incremental pull.
+    if (row.updated_at && row.updated_at > _maxCloudTs) _maxCloudTs = row.updated_at
     const local = await table.get(row.id)
     if (!isNewer(row.updated_at, local?.updated_at)) return
     await table.put({ ...row, _dirty: false })
@@ -339,11 +342,14 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
       }
     }
   } catch (e: any) {
-    return { ok: false, pulled, error: e?.message || 'Pull failed' }
+    return { ok: false, pulled, _maxCloudTs, error: e?.message || 'Pull failed' }
   }
 
-  localStorage.setItem('pama_last_pull', new Date().toISOString())
-  return { ok: true, pulled }
+  // Use the highest cloud updated_at we saw (instead of device clock) so
+  // a device whose clock is behind never misses recently-updated records.
+  if (_maxCloudTs) localStorage.setItem('pama_last_pull', _maxCloudTs)
+  else localStorage.setItem('pama_last_pull', new Date().toISOString())
+  return { ok: true, pulled, _maxCloudTs }
 }
 
 /** Re-download all cloud data (fixes partial sync on new phone / after 1000-row limit). */
