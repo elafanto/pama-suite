@@ -13,6 +13,7 @@ const UNITS = ['PCS', 'KG', 'MTR', 'NOS', 'BOX', 'SET', 'SQM', 'DOZEN']
 
 const blank = (): NewItem => ({
   name: '', unit: 'PCS', hsn: '', gst: 18, rate: 0, size: '', gsm: '', bf: '',
+  track_stock: true, opening_stock: 0, reorder_level: 0, purchase_rate: 0,
 })
 const form = reactive<NewItem>(blank())
 
@@ -32,6 +33,8 @@ function openEdit(i: Item) {
   Object.assign(form, {
     name: i.name, unit: i.unit, hsn: i.hsn, gst: i.gst, rate: i.rate,
     size: i.size, gsm: i.gsm, bf: i.bf,
+    track_stock: i.track_stock !== false, opening_stock: i.opening_stock || 0,
+    reorder_level: i.reorder_level || 0, purchase_rate: i.purchase_rate || 0,
   })
   showModal.value = true
 }
@@ -113,6 +116,17 @@ onMounted(store.load)
         <div class="grid grid-cols-2 gap-3">
           <div><label class="pp-label">Rate (₹)</label><input v-model.number="form.rate" type="number" class="pp-input" /></div>
           <div><label class="pp-label">GST %</label><input v-model.number="form.gst" type="number" class="pp-input" /></div>
+        </div>
+        <div class="border-t border-slate-200 pt-3">
+          <label class="flex items-center gap-2 mb-2 cursor-pointer">
+            <input type="checkbox" v-model="form.track_stock" class="w-4 h-4" />
+            <span class="pp-label !mb-0 !text-slate-600">Track stock for this item</span>
+          </label>
+          <div v-if="form.track_stock" class="grid grid-cols-3 gap-3">
+            <div><label class="pp-label">Opening Qty</label><input v-model.number="form.opening_stock" type="number" class="pp-input" /></div>
+            <div><label class="pp-label">Reorder Level</label><input v-model.number="form.reorder_level" type="number" class="pp-input" /></div>
+            <div><label class="pp-label">Buy Rate (₹)</label><input v-model.number="form.purchase_rate" type="number" class="pp-input" /></div>
+          </div>
         </div>
         <div class="border-t border-slate-200 pt-3">
           <div class="pp-label !text-slate-600 !mb-2">Box attributes (optional)</div>

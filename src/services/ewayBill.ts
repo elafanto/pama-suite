@@ -1,4 +1,4 @@
-import { getStateCode } from '@/services/gst'
+import { getStateCode, isGstinValid } from '@/services/gst'
 import type { Firm, Invoice, Party } from '@/types/models'
 
 const EWAY_THRESHOLD = 50000
@@ -78,8 +78,39 @@ const cleanGstin = (g?: string) => {
   return /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(c) ? c : 'URP'
 }
 
+function validPin(pin: unknown) {
+  return /^\d{6}$/.test(String(pin || '').trim())
+}
+
 function partyDetails(inv: Invoice): Partial<Party> {
   return (inv.party_snapshot || {}) as Partial<Party>
+}
+
+export function validateEwayInvoice(inv: Invoice, firm: Firm): string[] {
+  const errors: string[] = []
+  if (!isGstinValid(firm.gst)) errors.push('Firm GSTIN valid nahi hai')
+  if (!firm.addr?.trim()) errors.push('Firm address missing hai')
+  if (!firm.city?.trim()) errors.push('Firm city/place missing hai')
+  if (!validPin(firm.pin)) errors.push('Firm PIN 6 digit hona chahiye')
+  const firmState = parseInt(firm.state || getStateCode(firm.gst) || '', 10)
+  if (!firmState) errors.push('Firm state code missing hai')
+
+  if (!(inv.vehicle || '').trim()) errors.push(`${inv.bill_no}: vehicle number missing hai`)
+  const cust = partyDetails(inv)
+  const hasShip = inv.sameAsBuyer === false && inv.ship && inv.ship.addr
+  const addr = cust.addr || (hasShip ? inv.ship?.addr : '')
+  const city = cust.city || (hasShip ? inv.ship?.city : '')
+  const pin = cust.pin || (hasShip ? inv.ship?.pin : '')
+  const state = cust.state || getStateCode(cust.gst || '') || (hasShip ? inv.ship?.state : '')
+  if (!addr?.trim()) errors.push(`${inv.bill_no}: buyer address missing hai`)
+  if (!city?.trim()) errors.push(`${inv.bill_no}: buyer city/place missing hai`)
+  if (!validPin(pin)) errors.push(`${inv.bill_no}: buyer PIN 6 digit hona chahiye`)
+  if (!parseInt(String(state || ''), 10)) errors.push(`${inv.bill_no}: buyer state code missing hai`)
+  for (const [idx, item] of (inv.items || []).entries()) {
+    const gst = Number(item.gst)
+    if (!Number.isFinite(gst)) errors.push(`${inv.bill_no}: line ${idx + 1} GST invalid hai`)
+  }
+  return errors
 }
 
 /** NIC e-Way bulk JSON (PamaTools / v1.0.0621 compatible). */
@@ -165,9 +196,9 @@ export function buildEwayJson(invoices: Invoice[], firm: Firm) {
         quantity: r2(item.qty),
         qtyUnit: ewbUnit(item.unit),
         taxableAmount: r2((item.qty || 0) * (item.rate || 0)),
-        sgstRate: !isInter ? r2(item.gst / 2) : 0,
-        cgstRate: !isInter ? r2(item.gst / 2) : 0,
-        igstRate: isInter ? r2(item.gst) : 0,
+        sgstRate: !isInter ? r2((Number(item.gst) || 0) / 2) : 0,
+        cgstRate: !isInter ? r2((Number(item.gst) || 0) / 2) : 0,
+        igstRate: isInter ? r2(Number(item.gst) || 0) : 0,
         cessRate: 0,
         cessNonAdvol: 0,
       })),
@@ -180,6 +211,8 @@ export function buildEwayJson(invoices: Invoice[], firm: Firm) {
 export function downloadEwayJson(invoices: Invoice[], firm: Firm) {
   if (!invoices.length) throw new Error('Koi bill select nahi')
   if (!firm) throw new Error('Active firm set karein')
+  const errors = invoices.flatMap((inv) => validateEwayInvoice(inv, firm))
+  if (errors.length) throw new Error(errors.slice(0, 8).join('\n'))
 
   const json = buildEwayJson(invoices, firm)
   if (!json.billLists.length) throw new Error('Valid bills nahi mili')
@@ -190,7 +223,9 @@ export function downloadEwayJson(invoices: Invoice[], firm: Firm) {
   a.href = url
   const n = new Date()
   a.download = `EWayBill_${n.toISOString().slice(0, 10)}_${n.toTimeString().slice(0, 8).replace(/:/g, '-')}.json`
+  document.body.appendChild(a)
   a.click()
-  URL.revokeObjectURL(url)
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 5000)
   return json.billLists.length
 }

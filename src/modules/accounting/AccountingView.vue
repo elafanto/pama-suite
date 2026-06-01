@@ -307,6 +307,19 @@ const trialBalanceReport = computed(() => {
   return accountingStore.getTrialBalance(reportAsOnDate.value)
 })
 
+const ledgerHealth = computed(() => accountingStore.verifyTrialBalance(reportAsOnDate.value))
+const rebuilding = ref(false)
+async function doRebuildLedger() {
+  if (!confirm('Rebuild ledger from all invoices & purchases?\n\nSafe & idempotent — re-posts every sale/purchase voucher using the corrected tax logic (fixes any old IGST/round-off drift).')) return
+  rebuilding.value = true
+  try {
+    const r = await accountingStore.rebuildLedger()
+    alert(`Ledger rebuilt ✓\n${r.invoices} invoices + ${r.purchases} purchases re-posted.`)
+  } finally {
+    rebuilding.value = false
+  }
+}
+
 const plReport = computed(() => {
   return accountingStore.getProfitAndLoss(reportAsOnDate.value)
 })
@@ -462,7 +475,17 @@ onMounted(async () => {
 
       <!-- Report Area: Trial Balance -->
       <div v-if="activeReport === 'trial'" class="pp-card p-6 space-y-4">
-        <h3 class="text-base font-bold text-slate-800 border-b pb-2">Trial Balance Sheet</h3>
+        <div class="flex items-center justify-between gap-3 border-b pb-2 flex-wrap">
+          <h3 class="text-base font-bold text-slate-800">Trial Balance Sheet</h3>
+          <div class="flex items-center gap-2">
+            <span :class="['pp-badge', ledgerHealth.balanced ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700']">
+              {{ ledgerHealth.balanced ? '✓ Balanced' : `⚠ Off by ₹${n2(Math.abs(ledgerHealth.diff))}` }}
+            </span>
+            <button class="pp-btn pp-btn-ghost !py-1.5" :disabled="rebuilding" @click="doRebuildLedger">
+              {{ rebuilding ? 'Rebuilding…' : '🔧 Rebuild Ledger' }}
+            </button>
+          </div>
+        </div>
         <div class="overflow-x-auto">
           <table class="w-full text-left border-collapse">
             <thead>

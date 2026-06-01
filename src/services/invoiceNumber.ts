@@ -9,7 +9,7 @@ function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function billNoKeys(billNo: string, prefix: string): string[] {
+export function billNoKeys(billNo: string, prefix: string): string[] {
   const keys = new Set<string>()
   const raw = (billNo || '').trim()
   if (!raw) return []
@@ -39,8 +39,6 @@ export function maxBillSequence(invoices: Invoice[], firmId: string, prefix: str
       max = Math.max(max, parseInt(m[1], 10))
       continue
     }
-    const tail = no.match(/(\d+)\s*$/)
-    if (tail) max = Math.max(max, parseInt(tail[1], 10))
   }
   return max
 }
@@ -83,4 +81,16 @@ export function allocateBillNo(
 
 export function syncFirmBillCounter(firm: Firm, invoices: Invoice[]): number {
   return resolveNextSequence(firm, invoices)
+}
+
+export function findDuplicateBillNoGroups(invoices: Invoice[]): Invoice[][] {
+  const groups = new Map<string, Invoice[]>()
+  for (const inv of invoices) {
+    if (inv.is_deleted || !inv.bill_no?.trim()) continue
+    const key = `${inv.firm_id}:${inv.bill_no.trim().toUpperCase()}`
+    const arr = groups.get(key) || []
+    arr.push(inv)
+    groups.set(key, arr)
+  }
+  return [...groups.values()].filter((arr) => arr.length > 1)
 }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { RouterView, RouterLink, useRoute } from 'vue-router'
-import { navItems } from '@/router'
+import { navGroups } from '@/router'
 import { useFirmStore } from '@/stores/firm'
 import { useAuthStore } from '@/stores/auth'
 import { runSync, startCloudRealtime, stopCloudRealtime } from '@/services/sync'
@@ -112,16 +112,21 @@ onUnmounted(() => {
         :class="['bg-primary w-60 shrink-0 overflow-y-auto z-30 transition-transform',
                  'fixed lg:static inset-y-0 left-0 top-[52px] lg:top-0',
                  sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0']">
-        <nav class="p-3 space-y-1">
-          <RouterLink v-for="item in navItems" :key="item.path" :to="item.path"
-            @click="sidebarOpen = false"
-            :class="['flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium no-underline transition-colors',
-                     route.path === item.path
-                       ? 'bg-white/15 text-white'
-                       : 'text-sky-200 hover:bg-white/10 hover:text-white']">
-            <span class="text-base w-5 text-center">{{ (item.meta as any).icon }}</span>
-            <span>{{ (item.meta as any).title }}</span>
-          </RouterLink>
+        <nav class="p-3 space-y-3">
+          <div v-for="grp in navGroups" :key="grp.label">
+            <div class="px-3 mb-1 text-[10px] font-bold uppercase tracking-wider text-sky-400/70">{{ grp.label }}</div>
+            <div class="space-y-0.5">
+              <RouterLink v-for="item in grp.items" :key="item.path" :to="item.path"
+                @click="sidebarOpen = false"
+                :class="['flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium no-underline transition-colors',
+                         route.path === item.path
+                           ? 'bg-white/15 text-white'
+                           : 'text-sky-200 hover:bg-white/10 hover:text-white']">
+                <span class="text-base w-5 text-center">{{ item.icon }}</span>
+                <span>{{ item.title }}</span>
+              </RouterLink>
+            </div>
+          </div>
         </nav>
         <div class="p-4 mt-2 border-t border-white/10 text-[11px] text-sky-300 leading-relaxed">
           <strong class="text-sky-200">Union Bank of India</strong><br/>

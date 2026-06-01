@@ -4,6 +4,7 @@ import { db } from '@/data/db'
 import { createRepo } from '@/data/repo'
 import { useFirmStore } from './firm'
 import { nowISO } from '@/data/util'
+import { isInterstateGst } from '@/services/gst'
 import type { Voucher, Account, LedgerEntry, Invoice, Purchase } from '@/types/models'
 
 const vouchersRepo = createRepo<Voucher>(db.vouchers)
@@ -166,7 +167,7 @@ export const useAccountingStore = defineStore('accounting', () => {
 
     const firmId = bill.firm_id
     const entries: LedgerEntry[] = []
-    const isInter = bill.gst_type === 'inter'
+    const isInter = isInterstateGst(bill.gst_type)
     const isCredit = bill.doc_type !== 'INVOICE' && bill.doc_type !== 'invoice'
 
     // Dr Debtors / Cr Sales
@@ -184,9 +185,22 @@ export const useAccountingStore = defineStore('accounting', () => {
       credit: isCredit ? 0 : bill.sub,
     })
 
-    if (bill.taxBuckets) {
-      Object.values(bill.taxBuckets).forEach((t: any) => {
-        const tax = Number(t.tax)
+    // Tax amounts per slab — from stored taxBuckets, else reconstructed from items
+    // (imported invoices have no taxBuckets; without this their GST would be
+    // dumped into Round Off by the balancing adjuster below).
+    let taxAmounts: number[]
+    if (bill.taxBuckets && Object.keys(bill.taxBuckets).length) {
+      taxAmounts = Object.values(bill.taxBuckets).map((t: any) => Number(t.tax) || 0)
+    } else {
+      const bySlab: Record<number, number> = {}
+      ;(bill.items || []).forEach((it: any) => {
+        const tax = Math.round((it.qty || 0) * (it.rate || 0) * ((it.gst || 0) / 100) * 100) / 100
+        bySlab[it.gst] = (bySlab[it.gst] || 0) + tax
+      })
+      taxAmounts = Object.values(bySlab)
+    }
+    {
+      taxAmounts.forEach((tax) => {
         const half = Math.round((tax / 2) * 100) / 100
         if (isInter) {
           entries.push({
@@ -235,7 +249,7 @@ export const useAccountingStore = defineStore('accounting', () => {
 
     const firmId = pur.firm_id
     const entries: LedgerEntry[] = []
-    const isInter = pur.gst_type === 'inter'
+    const isInter = isInterstateGst(pur.gst_type)
 
     entries.push({
       accountId: `${firmId}_5001`,
@@ -567,6 +581,33 @@ export const useAccountingStore = defineStore('accounting', () => {
     }
   }
 
+  /** Trial-balance health: total debits must equal total credits. */
+  function verifyTrialBalance(toDate?: string) {
+    const rows = getTrialBalance(toDate)
+    const dr = Math.round(rows.reduce((s, r) => s + r.dr, 0) * 100) / 100
+    const cr = Math.round(rows.reduce((s, r) => s + r.cr, 0) * 100) / 100
+    const diff = Math.round((dr - cr) * 100) / 100
+    return { dr, cr, diff, balanced: Math.abs(diff) < 0.01 }
+  }
+
+  /** Re-post every sale & purchase voucher from source documents using the
+   *  current (corrected) logic. Fixes ledger drift from older mis-postings.
+   *  Idempotent — each post reverses its own prior voucher first. */
+  async function rebuildLedger(): Promise<{ invoices: number; purchases: number }> {
+    const firmId = useFirmStore().activeFirmId
+    if (!firmId) return { invoices: 0, purchases: 0 }
+    await load()
+
+    const invoices = (await db.invoices.toArray()).filter((b) => !b.is_deleted && b.firm_id === firmId)
+    const purchases = (await db.purchases.toArray()).filter((p) => !p.is_deleted && p.firm_id === firmId)
+
+    for (const inv of invoices) await postSaleToLedger(inv)
+    for (const pur of purchases) await postPurchaseToLedger(pur)
+
+    await load()
+    return { invoices: invoices.length, purchases: purchases.length }
+  }
+
   return {
     accounts,
     vouchers,
@@ -584,5 +625,7 @@ export const useAccountingStore = defineStore('accounting', () => {
     getLedgerDetails,
     getProfitAndLoss,
     getBalanceSheet,
+    verifyTrialBalance,
+    rebuildLedger,
   }
 })

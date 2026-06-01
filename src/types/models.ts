@@ -42,6 +42,11 @@ export interface Item extends BaseRecord {
   size: string
   gsm: string
   bf: string
+  // inventory (optional)
+  track_stock?: boolean       // include in stock tracking
+  opening_stock?: number      // qty on hand before first recorded txn
+  reorder_level?: number      // low-stock threshold
+  purchase_rate?: number      // last/standard buy rate (for stock value)
 }
 
 export interface Firm {

@@ -54,7 +54,7 @@ export function createRepo<T extends SyncFields>(table: Table<T, string>) {
 
     /** Insert or update by id (used by sync + import). */
     async upsert(rec: T): Promise<void> {
-      await table.put({ ...rec, updated_at: rec.updated_at || nowISO() })
+      await table.put(plain({ ...rec, updated_at: rec.updated_at || nowISO() }))
     },
 
     async remove(id: string): Promise<void> {

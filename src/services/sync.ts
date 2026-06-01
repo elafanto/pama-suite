@@ -1,7 +1,9 @@
 import { db } from '@/data/db'
+import { nowISO } from '@/data/util'
 import { getSupabase } from '@/services/supabase'
 import { reloadAllStores } from '@/services/reloadStores'
 import { useAuthStore } from '@/stores/auth'
+import { allocateBillNo, findDuplicateBillNoGroups, resolveNextSequence } from '@/services/invoiceNumber'
 import type { Firm, Party, Item, Invoice, Purchase, Recipe, Account, Voucher } from '@/types/models'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 
@@ -71,11 +73,19 @@ async function upsertCloudRow(
   }
 
   if (localName === 'firms') {
+    const { data: remoteFirm } = await sb
+      .from(remoteName)
+      .select('next_bill_no')
+      .eq('id', rec.id)
+      .eq('org_id', orgId)
+      .maybeSingle()
     Object.assign(row, {
       name: rec.name, gst: rec.gst, addr: rec.addr, city: rec.city, state: rec.state,
       pin: rec.pin, phone: rec.phone, email: rec.email,
       bank_name: rec.bank_name, bank_acno: rec.bank_acno, bank_ifsc: rec.bank_ifsc,
-      prefix: rec.prefix, next_bill_no: rec.next_bill_no,
+      logo: rec.logo, signature: rec.signature, decl: rec.decl, terms: rec.terms,
+      prefix: rec.prefix || 'INV',
+      next_bill_no: Math.max(Number(rec.next_bill_no) || 1, Number(remoteFirm?.next_bill_no) || 1),
     })
   } else if (localName === 'parties') {
     Object.assign(row, {
@@ -88,14 +98,51 @@ async function upsertCloudRow(
     Object.assign(row, {
       firm_id: rec.firm_id, name: rec.name, unit: rec.unit, hsn: rec.hsn,
       gst: rec.gst, rate: rec.rate, size: rec.size, gsm: rec.gsm, bf: rec.bf,
+      track_stock: rec.track_stock, opening_stock: rec.opening_stock,
+      reorder_level: rec.reorder_level, purchase_rate: rec.purchase_rate,
     })
   } else {
     row.firm_id = rec.firm_id
     row.payload = rec
   }
 
-  const { error } = await sb.from(remoteName).upsert(row)
+  let { error } = await sb.from(remoteName).upsert(row)
+  if (error && /column .* does not exist|Could not find .* column/i.test(error.message || '')) {
+    // Older Supabase schemas keep syncing core data until the latest migration is applied.
+    for (const k of ['signature', 'track_stock', 'opening_stock', 'reorder_level', 'purchase_rate']) {
+      delete row[k]
+    }
+    ;({ error } = await sb.from(remoteName).upsert(row))
+  }
   return error?.message || null
+}
+
+async function repairLocalInvoiceNumberState(): Promise<number> {
+  let repaired = 0
+  const firms = await db.firms.filter((f) => !f.is_deleted).toArray()
+  for (const firm of firms) {
+    let invoices = await db.invoices.filter((b) => b.firm_id === firm.id && !b.is_deleted).toArray()
+    const groups = findDuplicateBillNoGroups(invoices)
+    for (const group of groups) {
+      const ordered = [...group].sort((a, b) =>
+        (a.created_at || a.updated_at || '').localeCompare(b.created_at || b.updated_at || ''),
+      )
+      for (const dup of ordered.slice(1)) {
+        const { billNo } = allocateBillNo(firm, invoices)
+        const updated = { ...dup, bill_no: billNo, updated_at: nowISO(), _dirty: true }
+        await db.invoices.put(updated)
+        invoices = invoices.map((b) => (b.id === dup.id ? updated : b))
+        repaired++
+      }
+    }
+    const freshInvoices = await db.invoices.filter((b) => b.firm_id === firm.id && !b.is_deleted).toArray()
+    const resolved = resolveNextSequence(firm, freshInvoices)
+    if ((firm.next_bill_no || 1) < resolved) {
+      await db.firms.put({ ...firm, next_bill_no: resolved, updated_at: nowISO(), _dirty: true })
+      repaired++
+    }
+  }
+  return repaired
 }
 
 /** Push all _dirty records to Supabase (jsonb payload tables). */
@@ -191,14 +238,29 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
         bank_name: r.bank_name || '',
         bank_acno: r.bank_acno || '',
         bank_ifsc: r.bank_ifsc || '',
-        prefix: r.prefix,
-        next_bill_no: r.next_bill_no,
+        logo: r.logo || '',
+        signature: r.signature || '',
+        decl: r.decl || '',
+        terms: r.terms || '',
+        prefix: r.prefix || 'INV',
+        next_bill_no: r.next_bill_no || 1,
         created_at: r.created_at,
         updated_at: r.updated_at,
         is_deleted: r.is_deleted,
         _dirty: false,
       }
-      await merge(db.firms, firm)
+      const local = await db.firms.get(firm.id)
+      if (local && isNewer(firm.updated_at, local.updated_at)) {
+        const nextBillNo = Math.max(local.next_bill_no || 1, firm.next_bill_no || 1)
+        await db.firms.put({
+          ...firm,
+          next_bill_no: nextBillNo,
+          _dirty: nextBillNo > (firm.next_bill_no || 1),
+        })
+        pulled++
+      } else if (!local) {
+        await merge(db.firms, firm)
+      }
     }
 
     const parties = await fetchAllOrgRows(sb, 'parties', orgId, sinceIso, '*')
@@ -241,6 +303,10 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
         size: r.size || '',
         gsm: r.gsm || '',
         bf: r.bf || '',
+        track_stock: r.track_stock !== false,
+        opening_stock: Number(r.opening_stock) || 0,
+        reorder_level: Number(r.reorder_level) || 0,
+        purchase_rate: Number(r.purchase_rate) || 0,
         created_at: r.created_at,
         updated_at: r.updated_at,
         is_deleted: r.is_deleted,
@@ -285,8 +351,9 @@ export async function runFullPullFromCloud(): Promise<string> {
   localStorage.removeItem('pama_last_pull')
   const pull = await pullFromCloud(EPOCH_ISO)
   if (!pull.ok) return pull.error || 'Full pull failed'
+  const repaired = await repairLocalInvoiceNumberState()
   if (pull.pulled > 0) await reloadAllStores()
-  return pull.pulled ? `Full pull: ${pull.pulled} records` : 'Cloud has no data for this account'
+  return pull.pulled || repaired ? `Full pull: ${pull.pulled} records${repaired ? `, repaired ${repaired}` : ''}` : 'Cloud has no data for this account'
 }
 
 /** Upload all local data to cloud (fixes phone missing data after PC import). */
@@ -299,11 +366,13 @@ export async function runFullPushToCloud(): Promise<string> {
 export async function runSync(): Promise<string> {
   const pull = await pullFromCloud()
   if (!pull.ok) return pull.error || 'Pull failed'
+  const repaired = await repairLocalInvoiceNumberState()
   const push = await pushDirtyToCloud()
   if (!push.ok) return push.error || 'Sync failed'
   if (pull.pulled > 0) await reloadAllStores()
   const parts: string[] = []
   if (pull.pulled) parts.push(`pulled ${pull.pulled}`)
+  if (repaired) parts.push(`repaired ${repaired}`)
   if (push.pushed) parts.push(`pushed ${push.pushed}`)
   return parts.length ? `Synced (${parts.join(', ')})` : 'Already up to date'
 }

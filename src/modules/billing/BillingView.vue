@@ -63,6 +63,7 @@ const stmtCustomer = ref('')
 const stmtPay = ref('')
 const stmtDoc = ref('')
 const editingId = ref<string | null>(null)
+const savingInvoice = ref(false)
 const templateName = ref('')
 const templateDesc = ref('')
 const showTemplateModal = ref(false)
@@ -561,6 +562,7 @@ const isDuplicateBillNo = computed(() => {
 
 // Save Invoice to Dexie DB
 async function saveInvoice() {
+  if (savingInvoice.value) return
   if (!firmStore.activeFirmId) return alert('Please set up an active firm first.')
   if (!form.party_name.trim()) return alert('Customer name is required.')
   
@@ -632,6 +634,7 @@ async function saveInvoice() {
   }
 
   try {
+    savingInvoice.value = true
     const wasEditing = !!editingId.value
     if (wasEditing) {
       const editReason = prompt('Enter the reason for modifying this invoice:') || 'Update'
@@ -664,6 +667,8 @@ async function saveInvoice() {
   } catch (err: any) {
     console.error(err)
     alert('Failed to save invoice: ' + (err?.message || String(err)))
+  } finally {
+    savingInvoice.value = false
   }
 }
 
@@ -1247,7 +1252,9 @@ onMounted(async () => {
           </div>
 
           <div class="flex gap-2 pt-2">
-            <button @click="saveInvoice" class="pp-btn pp-btn-primary flex-1">{{ saveButtonLabel }}</button>
+            <button @click="saveInvoice" class="pp-btn pp-btn-primary flex-1" :disabled="savingInvoice">
+              {{ savingInvoice ? 'Saving…' : saveButtonLabel }}
+            </button>
             <button @click="saveAsTemplate" class="pp-btn pp-btn-ghost" title="Save as template">💾</button>
           </div>
           <p v-if="!editingId" class="text-[10px] text-slate-500 leading-relaxed">
@@ -1799,7 +1806,7 @@ onMounted(async () => {
           GSTIN: {{ firmStore.activeFirm?.gst || '-' }} | State: {{ getStateName(firmStore.activeFirm?.gst || firmStore.activeFirm?.state) }} (Code: {{ firmStore.activeFirm?.state || '-' }})
         </p>
         <div class="text-center uppercase font-bold text-xs bg-black text-white py-1 mt-2 tracking-widest">
-          {{ previewInvoice.doc_type === 'CREDIT_NOTE' ? 'CREDIT NOTE' : (previewInvoice.doc_type === 'DEBIT_NOTE' ? 'DEBIT NOTE' : 'TAX INVOICE') }}
+          {{ previewInvoice.doc_type === 'CREDIT_NOTE' ? 'CREDIT NOTE' : (previewInvoice.doc_type === 'DEBIT_NOTE' ? 'DEBIT NOTE' : (previewInvoice.doc_type === 'BILL_OF_SUPPLY' ? 'BILL OF SUPPLY' : 'TAX INVOICE')) }}
         </div>
       </div>
 

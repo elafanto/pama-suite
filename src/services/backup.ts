@@ -1,7 +1,8 @@
 import { db } from '@/data/db'
 import { uid, nowISO } from '@/data/util'
-import { resolveNextSequence } from '@/services/invoiceNumber'
-import type { Party, Firm, Item, Invoice, Purchase, Recipe, Account, Voucher } from '@/types/models'
+import { allocateBillNo, findDuplicateBillNoGroups, resolveNextSequence } from '@/services/invoiceNumber'
+import { normalizeGstType } from '@/services/gst'
+import type { Party, Firm, Item, Invoice, Purchase, Recipe, Account, Voucher, ActivityLog } from '@/types/models'
 
 export const BACKUP_FORMAT = 'pama_suite_backup'
 export const BACKUP_VERSION = 1
@@ -18,6 +19,7 @@ export interface SuiteBackup {
   recipes: Recipe[]
   accounts: Account[]
   vouchers: Voucher[]
+  activity_log: ActivityLog[]
   settings?: {
     geminiKey?: string
     bankEmail?: string
@@ -28,7 +30,7 @@ export interface SuiteBackup {
 }
 
 export async function exportAll(): Promise<SuiteBackup> {
-  const [firms, parties, items, invoices, purchases, recipes, accounts, vouchers] = await Promise.all([
+  const [firms, parties, items, invoices, purchases, recipes, accounts, vouchers, activity_log] = await Promise.all([
     db.firms.toArray(),
     db.parties.toArray(),
     db.items.toArray(),
@@ -37,6 +39,7 @@ export async function exportAll(): Promise<SuiteBackup> {
     db.recipes.toArray(),
     db.accounts.toArray(),
     db.vouchers.toArray(),
+    db.activity_log.toArray(),
   ])
 
   let templates: unknown[] = []
@@ -49,7 +52,7 @@ export async function exportAll(): Promise<SuiteBackup> {
     format: BACKUP_FORMAT,
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
-    firms, parties, items, invoices, purchases, recipes, accounts, vouchers,
+    firms, parties, items, invoices, purchases, recipes, accounts, vouchers, activity_log,
     settings: {
       geminiKey: localStorage.getItem('pama_gemini_key') || '',
       bankEmail: localStorage.getItem('pama_bank_email') || '',
@@ -65,8 +68,10 @@ export function downloadBackup(data: SuiteBackup, filename?: string) {
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
   a.download = filename || `PamaSuite_Backup_${new Date().toISOString().slice(0, 10)}.json`
+  document.body.appendChild(a)
   a.click()
-  URL.revokeObjectURL(a.href)
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000)
 }
 
 const LEGACY_VOUCHER_TYPES: Record<string, Voucher['type']> = {
@@ -114,6 +119,7 @@ async function importSuiteBackup(data: any, mode: 'merge' | 'replace'): Promise<
   await upsertAll(db.recipes, data.recipes || [], 'recipes')
   await upsertAll(db.accounts, data.accounts || [], 'accounts')
   await upsertAll(db.vouchers, data.vouchers || [], 'vouchers')
+  await upsertAll(db.activity_log, data.activity_log || [], 'activity_log')
 
   if (data.settings) {
     if (data.settings.geminiKey) localStorage.setItem('pama_gemini_key', data.settings.geminiKey)
@@ -123,6 +129,7 @@ async function importSuiteBackup(data: any, mode: 'merge' | 'replace'): Promise<
     if (data.settings.templates) localStorage.setItem('pama_templates_suite', JSON.stringify(data.settings.templates))
   }
 
+  await repairImportedInvoiceNumbers()
   return { counts }
 }
 
@@ -200,14 +207,8 @@ async function importLegacyUnified(data: any, mode: 'merge' | 'replace') {
 
 async function importLegacyBilling(data: any, mode: 'merge' | 'replace') {
   if (mode === 'replace') {
-    await db.transaction('rw', [db.firms, db.parties, db.items, db.invoices, db.purchases, db.accounts, db.vouchers], async () => {
-      await db.firms.clear()
-      await db.parties.clear()
-      await db.items.clear()
-      await db.invoices.clear()
-      await db.purchases.clear()
-      await db.accounts.clear()
-      await db.vouchers.clear()
+    await db.transaction('rw', db.tables.map(t => t.name), async () => {
+      for (const t of db.tables) await t.clear()
     })
   }
 
@@ -223,21 +224,33 @@ async function importLegacyBilling(data: any, mode: 'merge' | 'replace') {
       phone: f.phone || '', email: f.email || '',
       bank_name: f.bankName || f.bank_name || '', bank_acno: f.bankAcno || f.bank_acno || '',
       bank_ifsc: f.bankIfsc || f.bank_ifsc || '',
-      prefix: f.prefix, next_bill_no: f.nextBillNo || f.next_bill_no || 1,
+      prefix: f.prefix || 'INV', next_bill_no: f.nextBillNo || f.next_bill_no || 1,
       created_at: f.createdAt || nowISO(), updated_at: nowISO(), is_deleted: !!f.isDeleted, _dirty: true,
     })
     counts.firms = (counts.firms || 0) + 1
   }
 
-  const activeFirm = data.activeFirmId || data.firms?.[0]?.id
+  const activeFirm = firmMap.get(data.activeFirmId) || firmMap.get(data.firms?.[0]?.id) || data.activeFirmId || data.firms?.[0]?.id
   if (activeFirm) localStorage.setItem('pama_active_firm', activeFirm)
 
   const partyByName = new Map<string, string>()
 
   const addParty = async (p: any, roles: ('customer' | 'vendor')[]) => {
-    const firmId = p.firmId || activeFirm || ''
-    const key = (p.name || '').toLowerCase().trim()
-    if (partyByName.has(key)) return partyByName.get(key)!
+    const firmId = firmMap.get(p.firmId) || p.firmId || activeFirm || ''
+    const key = `${firmId}:${(p.name || '').toLowerCase().trim()}`
+    // Same party seen again (e.g. once as customer, once as vendor) → merge roles
+    // instead of dropping one, so a party who is both keeps both roles.
+    if (partyByName.has(key)) {
+      const existingId = partyByName.get(key)!
+      const existing = await db.parties.get(existingId)
+      if (existing) {
+        const merged = Array.from(new Set([...(existing.roles || []), ...roles]))
+        if (merged.length !== (existing.roles || []).length) {
+          await db.parties.put({ ...existing, roles: merged, updated_at: nowISO(), _dirty: true })
+        }
+      }
+      return existingId
+    }
     const id = p.id || uid()
     partyByName.set(key, id)
     await db.parties.put({
@@ -257,9 +270,13 @@ async function importLegacyBilling(data: any, mode: 'merge' | 'replace') {
 
   for (const it of data.items || []) {
     await db.items.put({
-      id: it.id || uid(), firm_id: it.firmId || activeFirm || '',
+      id: it.id || uid(), firm_id: firmMap.get(it.firmId) || it.firmId || activeFirm || '',
       name: it.name || '', unit: it.unit || 'PCS', hsn: it.hsn || '', gst: num(it.gst), rate: num(it.rate),
       size: it.size || '', gsm: it.gsm || '', bf: it.bf || '',
+      track_stock: it.trackStock ?? it.track_stock ?? true,
+      opening_stock: num(it.openingStock ?? it.opening_stock),
+      reorder_level: num(it.reorderLevel ?? it.reorder_level),
+      purchase_rate: num(it.purchaseRate ?? it.purchase_rate),
       created_at: it.createdAt || nowISO(), updated_at: nowISO(), is_deleted: !!it.isDeleted, _dirty: true,
     })
     counts.items = (counts.items || 0) + 1
@@ -268,7 +285,7 @@ async function importLegacyBilling(data: any, mode: 'merge' | 'replace') {
   for (const b of data.bills || []) {
     const inv: Invoice = {
       id: b.id || uid(),
-      firm_id: b.firmId || activeFirm || '',
+      firm_id: firmMap.get(b.firmId) || b.firmId || activeFirm || '',
       doc_type: (b.docType || 'INVOICE') as Invoice['doc_type'],
       bill_no: b.billNo || b.bill_no || '',
       date: b.date || '',
@@ -276,7 +293,7 @@ async function importLegacyBilling(data: any, mode: 'merge' | 'replace') {
       party_name: b.custName || '',
       party_snapshot: b.custDetails || {},
       ship: b.ship || null,
-      gst_type: b.gstType || 'intra',
+      gst_type: normalizeGstType(b.gstType),
       items: (b.items || []).map((r: any) => ({
         item_id: r.itemId || null, name: r.name || '', hsn: r.hsn || '', qty: num(r.qty), unit: r.unit || 'PCS',
         rate: num(r.rate), gst: num(r.gst),
@@ -293,9 +310,9 @@ async function importLegacyBilling(data: any, mode: 'merge' | 'replace') {
 
   for (const p of data.purchases || []) {
     await db.purchases.put({
-      id: p.id || uid(), firm_id: p.firmId || activeFirm || '',
+      id: p.id || uid(), firm_id: firmMap.get(p.firmId) || p.firmId || activeFirm || '',
       supplier_name: p.supplierName || p.vendorName || '', supplier_id: p.vendorId || null,
-      bill_no: p.billNo || '', date: p.date || '', gst_type: p.gstType || 'intra',
+      bill_no: p.billNo || '', date: p.date || '', gst_type: normalizeGstType(p.gstType),
       items: p.items || [], sub: num(p.sub), total_tax: num(p.totalTax), round_off: num(p.roundOff),
       grand_total: num(p.grandTotal), amt_paid: num(p.amtPaid), pay_status: p.payStatus || 'UNPAID',
       notes: p.notes || '', created_at: p.createdAt || nowISO(), updated_at: nowISO(), is_deleted: !!(p.isDeleted || p.is_deleted), _dirty: true,
@@ -306,7 +323,7 @@ async function importLegacyBilling(data: any, mode: 'merge' | 'replace') {
   if (data.templates) localStorage.setItem('pama_templates_suite', JSON.stringify(data.templates))
 
   for (const a of data.accounts || []) {
-    const firmId = a.firmId || activeFirm || ''
+    const firmId = firmMap.get(a.firmId) || a.firmId || activeFirm || ''
     await db.accounts.put({
       id: a.id || `${firmId}_${a.code || uid()}`,
       firm_id: firmId,
@@ -326,7 +343,7 @@ async function importLegacyBilling(data: any, mode: 'merge' | 'replace') {
   }
 
   for (const v of data.vouchers || []) {
-    const firmId = v.firmId || activeFirm || ''
+    const firmId = firmMap.get(v.firmId) || v.firmId || activeFirm || ''
     const type = LEGACY_VOUCHER_TYPES[v.type] || 'JOURNAL'
     await db.vouchers.put({
       id: v.id || uid(),
@@ -351,16 +368,31 @@ async function importLegacyBilling(data: any, mode: 'merge' | 'replace') {
     counts.vouchers = (counts.vouchers || 0) + 1
   }
 
+  await repairImportedInvoiceNumbers()
+
+  return { counts }
+}
+
+async function repairImportedInvoiceNumbers() {
   const allFirms = await db.firms.filter((f) => !f.is_deleted).toArray()
   for (const f of allFirms) {
-    const invs = await db.invoices.filter((i) => !i.is_deleted && i.firm_id === f.id).toArray()
+    let invs = await db.invoices.filter((i) => !i.is_deleted && i.firm_id === f.id).toArray()
+    for (const group of findDuplicateBillNoGroups(invs)) {
+      const ordered = [...group].sort((a, b) =>
+        (a.created_at || a.updated_at || '').localeCompare(b.created_at || b.updated_at || ''),
+      )
+      for (const dup of ordered.slice(1)) {
+        const { billNo } = allocateBillNo(f, invs)
+        const updated = { ...dup, bill_no: billNo, updated_at: nowISO(), _dirty: true }
+        await db.invoices.put(updated)
+        invs = invs.map((i) => i.id === dup.id ? updated : i)
+      }
+    }
     const resolved = resolveNextSequence(f, invs)
     if ((f.next_bill_no || 1) < resolved) {
       await db.firms.put({ ...f, next_bill_no: resolved, updated_at: nowISO(), _dirty: true })
     }
   }
-
-  return { counts }
 }
 
 function num(v: any): number {

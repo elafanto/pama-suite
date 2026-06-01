@@ -52,6 +52,17 @@ export function getStateCode(gstin: string | undefined): string {
   return ''
 }
 
+/** True when the bill is interstate (IGST). Handles both new ('inter') and
+ *  legacy ('IGST') gst_type values — single source of truth. */
+export function isInterstateGst(gstType: string | undefined): boolean {
+  return gstType === 'inter' || gstType === 'IGST'
+}
+
+/** Collapse the 4 legacy gst_type values to the canonical pair. */
+export function normalizeGstType(gstType: string | undefined): 'intra' | 'inter' {
+  return isInterstateGst(gstType) ? 'inter' : 'intra'
+}
+
 export function isGstinValid(gstin: string | undefined): boolean {
   if (!gstin) return false
   const val = gstin.trim().toUpperCase()

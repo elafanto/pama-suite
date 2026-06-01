@@ -622,11 +622,24 @@ export function downloadInvoicePdf(invoice: Invoice, firm: Firm): void {
 }
 
 export async function bulkDownloadInvoicePdf(invoices: Invoice[], firm: Firm): Promise<number> {
-  let count = 0
+  if (!invoices.length) return 0
+  const f = toPdfFirm(firm)
+  const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true })
+  let firstPage = true
   for (const inv of invoices) {
-    downloadInvoicePdf(inv, firm)
-    count++
-    await new Promise((r) => setTimeout(r, 300))
+    const b = toPdfBill(inv)
+    const copies = [
+      { label: 'ORIGINAL', sub: 'For Buyer' },
+      { label: 'DUPLICATE', sub: 'For Transporter' },
+      { label: 'TRIPLICATE', sub: 'For Office Use' },
+    ]
+    for (const copy of copies) {
+      if (!firstPage) pdf.addPage()
+      firstPage = false
+      drawInvoiceOnPDF(pdf, b, f, copy.label, copy.sub)
+    }
   }
-  return count
+  const n = new Date().toISOString().slice(0, 10)
+  pdf.save(`Invoices_Bulk_${n}_${invoices.length}.pdf`)
+  return invoices.length
 }

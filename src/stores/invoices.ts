@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { db } from '@/data/db'
 import { createRepo } from '@/data/repo'
+import { uid, nowISO } from '@/data/util'
 import { useFirmStore } from './firm'
 import { useAccountingStore } from './accounting'
 import { logActivity } from '@/services/activityLog'
@@ -9,6 +10,8 @@ import { allocateBillNo } from '@/services/invoiceNumber'
 import type { Invoice } from '@/types/models'
 
 const repo = createRepo<Invoice>(db.invoices)
+const plain = <X>(o: X): X => JSON.parse(JSON.stringify(o))
+let addQueue = Promise.resolve()
 
 export const useInvoiceStore = defineStore('invoices', () => {
   const list = ref<Invoice[]>([])
@@ -25,33 +28,44 @@ export const useInvoiceStore = defineStore('invoices', () => {
     data: Omit<Invoice, 'id' | 'firm_id' | 'created_at' | 'updated_at' | 'is_deleted' | '_dirty'>,
     useAutoNumber = true,
   ): Promise<Invoice> {
+    const run = async (): Promise<Invoice> => {
     const firmStore = useFirmStore()
     const firmId = firmStore.activeFirmId
     const accounting = useAccountingStore()
 
     if (!firmId) throw new Error('Active firm required')
 
-    await load()
+    let rec!: Invoice
+    await db.transaction('rw', db.firms, db.invoices, async () => {
+      const firm = await db.firms.get(firmId)
+      if (!firm) throw new Error('Active firm required')
+      const invoices = await db.invoices.filter((b) => b.firm_id === firmId && !b.is_deleted).toArray()
+      const payload = { ...data }
 
-    const firm = firmStore.activeFirm
-    if (!firm) throw new Error('Active firm required')
+      if (useAutoNumber) {
+        const { billNo, nextSequenceAfter } = allocateBillNo(firm, invoices)
+        payload.bill_no = billNo
+        await db.firms.put(plain({ ...firm, next_bill_no: nextSequenceAfter, updated_at: nowISO(), _dirty: true }))
+      } else if (!payload.bill_no?.trim()) {
+        throw new Error('Invoice number missing')
+      } else {
+        const dup = invoices.some((b) => b.bill_no.trim().toUpperCase() === payload.bill_no.trim().toUpperCase())
+        if (dup) throw new Error(`Invoice number ${payload.bill_no} already exists`)
+      }
 
-    let payload = { ...data }
-
-    if (useAutoNumber) {
-      const { billNo, nextSequenceAfter } = allocateBillNo(firm, list.value)
-      payload.bill_no = billNo
-      await firmStore.update(firmId, { next_bill_no: nextSequenceAfter })
-    } else if (!payload.bill_no?.trim()) {
-      throw new Error('Invoice number missing')
-    } else {
-      const dup = list.value.some(
-        (b) => !b.is_deleted && b.firm_id === firmId && b.bill_no === payload.bill_no.trim(),
-      )
-      if (dup) throw new Error(`Invoice number ${payload.bill_no} already exists`)
-    }
-
-    const rec = await repo.create({ ...payload, firm_id: firmId, bill_no: payload.bill_no.trim() } as any)
+      const now = nowISO()
+      rec = plain({
+        ...payload,
+        id: uid(),
+        firm_id: firmId,
+        bill_no: payload.bill_no.trim(),
+        created_at: now,
+        updated_at: now,
+        is_deleted: false,
+        _dirty: true,
+      }) as Invoice
+      await db.invoices.add(rec)
+    })
 
     try {
       await accounting.load()
@@ -63,6 +77,11 @@ export const useInvoiceStore = defineStore('invoices', () => {
 
     await load()
     return rec
+    }
+
+    const next = addQueue.then(run, run)
+    addQueue = next.then(() => undefined, () => undefined)
+    return next
   }
 
   async function update(id: string, patch: Partial<Invoice>) {

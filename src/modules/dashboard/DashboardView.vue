@@ -7,6 +7,7 @@ import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useFirmStore } from '@/stores/firm'
 import { outstandingAging } from '@/services/reports'
+import { computeStock, stockSummary } from '@/services/stock'
 import type { Invoice } from '@/types/models'
 
 const invoiceStore = useInvoiceStore()
@@ -21,6 +22,10 @@ onMounted(async () => {
 
 const today = new Date().toISOString().slice(0, 10)
 const monthPrefix = today.slice(0, 7)
+const prevMonthPrefix = (() => {
+  const d = new Date(); d.setMonth(d.getMonth() - 1)
+  return d.toISOString().slice(0, 7)
+})()
 
 const stats = computed(() => {
   const firmId = firmStore.activeFirmId
@@ -28,22 +33,38 @@ const stats = computed(() => {
   const purchases = purchaseStore.list.filter(p => p.firm_id === firmId && !p.is_deleted)
   const aging = outstandingAging(bills)
   const totalOut = aging.reduce((s, r) => s + r.total, 0)
+  const payable = purchases.reduce((s, p) => s + Math.max(0, (p.grand_total || 0) - (p.amt_paid || 0)), 0)
   const unpaidCount = bills.filter(b => (b.grand_total - b.amt_paid) > 0.01).length
   const salesToday = bills.filter(b => b.date === today).reduce((s, b) => s + b.grand_total, 0)
   const salesMonth = bills.filter(b => b.date.startsWith(monthPrefix)).reduce((s, b) => s + b.grand_total, 0)
+  const salesPrevMonth = bills.filter(b => b.date.startsWith(prevMonthPrefix)).reduce((s, b) => s + b.grand_total, 0)
   const purchasesToday = purchases.filter(p => p.date === today).reduce((s, p) => s + p.grand_total, 0)
   const purchasesMonth = purchases.filter(p => p.date.startsWith(monthPrefix)).reduce((s, p) => s + p.grand_total, 0)
+  const stock = stockSummary(computeStock(itemsStore.list, purchases, bills, firmId))
+  const momPct = salesPrevMonth > 0 ? Math.round(((salesMonth - salesPrevMonth) / salesPrevMonth) * 100) : null
   return {
     bills: bills.length,
-    parties: partiesStore.list.filter(p => p.firm_id === firmId).length,
-    items: itemsStore.list.filter(i => i.firm_id === firmId).length,
+    parties: partiesStore.list.filter(p => p.firm_id === firmId && !p.is_deleted).length,
+    items: itemsStore.list.filter(i => i.firm_id === firmId && !i.is_deleted).length,
     outstanding: totalOut,
+    payable,
     unpaidCount,
     salesToday,
     salesMonth,
+    salesPrevMonth,
+    momPct,
     purchasesToday,
     purchasesMonth,
+    netMonth: salesMonth - purchasesMonth,
+    lowStock: stock.lowStock + stock.outOfStock,
+    stockValue: stock.totalValue,
   }
+})
+
+const topCustomers = computed(() => {
+  const firmId = firmStore.activeFirmId
+  const bills = invoiceStore.list.filter(b => b.firm_id === firmId && !b.is_deleted)
+  return outstandingAging(bills).slice(0, 5)
 })
 
 const recentBills = computed(() => {
@@ -75,14 +96,40 @@ function n2(n: number) {
       <p class="text-sm text-slate-500 mt-1">{{ firmStore.activeFirm?.name || 'Pama Business Suite' }}</p>
     </header>
 
+    <!-- Headline KPIs -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+      <div class="pp-card p-4 bg-gradient-to-br from-navy to-primary text-white">
+        <div class="text-xs font-semibold text-sky-200 uppercase">Net (This Month)</div>
+        <div class="text-2xl font-extrabold mt-1" :class="stats.netMonth < 0 ? 'text-red-300' : 'text-white'">₹ {{ n2(stats.netMonth) }}</div>
+        <div class="text-[11px] text-sky-300 mt-0.5">Sales − Purchases</div>
+      </div>
+      <div class="pp-card p-4">
+        <div class="text-xs font-semibold text-slate-500 uppercase">Sales (Month)</div>
+        <div class="text-2xl font-extrabold text-teal-800 mt-1">₹ {{ n2(stats.salesMonth) }}</div>
+        <div v-if="stats.momPct !== null" class="text-[11px] mt-0.5 font-semibold"
+             :class="stats.momPct >= 0 ? 'text-emerald-600' : 'text-red-500'">
+          {{ stats.momPct >= 0 ? '▲' : '▼' }} {{ Math.abs(stats.momPct) }}% vs last month
+        </div>
+        <div v-else class="text-[11px] text-slate-400 mt-0.5">no prior month data</div>
+      </div>
+      <div class="pp-card p-4 border-l-4 border-red-400">
+        <div class="text-xs font-semibold text-slate-500 uppercase">Receivable</div>
+        <div class="text-2xl font-extrabold text-red-600 mt-1">₹ {{ n2(stats.outstanding) }}</div>
+        <div class="text-[11px] text-slate-400 mt-0.5">{{ stats.unpaidCount }} unpaid bills</div>
+      </div>
+      <div class="pp-card p-4 border-l-4 border-orange-400">
+        <div class="text-xs font-semibold text-slate-500 uppercase">Payable</div>
+        <div class="text-2xl font-extrabold text-orange-600 mt-1">₹ {{ n2(stats.payable) }}</div>
+        <RouterLink to="/inventory" class="text-[11px] text-accent hover:underline mt-0.5 inline-block">
+          {{ stats.lowStock }} items low/out of stock →
+        </RouterLink>
+      </div>
+    </div>
+
     <div class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
       <div class="pp-card p-4 border-l-4 border-emerald-500">
         <div class="text-xs font-bold text-slate-500 uppercase">Sales Today</div>
         <div class="text-xl font-bold text-emerald-700 mt-1">₹ {{ n2(stats.salesToday) }}</div>
-      </div>
-      <div class="pp-card p-4 border-l-4 border-teal-500">
-        <div class="text-xs font-bold text-slate-500 uppercase">Sales (Month)</div>
-        <div class="text-xl font-bold text-teal-800 mt-1">₹ {{ n2(stats.salesMonth) }}</div>
       </div>
       <div class="pp-card p-4 border-l-4 border-blue-500">
         <div class="text-xs font-bold text-slate-500 uppercase">Purchases Today</div>
@@ -104,10 +151,29 @@ function n2(n: number) {
         <div class="text-xs font-bold text-slate-500 uppercase">Items</div>
         <div class="text-2xl font-bold text-navy mt-1">{{ stats.items }}</div>
       </div>
-      <div class="pp-card p-4 border-l-4 border-red-500">
-        <div class="text-xs font-bold text-slate-500 uppercase">Outstanding</div>
-        <div class="text-2xl font-bold text-red-600 mt-1">₹ {{ n2(stats.outstanding) }}</div>
-        <div class="text-xs text-slate-400">{{ stats.unpaidCount }} unpaid</div>
+      <div class="pp-card p-4 border-l-4 border-amber-400">
+        <div class="text-xs font-bold text-slate-500 uppercase">Stock Value</div>
+        <div class="text-2xl font-bold text-navy mt-1">₹ {{ n2(stats.stockValue) }}</div>
+        <RouterLink to="/inventory" class="text-[11px] text-accent hover:underline">View inventory →</RouterLink>
+      </div>
+    </div>
+
+    <div v-if="topCustomers.length" class="mb-8">
+      <h2 class="text-sm font-bold text-slate-500 uppercase mb-3">Top Outstanding Customers</h2>
+      <div class="pp-card overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+            <tr><th class="text-left p-3">Customer</th><th class="text-right p-3 hidden sm:table-cell">Bills</th><th class="text-right p-3 hidden md:table-cell">90+ days</th><th class="text-right p-3">Outstanding</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="c in topCustomers" :key="c.customer" class="border-t border-slate-100">
+              <td class="p-3 font-semibold text-navy">{{ c.customer }}</td>
+              <td class="p-3 text-right hidden sm:table-cell text-slate-500">{{ c.billCount }}</td>
+              <td class="p-3 text-right hidden md:table-cell" :class="c.d90plus > 0 ? 'text-red-600 font-semibold' : 'text-slate-400'">₹ {{ n2(c.d90plus) }}</td>
+              <td class="p-3 text-right font-bold text-red-600">₹ {{ n2(c.total) }}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
 
