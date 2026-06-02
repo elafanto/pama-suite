@@ -61,6 +61,8 @@ export async function movePurchaseBillsToFirm(input: MovePurchaseBillsInput): Pr
 
   if (!fromFirm) throw new Error('Source firm not found')
   if (!toFirm) throw new Error('Target firm not found')
+  const sourceFirm = fromFirm
+  const targetFirm = toFirm
 
   const purchases = allPurchases.filter((p): p is Purchase => !!p && !p.is_deleted)
   if (purchases.length !== purchaseIds.length) throw new Error('Some selected purchase bills were not found')
@@ -86,7 +88,7 @@ export async function movePurchaseBillsToFirm(input: MovePurchaseBillsInput): Pr
       supplierIdMap.set(purchase.supplier_id, match.id)
       return match.id
     }
-    warnings.push(`Vendor "${purchase.supplier_name}" was not found in ${toFirm.name}; existing supplier reference was kept.`)
+    warnings.push(`Vendor "${purchase.supplier_name}" was not found in ${targetFirm.name}; existing supplier reference was kept.`)
     return purchase.supplier_id
   }
 
@@ -100,7 +102,7 @@ export async function movePurchaseBillsToFirm(input: MovePurchaseBillsInput): Pr
       return { ...line, item_id: match.id, name: match.name, hsn: match.hsn || line.hsn, unit: match.unit || line.unit }
     }
 
-    warnings.push(`Item "${line.name}" was not found in ${toFirm.name}; existing item reference was kept.`)
+    warnings.push(`Item "${line.name}" was not found in ${targetFirm.name}; existing item reference was kept.`)
     return line
   }
 
@@ -119,12 +121,14 @@ export async function movePurchaseBillsToFirm(input: MovePurchaseBillsInput): Pr
 
   await db.transaction(
     'rw',
-    db.purchases,
-    db.vouchers,
-    db.reel_stocks,
-    db.stock_movements,
-    db.item_stock_movements,
-    db.activity_log,
+    [
+      db.purchases,
+      db.vouchers,
+      db.reel_stocks,
+      db.stock_movements,
+      db.item_stock_movements,
+      db.activity_log,
+    ],
     async () => {
       for (const purchase of purchases) {
         await db.purchases.put(plain({
@@ -210,7 +214,7 @@ export async function movePurchaseBillsToFirm(input: MovePurchaseBillsInput): Pr
 
   result.warnings = uniqueWarnings(warnings)
   const billNos = purchases.map((p) => p.bill_no || p.id.slice(0, 8)).join(', ')
-  const summary = `${purchaseIds.length} purchase bill(s) moved from ${fromFirm.name} to ${toFirm.name}: ${billNos}`
+  const summary = `${purchaseIds.length} purchase bill(s) moved from ${sourceFirm.name} to ${targetFirm.name}: ${billNos}`
   await logActivity(input.fromFirmId, 'move_out', 'purchase_correction', purchaseIds.join(','), summary, {
     to_firm_id: input.toFirmId,
     purchase_ids: purchaseIds,
