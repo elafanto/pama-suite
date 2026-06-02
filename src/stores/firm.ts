@@ -3,7 +3,14 @@ import { ref, computed } from 'vue'
 import { db } from '@/data/db'
 import { uid, nowISO } from '@/data/util'
 import { resolveNextSequence } from '@/services/invoiceNumber'
+import { logActivity } from '@/services/activityLog'
 import type { Firm, Invoice } from '@/types/models'
+
+export type FirmLinkedCounts = { parties: number; invoices: number; purchases: number }
+
+export type FirmRemoveResult =
+  | { ok: true }
+  | { ok: false; error: 'last_firm' | 'not_found' }
 
 const ACTIVE_KEY = 'pama_active_firm'
 const plain = <X>(o: X): X => JSON.parse(JSON.stringify(o))
@@ -84,12 +91,42 @@ export const useFirmStore = defineStore('firm', () => {
     await load()
   }
 
-  async function remove(id: string) {
-    if (firms.value.length <= 1) return
+  async function linkedCounts(firmId: string): Promise<FirmLinkedCounts> {
+    const [parties, invoices, purchases] = await Promise.all([
+      db.parties.where('firm_id').equals(firmId).filter((p) => !p.is_deleted).count(),
+      db.invoices.where('firm_id').equals(firmId).filter((i) => !i.is_deleted).count(),
+      db.purchases.where('firm_id').equals(firmId).filter((p) => !p.is_deleted).count(),
+    ])
+    return { parties, invoices, purchases }
+  }
+
+  async function remove(id: string): Promise<FirmRemoveResult> {
+    if (firms.value.length <= 1) return { ok: false, error: 'last_firm' }
     const existing = await db.firms.get(id)
-    if (!existing) return
+    if (!existing || existing.is_deleted) return { ok: false, error: 'not_found' }
     await db.firms.put({ ...existing, is_deleted: true, updated_at: nowISO(), _dirty: true })
+    await logActivity(id, 'delete', 'firm', id, `Firm ${existing.name} moved to Recycle Bin`, {
+      name: existing.name,
+    })
     await load()
+    return { ok: true }
+  }
+
+  async function restore(id: string): Promise<Firm | undefined> {
+    const existing = await db.firms.get(id)
+    if (!existing || !existing.is_deleted) return undefined
+    const rec = plain({ ...existing, is_deleted: false, updated_at: nowISO(), _dirty: true }) as Firm
+    await db.firms.put(rec)
+    await logActivity(id, 'restore', 'firm', id, `Firm ${rec.name} restored from Recycle Bin`, {
+      name: rec.name,
+    })
+    await load()
+    return rec
+  }
+
+  async function deletedFirms(): Promise<Firm[]> {
+    return (await db.firms.filter((f) => f.is_deleted).toArray())
+      .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))
   }
 
   async function syncBillSequence(firmId: string, invoices: Invoice[] = []) {
@@ -102,5 +139,8 @@ export const useFirmStore = defineStore('firm', () => {
     }
   }
 
-  return { firms, activeFirmId, activeFirm, load, setActive, add, update, remove, syncBillSequence }
+  return {
+    firms, activeFirmId, activeFirm, load, setActive, add, update, remove, restore,
+    linkedCounts, deletedFirms, syncBillSequence,
+  }
 })

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import PpModal from '@/components/PpModal.vue'
-import { useFirmStore, type NewFirm } from '@/stores/firm'
+import { useFirmStore, type NewFirm, type FirmLinkedCounts } from '@/stores/firm'
 import { useAuthStore } from '@/stores/auth'
 import { getSupabaseConfig } from '@/services/supabase'
 import { useSettingsStore } from '@/stores/settings'
@@ -17,6 +17,10 @@ const settings = useSettingsStore()
 const { canInstall, isStandalone, statusLabel, install, showInstallBanner } = usePwaInstall()
 const showModal = ref(false)
 const editingId = ref<string | null>(null)
+const deleteTarget = ref<Firm | null>(null)
+const deleteConfirmText = ref('')
+const deleteLinked = ref<FirmLinkedCounts | null>(null)
+const deleteBusy = ref(false)
 const syncMsg = ref('')
 const importMsg = ref('')
 const geminiInput = ref(settings.geminiKey)
@@ -53,6 +57,49 @@ async function save() {
   if (editingId.value) await firmStore.update(editingId.value, { ...form })
   else await firmStore.add({ ...form })
   showModal.value = false
+}
+
+const deleteConfirmed = computed(() => {
+  const target = deleteTarget.value
+  return !!target && deleteConfirmText.value.trim() === target.name
+})
+
+const deleteHasLinked = computed(() => {
+  const c = deleteLinked.value
+  if (!c) return false
+  return c.parties > 0 || c.invoices > 0 || c.purchases > 0
+})
+
+const canDeleteFirm = computed(() => firmStore.firms.length > 1)
+
+async function openDelete(f: Firm) {
+  if (!canDeleteFirm.value) return
+  deleteTarget.value = f
+  deleteConfirmText.value = ''
+  deleteLinked.value = await firmStore.linkedCounts(f.id)
+}
+
+function closeDelete() {
+  deleteTarget.value = null
+  deleteConfirmText.value = ''
+  deleteLinked.value = null
+}
+
+async function confirmDelete() {
+  if (!deleteTarget.value || !deleteConfirmed.value || deleteBusy.value) return
+  deleteBusy.value = true
+  try {
+    const result = await firmStore.remove(deleteTarget.value.id)
+    if (!result.ok) {
+      if (result.error === 'last_firm') alert('Cannot delete the last remaining firm.')
+      else alert('Firm not found.')
+      closeDelete()
+      return
+    }
+    closeDelete()
+  } finally {
+    deleteBusy.value = false
+  }
 }
 
 async function doExport() {
@@ -215,8 +262,14 @@ onMounted(() => {
     <section class="pp-card p-5 mb-5">
       <div class="flex items-center justify-between mb-4">
         <h2 class="font-bold text-navy">🏢 Firms / Companies</h2>
-        <button class="pp-btn pp-btn-primary" @click="openAdd">+ Add Firm</button>
+        <div class="flex gap-2">
+          <RouterLink to="/recycle-bin" class="pp-btn pp-btn-ghost">Recycle Bin</RouterLink>
+          <button class="pp-btn pp-btn-primary" @click="openAdd">+ Add Firm</button>
+        </div>
       </div>
+      <p v-if="!canDeleteFirm" class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+        At least one firm must remain. Add another firm before deleting this one.
+      </p>
       <div class="space-y-2">
         <div v-for="f in firmStore.firms" :key="f.id"
           :class="['flex items-center gap-3 p-3 rounded-lg border',
@@ -229,6 +282,12 @@ onMounted(() => {
           </div>
           <button v-if="f.id !== firmStore.activeFirmId" class="pp-btn pp-btn-ghost !py-1.5" @click="firmStore.setActive(f.id)">Switch</button>
           <button class="pp-btn pp-btn-ghost !px-2 !py-1" @click="openEdit(f)">✏️</button>
+          <button
+            v-if="canDeleteFirm"
+            class="pp-btn pp-btn-danger !px-2 !py-1"
+            title="Move firm to Recycle Bin"
+            @click="openDelete(f)"
+          >🗑️</button>
         </div>
       </div>
     </section>
@@ -407,6 +466,58 @@ onMounted(() => {
         <div class="flex justify-end gap-2 pt-2">
           <button class="pp-btn pp-btn-ghost" @click="showModal = false">Cancel</button>
           <button class="pp-btn pp-btn-primary" @click="save">Save</button>
+        </div>
+      </div>
+    </PpModal>
+
+    <PpModal
+      v-if="deleteTarget"
+      title="Delete Firm?"
+      :close-on-backdrop="false"
+      @close="closeDelete"
+    >
+      <div class="space-y-4">
+        <div class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <p class="font-semibold">This will move the firm to Recycle Bin, not permanently delete it.</p>
+          <p class="mt-1">Bills, parties, purchases and other data stay linked to this firm. Restore the firm from Recycle Bin anytime.</p>
+          <p v-if="deleteTarget.id === firmStore.activeFirmId" class="mt-2 font-semibold">
+            This is your active firm — after delete, another firm will become active automatically.
+          </p>
+          <RouterLink to="/recycle-bin" class="mt-2 inline-flex font-semibold text-red-800 underline" @click="closeDelete">
+            Open Recycle Bin
+          </RouterLink>
+        </div>
+
+        <div v-if="deleteHasLinked" class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          <p class="font-semibold">This firm has linked records:</p>
+          <ul class="mt-1 list-disc pl-4">
+            <li v-if="deleteLinked!.parties">{{ deleteLinked!.parties }} parties</li>
+            <li v-if="deleteLinked!.invoices">{{ deleteLinked!.invoices }} invoices / bills</li>
+            <li v-if="deleteLinked!.purchases">{{ deleteLinked!.purchases }} purchases</li>
+          </ul>
+          <p class="mt-1">Data is kept — only the firm is hidden until restored.</p>
+        </div>
+
+        <div>
+          <label class="pp-label">Type firm name: <span class="font-semibold">{{ deleteTarget.name }}</span></label>
+          <input
+            v-model="deleteConfirmText"
+            class="pp-input"
+            autocomplete="off"
+            :placeholder="deleteTarget.name"
+          />
+        </div>
+
+        <div class="flex justify-end gap-2 pt-2">
+          <button class="pp-btn pp-btn-ghost" @click="closeDelete">Cancel</button>
+          <button
+            class="pp-btn pp-btn-danger"
+            :disabled="!deleteConfirmed || deleteBusy"
+            :class="{ 'opacity-50': !deleteConfirmed || deleteBusy }"
+            @click="confirmDelete"
+          >
+            {{ deleteBusy ? 'Deleting…' : 'Move to Recycle Bin' }}
+          </button>
         </div>
       </div>
     </PpModal>

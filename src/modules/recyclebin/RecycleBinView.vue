@@ -8,7 +8,7 @@ import { useInvoiceStore } from '@/stores/invoices'
 import { usePurchaseStore } from '@/stores/purchases'
 
 interface DeletedRow {
-  type: 'party' | 'item' | 'invoice' | 'purchase'
+  type: 'party' | 'item' | 'invoice' | 'purchase' | 'firm'
   id: string
   label: string
   sub: string
@@ -31,6 +31,7 @@ const TYPE_META: Record<DeletedRow['type'], { icon: string; label: string; cls: 
   item:     { icon: '📦', label: 'Item',     cls: 'bg-amber-100 text-amber-700' },
   invoice:  { icon: '🧾', label: 'Invoice',  cls: 'bg-emerald-100 text-emerald-700' },
   purchase: { icon: '📥', label: 'Purchase', cls: 'bg-blue-100 text-blue-700' },
+  firm:     { icon: '🏢', label: 'Firm',     cls: 'bg-violet-100 text-violet-700' },
 }
 
 const filtered = computed(() =>
@@ -43,11 +44,12 @@ async function loadDeleted() {
   const onlyDel = <T extends { is_deleted: boolean; firm_id: string }>(arr: T[]) =>
     arr.filter((r) => r.is_deleted && r.firm_id === fid)
 
-  const [dParties, dItems, dInvoices, dPurchases] = await Promise.all([
+  const [dParties, dItems, dInvoices, dPurchases, dFirms] = await Promise.all([
     db.parties.toArray(),
     db.items.toArray(),
     db.invoices.toArray(),
     db.purchases.toArray(),
+    firm.deletedFirms(),
   ])
 
   const out: DeletedRow[] = []
@@ -59,6 +61,8 @@ async function loadDeleted() {
     out.push({ type: 'invoice', id: inv.id, label: inv.bill_no || 'Invoice', sub: `${inv.party_name} · ₹${inv.grand_total}`, deletedAt: inv.updated_at })
   for (const pu of onlyDel(dPurchases))
     out.push({ type: 'purchase', id: pu.id, label: pu.bill_no || 'Purchase', sub: `${pu.supplier_name} · ₹${pu.grand_total}`, deletedAt: pu.updated_at })
+  for (const f of dFirms)
+    out.push({ type: 'firm', id: f.id, label: f.name, sub: `${f.gst || 'No GST'} · ${f.city || '—'}`, deletedAt: f.updated_at })
 
   out.sort((a, b) => (b.deletedAt || '').localeCompare(a.deletedAt || ''))
   rows.value = out
@@ -72,6 +76,7 @@ async function restore(row: DeletedRow) {
     else if (row.type === 'item') await items.restore(row.id)
     else if (row.type === 'invoice') await invoices.restore(row.id)
     else if (row.type === 'purchase') await purchases.restore(row.id)
+    else if (row.type === 'firm') await firm.restore(row.id)
     await loadDeleted()
   } finally {
     busyId.value = null
@@ -91,7 +96,7 @@ onMounted(async () => { await firm.load(); await loadDeleted() })
   <div class="p-6 max-w-5xl mx-auto">
     <header class="mb-5">
       <h1 class="text-2xl font-bold text-navy">♻️ Recycle Bin</h1>
-      <p class="text-sm text-slate-500">Deleted parties, items, invoices &amp; purchases — restore anytime.</p>
+      <p class="text-sm text-slate-500">Deleted firms, parties, items, invoices &amp; purchases — restore anytime.</p>
     </header>
 
     <div class="flex gap-2 mb-4 flex-wrap">
@@ -101,6 +106,7 @@ onMounted(async () => { await firm.load(); await loadDeleted() })
         <option value="item">Items</option>
         <option value="invoice">Invoices</option>
         <option value="purchase">Purchases</option>
+        <option value="firm">Firms</option>
       </select>
       <span class="ml-auto self-center text-sm text-slate-400">{{ filtered.length }} deleted</span>
     </div>
