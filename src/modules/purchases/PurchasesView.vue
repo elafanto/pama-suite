@@ -19,7 +19,7 @@ const purchaseStore = usePurchaseStore()
 const router = useRouter()
 
 // State
-const activeTab = ref<'new' | 'history'>('new')
+const activeTab = ref<'new' | 'bulk' | 'history'>('new')
 const search = ref('')
 const statusFilter = ref<'all' | PayStatus>('all')
 const editingId = ref<string | null>(null)
@@ -49,8 +49,58 @@ const initialFormState = () => ({
 
 const form = reactive(initialFormState())
 
+interface BulkPurchaseRow {
+  supplier_name: string
+  bill_no: string
+  date: string
+  received_date: string
+  item_name: string
+  hsn: string
+  qty: number
+  unit: string
+  rate: number
+  gst: number
+  payment: string
+  pay_status: PayStatus
+  is_consumable: boolean
+  consumable_type: 'glue' | 'ink' | 'stitching_wire'
+  notes: string
+}
+
+const bulkRows = ref<BulkPurchaseRow[]>([])
+
+function newBulkRow(): BulkPurchaseRow {
+  const today = new Date().toISOString().slice(0, 10)
+  return {
+    supplier_name: '',
+    bill_no: '',
+    date: today,
+    received_date: today,
+    item_name: '',
+    hsn: '48043100',
+    qty: 0,
+    unit: 'KG',
+    rate: 0,
+    gst: 18,
+    payment: 'BANK',
+    pay_status: 'UNPAID',
+    is_consumable: false,
+    consumable_type: 'glue',
+    notes: '',
+  }
+}
+
 // Helper functions
 const n2 = (val: number) => (val || 0).toFixed(2)
+
+function addBulkRow(data: Partial<BulkPurchaseRow> = {}) {
+  bulkRows.value.push({ ...newBulkRow(), ...data })
+}
+
+function removeBulkRow(idx: number) {
+  bulkRows.value.splice(idx, 1)
+  if (bulkRows.value.length === 0) addBulkRow()
+}
 
 function isRowIncomplete(row: PurchaseItemLine) {
   const hasContent = row.name.trim() || row.qty > 0 || row.rate > 0
@@ -168,6 +218,25 @@ function toggleConsumable(idx: number) {
   }
 }
 
+function toggleBulkConsumable(row: BulkPurchaseRow) {
+  if (row.is_consumable) {
+    row.unit = row.unit || 'KG'
+    row.consumable_type = row.consumable_type || 'glue'
+  }
+}
+
+function applyBulkPaymentMode(e: Event) {
+  const value = (e.target as HTMLSelectElement).value
+  if (!value) return
+  bulkRows.value.forEach((r) => { r.payment = value })
+}
+
+function applyBulkPayStatus(e: Event) {
+  const value = (e.target as HTMLSelectElement).value as PayStatus | ''
+  if (!value) return
+  bulkRows.value.forEach((r) => { r.pay_status = value })
+}
+
 // Totals calculations
 const subtotal = computed(() => {
   return form.items.reduce((sum, item) => {
@@ -198,6 +267,15 @@ const totalTax = computed(() => {
 const rawTotal = computed(() => subtotal.value + totalTax.value)
 const grandTotal = computed(() => Math.round(rawTotal.value))
 const roundOff = computed(() => grandTotal.value - rawTotal.value)
+
+function calcBulkAmounts(row: BulkPurchaseRow) {
+  const sub = Math.round((Number(row.qty) || 0) * (Number(row.rate) || 0) * 100) / 100
+  const totalTax = Math.round(sub * ((Number(row.gst) || 0) / 100) * 100) / 100
+  const raw = sub + totalTax
+  const grandTotal = Math.round(raw)
+  const roundOff = Math.round((grandTotal - raw) * 100) / 100
+  return { sub, totalTax, roundOff, grandTotal }
+}
 
 // Save purchase invoice
 async function savePurchase() {
@@ -276,6 +354,89 @@ async function savePurchase() {
   }
 
   resetForm()
+  activeTab.value = 'history'
+}
+
+async function saveBulkPurchases() {
+  const validRows = bulkRows.value.filter((r) =>
+    r.supplier_name.trim() && r.bill_no.trim() && r.item_name.trim() && r.qty > 0 && r.rate > 0,
+  )
+  if (validRows.length === 0) {
+    alert('At least one complete purchase bill row add karo.')
+    return
+  }
+
+  const duplicateBill = validRows.find((row, idx) =>
+    validRows.findIndex((r) => r.supplier_name.trim().toLowerCase() === row.supplier_name.trim().toLowerCase() && r.bill_no.trim().toLowerCase() === row.bill_no.trim().toLowerCase()) !== idx,
+  )
+  if (duplicateBill) {
+    alert(`Duplicate bill found: ${duplicateBill.supplier_name} / ${duplicateBill.bill_no}`)
+    return
+  }
+  const existingBill = validRows.find((row) =>
+    purchaseStore.list.some((p) =>
+      !p.is_deleted &&
+      p.supplier_name.trim().toLowerCase() === row.supplier_name.trim().toLowerCase() &&
+      p.bill_no.trim().toLowerCase() === row.bill_no.trim().toLowerCase(),
+    ),
+  )
+  if (existingBill) {
+    alert(`Already saved bill found: ${existingBill.supplier_name} / ${existingBill.bill_no}`)
+    return
+  }
+
+  let saved = 0
+  for (const row of validRows) {
+    const vendor = await partyStore.ensure(row.supplier_name.trim(), 'vendor')
+    let item = itemStore.list.find((i) => i.name.trim().toLowerCase() === row.item_name.trim().toLowerCase())
+    if (!item) {
+      item = await itemStore.add({
+        name: row.item_name.trim(),
+        unit: row.unit,
+        hsn: row.hsn,
+        gst: row.gst,
+        rate: row.rate,
+        size: '',
+        gsm: '',
+        bf: '',
+      })
+    }
+    const line: PurchaseItemLine = {
+      item_id: item.id,
+      name: item.name,
+      hsn: row.hsn,
+      qty: row.qty,
+      unit: row.unit,
+      rate: row.rate,
+      gst: row.gst,
+      is_consumable: row.is_consumable,
+      consumable_type: row.is_consumable ? row.consumable_type : undefined,
+    }
+    const totals = calcBulkAmounts(row)
+    await purchaseStore.add({
+      supplier_name: vendor.name,
+      supplier_id: vendor.id,
+      bill_no: row.bill_no.trim(),
+      date: row.date,
+      received_date: row.received_date,
+      payment: row.payment,
+      gst_type: firmStore.activeFirm?.state && vendor.state
+        ? (firmStore.activeFirm.state === vendor.state ? 'intra' : 'inter')
+        : 'intra',
+      items: [line],
+      sub: totals.sub,
+      total_tax: totals.totalTax,
+      round_off: totals.roundOff,
+      grand_total: totals.grandTotal,
+      amt_paid: row.pay_status === 'PAID' ? totals.grandTotal : 0,
+      pay_status: row.pay_status,
+      notes: row.notes,
+    })
+    saved++
+  }
+
+  bulkRows.value = [newBulkRow()]
+  alert(`${saved} purchase bill(s) saved successfully!`)
   activeTab.value = 'history'
 }
 
@@ -371,6 +532,7 @@ onMounted(() => {
   partyStore.load()
   itemStore.load()
   if (form.items.length === 0) addRow()
+  if (bulkRows.value.length === 0) addBulkRow()
 })
 </script>
 
@@ -389,6 +551,13 @@ onMounted(() => {
           :class="activeTab === 'new' ? 'pp-btn-primary' : 'pp-btn-ghost'"
         >
           ➕ Record Bill
+        </button>
+        <button 
+          @click="activeTab = 'bulk'"
+          class="pp-btn"
+          :class="activeTab === 'bulk' ? 'pp-btn-primary' : 'pp-btn-ghost'"
+        >
+          ➕ Multiple Bills
         </button>
         <button 
           @click="activeTab = 'history'"
@@ -679,6 +848,135 @@ onMounted(() => {
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- Active Tab: Quick Multiple Purchases -->
+    <div v-else-if="activeTab === 'bulk'" class="pp-card p-6 space-y-4">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-4">
+        <div>
+          <h2 class="text-md font-semibold text-slate-800">Quick Multiple Purchase Bills</h2>
+          <p class="text-xs text-slate-500">Ek row = ek supplier bill. Detailed reel purchase ke liye Record Bill use karo.</p>
+        </div>
+        <div class="flex gap-2">
+          <button @click="addBulkRow()" class="pp-btn pp-btn-ghost">➕ Add Bill Row</button>
+          <button @click="saveBulkPurchases()" class="pp-btn pp-btn-primary">Save All Bills</button>
+        </div>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse min-w-[1320px]">
+          <thead>
+            <tr class="border-b text-slate-500 font-semibold text-xs uppercase bg-slate-50">
+              <th class="py-2 px-3 w-48">Supplier</th>
+              <th class="py-2 px-3 w-36">Bill No</th>
+              <th class="py-2 px-3 w-36">Bill Date</th>
+              <th class="py-2 px-3 w-36">Received</th>
+              <th class="py-2 px-3">Item</th>
+              <th class="py-2 px-3 w-28">HSN</th>
+              <th class="py-2 px-3 w-24">Qty</th>
+              <th class="py-2 px-3 w-24">Unit</th>
+              <th class="py-2 px-3 w-28">Rate</th>
+              <th class="py-2 px-3 w-20">GST</th>
+              <th class="py-2 px-3 w-40">Consumable</th>
+              <th class="py-2 px-3 w-36 text-right">Total</th>
+              <th class="py-2 px-3 w-10"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y text-sm">
+            <tr v-for="(row, idx) in bulkRows" :key="idx" class="hover:bg-slate-50/50">
+              <td class="py-2 px-1">
+                <input v-model="row.supplier_name" class="pp-input" list="vendors-list" placeholder="Vendor" />
+              </td>
+              <td class="py-2 px-1">
+                <input v-model="row.bill_no" class="pp-input" placeholder="Bill no" />
+              </td>
+              <td class="py-2 px-1">
+                <input v-model="row.date" type="date" class="pp-input" />
+              </td>
+              <td class="py-2 px-1">
+                <input v-model="row.received_date" type="date" class="pp-input" />
+              </td>
+              <td class="py-2 px-1">
+                <input v-model="row.item_name" class="pp-input" list="items-list" placeholder="Item name" />
+              </td>
+              <td class="py-2 px-1">
+                <input v-model="row.hsn" class="pp-input text-xs font-mono" />
+              </td>
+              <td class="py-2 px-1">
+                <input v-model.number="row.qty" type="number" class="pp-input text-right" />
+              </td>
+              <td class="py-2 px-1">
+                <select v-model="row.unit" class="pp-input">
+                  <option value="KG">KG</option>
+                  <option value="PCS">PCS</option>
+                  <option value="NOS">NOS</option>
+                  <option value="BOX">BOX</option>
+                  <option value="SET">SET</option>
+                </select>
+              </td>
+              <td class="py-2 px-1">
+                <input v-model.number="row.rate" type="number" class="pp-input text-right" step="0.01" />
+              </td>
+              <td class="py-2 px-1">
+                <select v-model.number="row.gst" class="pp-input">
+                  <option :value="0">0%</option>
+                  <option :value="5">5%</option>
+                  <option :value="12">12%</option>
+                  <option :value="18">18%</option>
+                  <option :value="28">28%</option>
+                </select>
+              </td>
+              <td class="py-2 px-1">
+                <label class="flex items-center gap-2 text-xs font-semibold">
+                  <input type="checkbox" v-model="row.is_consumable" @change="toggleBulkConsumable(row)" />
+                  Stock
+                </label>
+                <select v-if="row.is_consumable" v-model="row.consumable_type" class="pp-input mt-2 text-xs">
+                  <option value="glue">Glue</option>
+                  <option value="ink">Ink</option>
+                  <option value="stitching_wire">Stitching Wire</option>
+                </select>
+              </td>
+              <td class="py-2 px-3 text-right font-mono font-semibold">
+                ₹{{ calcBulkAmounts(row).grandTotal.toLocaleString('en-IN') }}.00
+              </td>
+              <td class="py-2 px-1 text-center">
+                <button @click="removeBulkRow(idx)" class="text-rose-500 hover:text-rose-700 text-lg">✕</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 border-t pt-4">
+        <div>
+          <label class="pp-label">Default Payment Mode</label>
+          <select class="pp-input" @change="applyBulkPaymentMode">
+            <option value="">Keep row values</option>
+            <option value="CASH">Cash</option>
+            <option value="BANK">Bank</option>
+            <option value="CC_LOAN">CC Account</option>
+          </select>
+        </div>
+        <div>
+          <label class="pp-label">Default Payment Status</label>
+          <select class="pp-input" @change="applyBulkPayStatus">
+            <option value="">Keep row values</option>
+            <option value="UNPAID">UNPAID</option>
+            <option value="PAID">PAID</option>
+          </select>
+        </div>
+        <div class="flex items-end justify-end">
+          <button @click="saveBulkPurchases()" class="pp-btn pp-btn-primary w-full md:w-auto">Save All Bills</button>
+        </div>
+      </div>
+
+      <datalist id="vendors-list">
+        <option v-for="p in partyStore.vendors" :key="p.id" :value="p.name"></option>
+      </datalist>
+      <datalist id="items-list">
+        <option v-for="it in itemStore.list" :key="it.id" :value="it.name"></option>
+      </datalist>
     </div>
 
     <!-- Active Tab: Purchase Logs / History -->
