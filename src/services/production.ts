@@ -62,7 +62,7 @@ export async function createReelsFromPurchase(purchase: Purchase) {
       deckle_size: row.deckle_size || '',
       gsm: row.gsm || '',
       bf: row.bf || '',
-      color: row.color || 'NATURAL_BROWN',
+      color: row.color || 'NS',
       opening_weight: weight,
       current_weight: weight,
       rate: Number(row.rate) || 0,

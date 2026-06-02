@@ -162,7 +162,7 @@ export interface PurchaseItemLine {
   deckle_size?: string
   gsm?: string
   bf?: string
-  color?: 'GY' | 'NATURAL_BROWN' | string
+  color?: 'NS' | 'GY' | 'NATURAL_BROWN' | string
   reel_weight?: number
   is_consumable?: boolean
   consumable_type?: 'glue' | 'ink' | 'stitching_wire'
@@ -221,7 +221,7 @@ export interface ActivityLog extends BaseRecord {
   meta?: Record<string, unknown>
 }
 
-export type ReelColor = 'GY' | 'NATURAL_BROWN' | string
+export type ReelColor = 'NS' | 'GY' | 'NATURAL_BROWN' | string
 export type ReelStatus = 'active' | 'consumed'
 
 export interface ReelStock extends BaseRecord {

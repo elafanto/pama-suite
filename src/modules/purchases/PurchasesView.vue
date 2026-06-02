@@ -134,7 +134,7 @@ function addRow(data: Partial<PurchaseItemLine> = {}) {
     deckle_size: data.deckle_size || '',
     gsm: data.gsm || '',
     bf: data.bf || '',
-    color: data.color || 'NATURAL_BROWN',
+    color: data.color || 'NS',
     reel_weight: data.reel_weight || data.qty || 0,
     is_consumable: data.is_consumable || false,
     consumable_type: data.consumable_type || 'glue',
@@ -158,7 +158,7 @@ function applyScan(result: ScanResult) {
   if (result.date) form.date = result.date
   form.items = []
   for (const it of result.items || []) {
-    addRow({ name: it.name, qty: it.qty, rate: it.rate, hsn: it.hsn || '48043100', gst: it.gst ?? 18 })
+    addRow(scanItemToPurchaseLine(it))
   }
   if (form.items.length === 0) addRow()
   if (result.supplierName) {
@@ -309,9 +309,35 @@ function normalizeConsumableType(v: unknown): PurchaseItemLine['consumable_type'
 }
 
 function normalizeReelColor(v: unknown): string {
-  const key = String(v || '').toUpperCase().replace(/\s+/g, '_')
+  const key = String(v || '').trim().toUpperCase().replace(/[\s-]+/g, '_')
   if (key === 'GY') return 'GY'
-  return 'NATURAL_BROWN'
+  if (key.includes('GOLDEN') && key.includes('YELLOW')) return 'GY'
+  if (key === 'NS' || key.includes('NATURAL') || key.includes('NEUTRAL') || key.includes('BROWN')) return 'NS'
+  return 'NS'
+}
+
+function scanItemToPurchaseLine(it: NonNullable<ScanResult['items']>[number]): Partial<PurchaseItemLine> {
+  const deckleSize = (it.deckleSize || it.reelSize || '').trim()
+  const hasReelMetadata = Boolean(
+    it.reelNo || deckleSize || it.gsm || it.bf || Number(it.reelWeight) > 0 || Number(it.reelCount) > 0,
+  )
+  return {
+    name: it.name,
+    qty: Number(it.qty) || 0,
+    unit: it.unit || 'KG',
+    rate: Number(it.rate) || 0,
+    hsn: it.hsn || '48043100',
+    gst: it.gst ?? 18,
+    is_kraft_reel: Boolean(it.isKraftReel || hasReelMetadata),
+    reel_no: it.reelNo || '',
+    deckle_size: deckleSize,
+    gsm: it.gsm || '',
+    bf: it.bf || '',
+    color: normalizeReelColor(it.color),
+    reel_weight: Number(it.reelWeight || it.qty || 0),
+    is_consumable: Boolean(it.isConsumable),
+    consumable_type: normalizeConsumableType(it.consumableType),
+  }
 }
 
 async function ensurePurchaseItemLine(it: NonNullable<ScanResult['items']>[number]): Promise<PurchaseItemLine> {
@@ -330,23 +356,24 @@ async function ensurePurchaseItemLine(it: NonNullable<ScanResult['items']>[numbe
     })
   }
   const consumableType = normalizeConsumableType(it.consumableType)
+  const scannedLine = scanItemToPurchaseLine(it)
   return {
     item_id: item.id,
     name: item.name,
-    hsn: it.hsn || item.hsn || '48043100',
-    qty: Number(it.qty) || 0,
-    unit: it.unit || item.unit || 'KG',
-    rate: Number(it.rate) || 0,
-    gst: Number(it.gst) || Number(item.gst) || 18,
+    hsn: scannedLine.hsn || item.hsn || '48043100',
+    qty: scannedLine.qty || 0,
+    unit: scannedLine.unit || item.unit || 'KG',
+    rate: scannedLine.rate || 0,
+    gst: scannedLine.gst || Number(item.gst) || 18,
     is_consumable: Boolean(it.isConsumable && consumableType),
     consumable_type: consumableType,
-    is_kraft_reel: Boolean(it.isKraftReel),
-    reel_no: it.reelNo || '',
-    deckle_size: it.deckleSize || '',
-    gsm: it.gsm || '',
-    bf: it.bf || '',
-    color: normalizeReelColor(it.color),
-    reel_weight: Number(it.reelWeight || it.qty || 0),
+    is_kraft_reel: scannedLine.is_kraft_reel,
+    reel_no: scannedLine.reel_no,
+    deckle_size: scannedLine.deckle_size,
+    gsm: scannedLine.gsm,
+    bf: scannedLine.bf,
+    color: scannedLine.color,
+    reel_weight: scannedLine.reel_weight,
   }
 }
 
@@ -406,9 +433,9 @@ async function savePurchase() {
     alert('Please add at least one valid line item')
     return
   }
-  const badReel = validItems.find(it => it.is_kraft_reel && (!it.reel_no?.trim() || !it.deckle_size?.trim() || !it.gsm?.trim() || !it.bf?.trim() || !(it.reel_weight || it.qty)))
+  const badReel = validItems.find(it => it.is_kraft_reel && (!it.deckle_size?.trim() || !it.gsm?.trim() || !it.bf?.trim() || !(it.reel_weight || it.qty)))
   if (badReel) {
-    alert('Kraft reel line me Reel No, Deckle, GSM, BF aur Reel Weight required hai.')
+    alert('Kraft reel line me Deckle, GSM, BF aur Reel Weight required hai. Reel No optional hai.')
     return
   }
   const badConsumable = validItems.find(it => it.is_consumable && !it.consumable_type)
@@ -946,11 +973,11 @@ onMounted(() => {
                   <td colspan="9" class="px-3 py-3">
                     <div class="grid grid-cols-2 md:grid-cols-6 gap-3">
                       <div>
-                        <label class="pp-label">Reel No *</label>
+                        <label class="pp-label">Reel No (optional)</label>
                         <input v-model="item.reel_no" class="pp-input" placeholder="Reel/batch no" />
                       </div>
                       <div>
-                        <label class="pp-label">Deckle Size *</label>
+                        <label class="pp-label">Deckle / Reel Size *</label>
                         <input v-model="item.deckle_size" class="pp-input" placeholder="e.g. 52 inch" />
                       </div>
                       <div>
@@ -964,8 +991,9 @@ onMounted(() => {
                       <div>
                         <label class="pp-label">Color</label>
                         <select v-model="item.color" class="pp-input">
-                          <option value="NATURAL_BROWN">Natural Brown</option>
-                          <option value="GY">GY</option>
+                          <option value="NS">NS - Natural Shade / Brown</option>
+                          <option value="GY">GY - Golden Yellow</option>
+                          <option value="NATURAL_BROWN">Natural Brown (old)</option>
                         </select>
                       </div>
                       <div>
@@ -1163,25 +1191,65 @@ onMounted(() => {
                 </tr>
               </thead>
               <tbody class="divide-y text-sm">
-                <tr v-for="(item, itemIdx) in bill.items || []" :key="`${item.name || 'item'}-${itemIdx}`">
-                  <td class="py-2 px-1"><input v-model="item.name" class="pp-input" /></td>
-                  <td class="py-2 px-1"><input v-model="item.hsn" class="pp-input text-xs font-mono" /></td>
-                  <td class="py-2 px-1"><input v-model.number="item.qty" type="number" class="pp-input text-right" /></td>
-                  <td class="py-2 px-1"><input v-model="item.unit" class="pp-input" /></td>
-                  <td class="py-2 px-1"><input v-model.number="item.rate" type="number" class="pp-input text-right" step="0.01" /></td>
-                  <td class="py-2 px-1"><input v-model.number="item.gst" type="number" class="pp-input text-right" /></td>
-                  <td class="py-2 px-1">
-                    <label class="flex items-center gap-2 text-xs font-semibold">
-                      <input type="checkbox" v-model="item.isConsumable" />
-                      Consumable
-                    </label>
-                    <select v-if="item.isConsumable" v-model="item.consumableType" class="pp-input mt-2 text-xs">
-                      <option value="glue">Glue</option>
-                      <option value="ink">Ink</option>
-                      <option value="stitching_wire">Stitching Wire</option>
-                    </select>
-                  </td>
-                </tr>
+                <template v-for="(item, itemIdx) in bill.items || []" :key="`${item.name || 'item'}-${itemIdx}`">
+                  <tr>
+                    <td class="py-2 px-1"><input v-model="item.name" class="pp-input" /></td>
+                    <td class="py-2 px-1"><input v-model="item.hsn" class="pp-input text-xs font-mono" /></td>
+                    <td class="py-2 px-1"><input v-model.number="item.qty" type="number" class="pp-input text-right" /></td>
+                    <td class="py-2 px-1"><input v-model="item.unit" class="pp-input" /></td>
+                    <td class="py-2 px-1"><input v-model.number="item.rate" type="number" class="pp-input text-right" step="0.01" /></td>
+                    <td class="py-2 px-1"><input v-model.number="item.gst" type="number" class="pp-input text-right" /></td>
+                    <td class="py-2 px-1">
+                      <label class="flex items-center gap-2 text-xs font-semibold">
+                        <input type="checkbox" v-model="item.isKraftReel" />
+                        Reel
+                      </label>
+                      <label class="mt-2 flex items-center gap-2 text-xs font-semibold">
+                        <input type="checkbox" v-model="item.isConsumable" />
+                        Consumable
+                      </label>
+                      <select v-if="item.isConsumable" v-model="item.consumableType" class="pp-input mt-2 text-xs">
+                        <option value="glue">Glue</option>
+                        <option value="ink">Ink</option>
+                        <option value="stitching_wire">Stitching Wire</option>
+                      </select>
+                    </td>
+                  </tr>
+                  <tr v-if="item.isKraftReel" class="bg-amber-50/50">
+                    <td colspan="7" class="px-3 py-3">
+                      <div class="grid grid-cols-2 md:grid-cols-6 gap-3">
+                        <div>
+                          <label class="pp-label">Reel No (optional)</label>
+                          <input v-model="item.reelNo" class="pp-input" placeholder="Reel/batch no" />
+                        </div>
+                        <div>
+                          <label class="pp-label">Deckle / Reel Size *</label>
+                          <input v-model="item.deckleSize" class="pp-input" placeholder="e.g. 52 inch" />
+                        </div>
+                        <div>
+                          <label class="pp-label">GSM *</label>
+                          <input v-model="item.gsm" class="pp-input" placeholder="120" />
+                        </div>
+                        <div>
+                          <label class="pp-label">BF *</label>
+                          <input v-model="item.bf" class="pp-input" placeholder="18" />
+                        </div>
+                        <div>
+                          <label class="pp-label">Color</label>
+                          <select v-model="item.color" class="pp-input">
+                            <option value="NS">NS - Natural Shade / Brown</option>
+                            <option value="GY">GY - Golden Yellow</option>
+                            <option value="NATURAL_BROWN">Natural Brown (old)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label class="pp-label">Reel Weight KG *</label>
+                          <input type="number" v-model.number="item.reelWeight" class="pp-input text-right" placeholder="0" />
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                </template>
               </tbody>
             </table>
           </div>

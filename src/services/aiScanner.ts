@@ -17,10 +17,12 @@ export interface ScanLineItem {
   isKraftReel?: boolean
   reelNo?: string
   deckleSize?: string
+  reelSize?: string
   gsm?: string
   bf?: string
-  color?: 'GY' | 'NATURAL_BROWN' | string
+  color?: 'NS' | 'GY' | 'NATURAL_BROWN' | string
   reelWeight?: number
+  reelCount?: number
 }
 
 export interface ScanResult {
@@ -82,11 +84,25 @@ export async function scanInvoiceImage(
   mimeType: string
 ): Promise<ScanResult> {
   const prompt = `You are an invoice OCR assistant for Indian GST bills. Extract JSON only (no markdown):
+For kraft paper reel stock lines, extract reel metadata when visible. Use color "NS" for Natural Shade/Natural Brown/Neutral Brown and "GY" for Golden Yellow. Deckle/reel size can go in deckleSize and reelSize.
 {
   "supplierName": "", "billNo": "", "date": "YYYY-MM-DD", "gstin": "",
   "address": "", "city": "", "pin": "", "phone": "",
   "bank": "", "acno": "", "ifsc": "", "acname": "",
-  "items": [{"name":"","qty":0,"unit":"KG","rate":0,"hsn":"","gst":18}],
+  "items": [{
+    "name":"","qty":0,"unit":"KG","rate":0,"hsn":"","gst":18,
+    "isConsumable": false,
+    "consumableType": "glue|ink|stitching_wire",
+    "isKraftReel": false,
+    "reelNo": "",
+    "deckleSize": "",
+    "reelSize": "",
+    "gsm": "",
+    "bf": "",
+    "color": "NS|GY",
+    "reelWeight": 0,
+    "reelCount": 0
+  }],
   "sub": 0, "totalTax": 0, "grandTotal": 0
 }`
   return generateJson<ScanResult>(apiKey, prompt, base64, mimeType, 'purchase invoice')
@@ -102,6 +118,7 @@ The uploaded PDF may contain one or many supplier bills/invoices, often one invo
 Extract all purchase bills as JSON only, no markdown. If uncertain, still return the best structured data and leave missing fields blank.
 Classify glue, ink and stitching wire line items as consumables.
 Classify kraft paper reel line items as kraft reels only when reel/deckle/gsm/bf details are visible.
+For kraft paper reel lines, extract GSM, BF, color, deckle/reel size and reel weight. Use color "NS" for Natural Shade/Natural Brown/Neutral Brown and "GY" for Golden Yellow. If reel count or reel number is present, include it, but leave blank/0 when absent.
 {
   "bills": [
     {
@@ -126,10 +143,12 @@ Classify kraft paper reel line items as kraft reels only when reel/deckle/gsm/bf
           "isKraftReel": false,
           "reelNo": "",
           "deckleSize": "",
+          "reelSize": "",
           "gsm": "",
           "bf": "",
-          "color": "GY|NATURAL_BROWN",
-          "reelWeight": 0
+          "color": "NS|GY",
+          "reelWeight": 0,
+          "reelCount": 0
         }
       ],
       "sub": 0,
