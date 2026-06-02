@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, reactive } from 'vue'
+import { RouterLink } from 'vue-router'
 import PpModal from '@/components/PpModal.vue'
 import { usePartyStore, type NewParty } from '@/stores/parties'
 import type { Party, PartyRole } from '@/types/models'
@@ -83,7 +84,12 @@ onMounted(store.load)
         <h1 class="text-2xl font-bold text-navy">Parties</h1>
         <p class="text-sm text-slate-500">Customers, vendors &amp; beneficiaries — one list</p>
       </div>
-      <button class="pp-btn pp-btn-primary" @click="openAdd">+ Add Party</button>
+      <div class="flex w-full flex-wrap gap-2 sm:w-auto">
+        <RouterLink to="/recycle-bin" class="pp-btn pp-btn-ghost flex-1 justify-center sm:flex-none">
+          Recycle Bin
+        </RouterLink>
+        <button class="pp-btn pp-btn-primary flex-1 sm:flex-none" @click="openAdd">+ Add Party</button>
+      </div>
     </header>
 
     <div class="flex gap-2 mb-4 flex-wrap">
@@ -192,6 +198,9 @@ onMounted(store.load)
         <div class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
           <p class="font-semibold">This will move the party to Recycle Bin, not permanently delete it.</p>
           <p class="mt-1">Party can be restored later from Recycle Bin. Type the exact party name to confirm.</p>
+          <RouterLink to="/recycle-bin" class="mt-2 inline-flex font-semibold text-red-800 underline" @click="closeDelete">
+            Open Recycle Bin
+          </RouterLink>
         </div>
 
         <div>

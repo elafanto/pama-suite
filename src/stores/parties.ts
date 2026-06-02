@@ -40,13 +40,21 @@ export const usePartyStore = defineStore('parties', () => {
   async function remove(id: string) {
     const existing = await repo.get(id)
     await repo.remove(id)
-    if (existing) await logActivity(existing.firm_id, 'delete', 'party', id, `Party ${existing.name} deleted`)
+    if (existing) {
+      await logActivity(existing.firm_id, 'delete', 'party', id, `Party ${existing.name} moved to Recycle Bin`, {
+        name: existing.name,
+      })
+    }
     await load()
   }
 
   async function restore(id: string) {
     const rec = await repo.restore(id)
-    if (rec) await logActivity(rec.firm_id, 'restore', 'party', id, `Party ${rec.name} restored`)
+    if (rec) {
+      await logActivity(rec.firm_id, 'restore', 'party', id, `Party ${rec.name} restored from Recycle Bin`, {
+        name: rec.name,
+      })
+    }
     await load()
   }
 

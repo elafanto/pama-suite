@@ -27,11 +27,12 @@ export async function logActivity(
 }
 
 export async function recentActivity(firmId: string, limit = 50): Promise<ActivityLog[]> {
-  return db.activity_log
+  const rows = await db.activity_log
     .where('firm_id')
     .equals(firmId)
     .filter(r => !r.is_deleted)
-    .reverse()
-    .limit(limit)
     .toArray()
+  return rows
+    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+    .slice(0, limit)
 }
