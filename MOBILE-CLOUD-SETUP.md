@@ -16,11 +16,16 @@ Yeh guide **cloud sync (Supabase)** aur **mobile par install** ke liye hai. Code
 
 Supabase Dashboard → **SQL Editor** → New query:
 
-1. Pehle poora paste karke **Run** karo:  
-   `supabase/migrations/001_initial_schema.sql`
-2. Phir **Run** karo:  
-   `supabase/migrations/002_realtime_and_org_bootstrap.sql`  
-   (pehli sign-up fix + doosre device par auto-sync)
+In files ko order me paste karke **Run** karo:
+
+1. `supabase/migrations/001_initial_schema.sql`
+2. `supabase/migrations/002_realtime_and_org_bootstrap.sql`
+3. `supabase/migrations/003_bootstrap_user_org.sql`
+4. `supabase/migrations/004_inventory_and_firm_sync_fields.sql`
+5. `supabase/migrations/005_production_tracking.sql`
+6. `supabase/migrations/006_item_stock_movements.sql`
+
+Ye migrations login org setup, realtime sync, inventory, production, paper reels aur item stock movement tables ko cloud me ready karte hain.
 
 ### Step 3 — Email login
 
@@ -47,11 +52,12 @@ npm.cmd run dev
 
 ### Step 5 — Pehli baar login + sync
 
-1. Browser: `http://localhost:5173/login`
+1. Browser: `http://localhost:5180/login` (ya dev server jo port terminal me dikhaye)
 2. **Sign up** (email + password)
-3. Top bar: **Cloud connected** dikhega
-4. **Sync** dabao — local bills/parties cloud par jayenge
-5. Doosre phone/PC par same login → **Sync** → wahi data
+3. Settings → Cloud Sync me zarurat ho to **Setup Organization** dabao
+4. Agar PC/local app me existing data hai: **Full Push to Cloud** dabao
+5. Doosre phone/PC par same login → **Full Pull from Cloud** dabao
+6. Uske baad normal **Sync** button daily use ke liye kaafi hai
 
 **Auto-sync:** Login ke baad app khud pull/push karta hai; doosre device par change hone par Realtime se ~1.5 sec me sync hota hai.
 
@@ -83,9 +89,9 @@ Deploy ke baad phone par:
 **iPhone (Safari):**
 1. Share ⎙ → **Add to Home Screen**
 
-App home screen par icon ban jata hai — full screen, offline shell, auto-update jab Vercel par naya deploy ho.
+App home screen par icon ban jata hai — full screen, offline shell, auto-update jab Vercel par naya deploy ho. Top bar ka **Update** button sirf app shell refresh karta hai; Supabase login/local business data clear nahi hota.
 
-Local test: `npm run build` → `npm run preview` → phone same WiFi par PC IP:4173
+Local test: `npm run build` → `npm run preview -- --host 0.0.0.0 --port 5180` → phone same WiFi par `http://PC-IP:5180`
 
 ### Option 2 — Android APK (Play Store ke liye)
 
@@ -113,7 +119,8 @@ Play Store ke liye signed release bundle banani hogi (Android Studio → Generat
 | Test | Expected |
 |------|----------|
 | Desktop par naya bill save + Sync | Supabase Table Editor me `invoices` row |
-| Mobile par login + Sync | Wahi bill dikhe |
+| Existing PC data phone par chahiye | PC: Full Push, Phone: Full Pull |
+| Mobile par login + Full Pull/Sync | Wahi bill dikhe |
 | Mobile par party add + Sync | Desktop par refresh/sync par dikhe |
 | Offline mode | App chale; online aate hi Sync |
 
@@ -124,8 +131,10 @@ Play Store ke liye signed release bundle banani hogi (Android Studio → Generat
 | Problem | Solution |
 |---------|----------|
 | `Local only` header | `.env.local` keys check karo, dev server restart |
-| Sign up fail / RLS error | `002_realtime_and_org_bootstrap.sql` dubara run karo |
-| Sync 0 records | Pehle local data ho (Import JSON), phir Sync |
+| Sign up fail / RLS error | migrations `001` se `006` order me dubara verify/run karo |
+| Organization setup pending | `003_bootstrap_user_org.sql` run karo, phir Settings → Setup Organization |
+| Sync 0 records | Pehle local data ho (Import JSON), phir Full Push |
+| Phone par data kam dikhe | PC par Full Push, phone par Full Pull, phir Sync Status check karo |
 | Realtime nahi | Supabase → Database → Publications → `supabase_realtime` me tables ON |
 | iPhone install nahi | Safari use karo, Chrome iOS par PWA limited hai |
 

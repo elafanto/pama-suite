@@ -3,8 +3,11 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useFirmStore } from '@/stores/firm'
 import { useAccountingStore } from '@/stores/accounting'
 import { useInvoiceStore } from '@/stores/invoices'
+import { usePartyStore } from '@/stores/parties'
+import { usePurchaseStore } from '@/stores/purchases'
 import { useSettingsStore } from '@/stores/settings'
 import { cashBookFromVouchers } from '@/services/reports'
+import { buildPartyLedger, partyLedgerOptions, type PartyLedgerMode, type PartyLedgerPartyOption } from '@/services/partyLedger'
 import { scanVoucherImage, fileToBase64, type VoucherScanResult } from '@/services/aiScanner'
 import PpModal from '@/components/PpModal.vue'
 import type { Account, Voucher, LedgerEntry } from '@/types/models'
@@ -13,10 +16,12 @@ import type { Account, Voucher, LedgerEntry } from '@/types/models'
 const firmStore = useFirmStore()
 const accountingStore = useAccountingStore()
 const invoiceStore = useInvoiceStore()
+const partyStore = usePartyStore()
+const purchaseStore = usePurchaseStore()
 const settingsStore = useSettingsStore()
 
 // Navigation state
-type TabType = 'reports' | 'ledger' | 'debtors' | 'cashbook' | 'vouchers' | 'accounts'
+type TabType = 'reports' | 'ledger' | 'partyLedger' | 'debtors' | 'cashbook' | 'vouchers' | 'accounts'
 const activeTab = ref<TabType>('reports')
 const voucherScanStatus = ref('')
 const voucherScanLoading = ref(false)
@@ -31,6 +36,18 @@ const reportFromDate = ref(new Date().toISOString().slice(0, 7) + '-01')
 const selectedLedgerAccountId = ref('')
 const ledgerFromDate = ref(new Date().toISOString().slice(0, 7) + '-01')
 const ledgerToDate = ref(new Date().toISOString().slice(0, 10))
+
+// Party ledger filter state
+const partyLedgerMode = ref<PartyLedgerMode>('both')
+const partyLedgerPartyKey = ref('')
+const partyLedgerMonth = ref('')
+const partyLedgerFromDate = ref(new Date().toISOString().slice(0, 7) + '-01')
+const partyLedgerToDate = ref(new Date().toISOString().slice(0, 10))
+const partyLedgerPendingOnly = ref(false)
+const partyLedgerMinAmount = ref<number | null>(null)
+const partyLedgerMaxAmount = ref<number | null>(null)
+const partyLedgerMinOutstanding = ref<number | null>(null)
+const partyLedgerMaxOutstanding = ref<number | null>(null)
 
 // Voucher list filter state
 const voucherFilterType = ref<Voucher['type'] | 'ALL'>('ALL')
@@ -86,7 +103,11 @@ function getAccountLabel(accountId: string) {
 // Reload when active firm changes
 watch(() => firmStore.activeFirmId, () => {
   accountingStore.load()
+  invoiceStore.load()
+  partyStore.load()
+  purchaseStore.load()
   selectedLedgerAccountId.value = ''
+  partyLedgerPartyKey.value = ''
 })
 
 // Account form actions
@@ -338,6 +359,72 @@ const ledgerCardDetails = computed(() => {
   )
 })
 
+const partyLedgerOptionRows = computed(() =>
+  partyLedgerOptions(
+    partyStore.list,
+    invoiceStore.list,
+    purchaseStore.list,
+    firmStore.activeFirmId,
+    partyLedgerMode.value,
+  ),
+)
+
+function partyLedgerOptionKey(option: PartyLedgerPartyOption) {
+  return `${option.source}:${option.id || option.name}`
+}
+
+const selectedPartyLedgerOption = computed(() =>
+  partyLedgerOptionRows.value.find((option) => partyLedgerOptionKey(option) === partyLedgerPartyKey.value) || null,
+)
+
+function amountFilter(value: unknown) {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+const partyLedgerResult = computed(() => buildPartyLedger(invoiceStore.list, purchaseStore.list, {
+  firmId: firmStore.activeFirmId,
+  mode: partyLedgerMode.value,
+  partyId: selectedPartyLedgerOption.value?.source === 'party' ? selectedPartyLedgerOption.value.id : undefined,
+  partyName: selectedPartyLedgerOption.value?.name,
+  month: partyLedgerMonth.value || undefined,
+  from: partyLedgerMonth.value ? undefined : partyLedgerFromDate.value || undefined,
+  to: partyLedgerMonth.value ? undefined : partyLedgerToDate.value || undefined,
+  pendingOnly: partyLedgerPendingOnly.value,
+  minAmount: amountFilter(partyLedgerMinAmount.value),
+  maxAmount: amountFilter(partyLedgerMaxAmount.value),
+  minOutstanding: amountFilter(partyLedgerMinOutstanding.value),
+  maxOutstanding: amountFilter(partyLedgerMaxOutstanding.value),
+}))
+
+function exportPartyLedgerCsv() {
+  const headers = ['Date', 'Ref No', 'Mode', 'Party', 'Type', 'Narration', 'Debit', 'Credit', 'Balance', 'Outstanding', 'Status']
+  const rows = partyLedgerResult.value.rows.map((row) => [
+    row.date,
+    row.refNo,
+    row.mode,
+    row.partyName,
+    row.type,
+    row.narration,
+    n2(row.debit),
+    n2(row.credit),
+    n2(row.balance),
+    n2(row.outstanding),
+    row.payStatus,
+  ])
+  const csv = [headers, ...rows].map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = `Party_Ledger_${new Date().toISOString().slice(0, 10)}.csv`
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
+function printPartyLedger() {
+  window.print()
+}
+
 // Voucher logs filtered computed
 const filteredVouchers = computed(() => {
   return accountingStore.vouchers.filter(v => {
@@ -408,7 +495,7 @@ function applyVoucherScan(r: VoucherScanResult) {
 }
 
 onMounted(async () => {
-  await Promise.all([accountingStore.load(), invoiceStore.load()])
+  await Promise.all([accountingStore.load(), invoiceStore.load(), partyStore.load(), purchaseStore.load()])
 })
 </script>
 
@@ -427,6 +514,7 @@ onMounted(async () => {
           v-for="t in ([
             { id: 'reports', label: '📊 Financials' },
             { id: 'ledger', label: '📇 Ledgers' },
+            { id: 'partyLedger', label: '👤 Party Ledger' },
             { id: 'debtors', label: '👥 Sundry Debtors' },
             { id: 'cashbook', label: '💵 Cash Book' },
             { id: 'vouchers', label: '💸 Vouchers' },
@@ -701,6 +789,156 @@ onMounted(async () => {
           </tbody>
         </table>
         <p v-if="!customerLedgerRows.length" class="py-8 text-center text-slate-400">No invoice data for customer ledger</p>
+      </div>
+    </div>
+
+    <div v-else-if="activeTab === 'partyLedger'" id="party-ledger-print" class="space-y-6">
+      <div class="pp-card p-6 space-y-4 print:hidden">
+        <div class="flex flex-col gap-2 border-b pb-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 class="text-md font-semibold text-slate-800">Party Ledger</h2>
+            <p class="text-xs text-slate-500">Customer aur vendor invoices/purchases ka running balance, pending aur paid view.</p>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button class="pp-btn pp-btn-ghost !py-1.5 text-xs" @click="exportPartyLedgerCsv" :disabled="partyLedgerResult.rows.length === 0">
+              Export CSV
+            </button>
+            <button class="pp-btn pp-btn-primary !py-1.5 text-xs" @click="printPartyLedger" :disabled="partyLedgerResult.rows.length === 0">
+              Print
+            </button>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-4">
+          <div>
+            <label class="pp-label">Mode</label>
+            <select v-model="partyLedgerMode" class="pp-input" @change="partyLedgerPartyKey = ''">
+              <option value="both">Customer + Vendor</option>
+              <option value="customer">Customer</option>
+              <option value="vendor">Vendor</option>
+            </select>
+          </div>
+          <div class="md:col-span-2">
+            <label class="pp-label">Party</label>
+            <select v-model="partyLedgerPartyKey" class="pp-input">
+              <option value="">All parties</option>
+              <option v-for="option in partyLedgerOptionRows" :key="partyLedgerOptionKey(option)" :value="partyLedgerOptionKey(option)">
+                {{ option.name }} · {{ option.roles.join('/') }}{{ option.source === 'document' ? ' · from bills' : '' }}
+              </option>
+            </select>
+          </div>
+          <label class="flex items-center gap-2 rounded-lg border bg-slate-50 px-3 py-2 text-sm">
+            <input v-model="partyLedgerPendingOnly" type="checkbox" />
+            <span>Pending only</span>
+          </label>
+        </div>
+
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-5">
+          <div>
+            <label class="pp-label">Month</label>
+            <input v-model="partyLedgerMonth" type="month" class="pp-input" />
+          </div>
+          <div>
+            <label class="pp-label">From</label>
+            <input v-model="partyLedgerFromDate" type="date" class="pp-input" :disabled="!!partyLedgerMonth" />
+          </div>
+          <div>
+            <label class="pp-label">To</label>
+            <input v-model="partyLedgerToDate" type="date" class="pp-input" :disabled="!!partyLedgerMonth" />
+          </div>
+          <div>
+            <label class="pp-label">Min Amount</label>
+            <input v-model.number="partyLedgerMinAmount" type="number" min="0" class="pp-input" placeholder="0" />
+          </div>
+          <div>
+            <label class="pp-label">Max Amount</label>
+            <input v-model.number="partyLedgerMaxAmount" type="number" min="0" class="pp-input" placeholder="No limit" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-4">
+          <div>
+            <label class="pp-label">Min Outstanding</label>
+            <input v-model.number="partyLedgerMinOutstanding" type="number" min="0" class="pp-input" placeholder="0" />
+          </div>
+          <div>
+            <label class="pp-label">Max Outstanding</label>
+            <input v-model.number="partyLedgerMaxOutstanding" type="number" min="0" class="pp-input" placeholder="No limit" />
+          </div>
+        </div>
+      </div>
+
+      <div class="pp-card p-6 space-y-4">
+        <div class="flex flex-col gap-3 border-b pb-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 class="text-base font-bold text-slate-800">Party Ledger Statement</h3>
+            <p class="text-xs text-slate-500">
+              {{ selectedPartyLedgerOption?.name || 'All parties' }} ·
+              {{ partyLedgerMonth || `${partyLedgerFromDate || 'Start'} to ${partyLedgerToDate || 'Today'}` }}
+            </p>
+          </div>
+          <div class="grid grid-cols-2 gap-2 text-right text-xs sm:grid-cols-4">
+            <div class="rounded-lg bg-blue-50 px-3 py-2">
+              <div class="text-slate-500">Debit</div>
+              <div class="font-bold text-blue-700">₹{{ n2(partyLedgerResult.totals.debit) }}</div>
+            </div>
+            <div class="rounded-lg bg-amber-50 px-3 py-2">
+              <div class="text-slate-500">Credit</div>
+              <div class="font-bold text-amber-700">₹{{ n2(partyLedgerResult.totals.credit) }}</div>
+            </div>
+            <div class="rounded-lg bg-slate-50 px-3 py-2">
+              <div class="text-slate-500">Balance</div>
+              <div class="font-bold text-slate-800">₹{{ n2(partyLedgerResult.totals.balance) }}</div>
+            </div>
+            <div class="rounded-lg bg-rose-50 px-3 py-2">
+              <div class="text-slate-500">Outstanding</div>
+              <div class="font-bold text-rose-700">₹{{ n2(partyLedgerResult.totals.outstanding) }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full min-w-[1040px] text-left text-sm">
+            <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+              <tr class="border-b">
+                <th class="p-3">Date</th>
+                <th class="p-3">Ref</th>
+                <th class="p-3">Party</th>
+                <th class="p-3">Type</th>
+                <th class="p-3">Narration</th>
+                <th class="p-3 text-right">Debit</th>
+                <th class="p-3 text-right">Credit</th>
+                <th class="p-3 text-right">Balance</th>
+                <th class="p-3 text-right">Outstanding</th>
+                <th class="p-3 text-center">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in partyLedgerResult.rows" :key="row.id" class="border-b hover:bg-slate-50">
+                <td class="p-3 whitespace-nowrap">{{ row.date }}</td>
+                <td class="p-3 font-mono">{{ row.refNo }}</td>
+                <td class="p-3">
+                  <div class="font-medium">{{ row.partyName }}</div>
+                  <div class="text-[11px] uppercase text-slate-400">{{ row.mode }}</div>
+                </td>
+                <td class="p-3">{{ row.type }}</td>
+                <td class="p-3 text-slate-600">{{ row.narration }}</td>
+                <td class="p-3 text-right font-mono text-blue-700">{{ row.debit ? n2(row.debit) : '-' }}</td>
+                <td class="p-3 text-right font-mono text-amber-700">{{ row.credit ? n2(row.credit) : '-' }}</td>
+                <td class="p-3 text-right font-mono font-bold">₹{{ n2(row.balance) }}</td>
+                <td class="p-3 text-right font-mono text-rose-700">₹{{ n2(row.outstanding) }}</td>
+                <td class="p-3 text-center">
+                  <span class="pp-badge" :class="row.outstanding <= 0.01 ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'">
+                    {{ row.payStatus }}
+                  </span>
+                </td>
+              </tr>
+              <tr v-if="partyLedgerResult.rows.length === 0">
+                <td colspan="10" class="p-8 text-center text-slate-400">No party ledger rows for selected filters.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
 

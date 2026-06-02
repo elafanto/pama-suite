@@ -58,6 +58,44 @@ function isNewer(remote: string, local?: string): boolean {
 
 const PULL_PAGE_SIZE = 1000
 const EPOCH_ISO = '1970-01-01T00:00:00.000Z'
+const LAST_SYNC_AT_KEY = 'pama_last_sync_at'
+const LAST_SYNC_RESULT_KEY = 'pama_last_sync_result'
+const LAST_SYNC_ERROR_KEY = 'pama_last_sync_error'
+
+export interface SyncDiagnostics {
+  lastPull: string
+  lastSyncAt: string
+  lastSyncResult: string
+  lastSyncError: string
+}
+
+function readLocalStorage(key: string): string {
+  try {
+    return localStorage.getItem(key) || ''
+  } catch {
+    return ''
+  }
+}
+
+function rememberSyncResult(message: string, error = ''): void {
+  try {
+    localStorage.setItem(LAST_SYNC_AT_KEY, nowISO())
+    localStorage.setItem(LAST_SYNC_RESULT_KEY, message)
+    if (error) localStorage.setItem(LAST_SYNC_ERROR_KEY, error)
+    else localStorage.removeItem(LAST_SYNC_ERROR_KEY)
+  } catch {
+    // Diagnostics should never block sync.
+  }
+}
+
+export function getSyncDiagnostics(): SyncDiagnostics {
+  return {
+    lastPull: readLocalStorage('pama_last_pull'),
+    lastSyncAt: readLocalStorage(LAST_SYNC_AT_KEY),
+    lastSyncResult: readLocalStorage(LAST_SYNC_RESULT_KEY),
+    lastSyncError: readLocalStorage(LAST_SYNC_ERROR_KEY),
+  }
+}
 
 /** Supabase returns max 1000 rows per request — paginate until all rows are fetched. */
 async function fetchAllOrgRows(
@@ -92,13 +130,14 @@ async function upsertCloudRow(
   localName: SyncTable,
   remoteName: string,
   rec: any,
+  cloudUpdatedAt: string,
 ): Promise<string | null> {
   const row: any = {
     id: rec.id,
     org_id: orgId,
     is_deleted: rec.is_deleted,
     created_at: rec.created_at,
-    updated_at: rec.updated_at,
+    updated_at: cloudUpdatedAt,
   }
 
   if (localName === 'firms') {
@@ -132,7 +171,7 @@ async function upsertCloudRow(
     })
   } else {
     row.firm_id = rec.firm_id
-    row.payload = rec
+    row.payload = { ...rec, updated_at: cloudUpdatedAt }
   }
 
   let { error } = await sb.from(remoteName).upsert(row)
@@ -184,6 +223,7 @@ export async function pushDirtyToCloud(): Promise<{ ok: boolean; pushed: number;
 
   let pushed = 0
   const orgId = auth.orgId
+  const cloudUpdatedAt = nowISO()
 
   for (const [localName, remoteName] of Object.entries(TABLE_MAP) as [SyncTable, string][]) {
     const table = (db as any)[localName]
@@ -191,10 +231,10 @@ export async function pushDirtyToCloud(): Promise<{ ok: boolean; pushed: number;
     const dirty = await table.filter((r: any) => r._dirty === true).toArray()
 
     for (const rec of dirty) {
-      const err = await upsertCloudRow(sb, orgId, localName, remoteName, rec)
+      const err = await upsertCloudRow(sb, orgId, localName, remoteName, rec, cloudUpdatedAt)
       if (err) return { ok: false, pushed, error: err }
 
-      await table.update(rec.id, { _dirty: false })
+      await table.update(rec.id, { _dirty: false, updated_at: cloudUpdatedAt })
       pushed++
     }
   }
@@ -212,6 +252,7 @@ export async function pushAllToCloud(): Promise<{ ok: boolean; pushed: number; e
 
   let pushed = 0
   const orgId = auth.orgId
+  const cloudUpdatedAt = nowISO()
 
   for (const [localName, remoteName] of Object.entries(TABLE_MAP) as [SyncTable, string][]) {
     const table = (db as any)[localName]
@@ -219,9 +260,9 @@ export async function pushAllToCloud(): Promise<{ ok: boolean; pushed: number; e
     const rows = await table.toArray()
 
     for (const rec of rows) {
-      const err = await upsertCloudRow(sb, orgId, localName, remoteName, rec)
+      const err = await upsertCloudRow(sb, orgId, localName, remoteName, rec, cloudUpdatedAt)
       if (err) return { ok: false, pushed, error: err }
-      await table.update(rec.id, { _dirty: false })
+      await table.update(rec.id, { _dirty: false, updated_at: cloudUpdatedAt })
       pushed++
     }
   }
@@ -385,31 +426,53 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
 export async function runFullPullFromCloud(): Promise<string> {
   localStorage.removeItem('pama_last_pull')
   const pull = await pullFromCloud(EPOCH_ISO)
-  if (!pull.ok) return pull.error || 'Full pull failed'
+  if (!pull.ok) {
+    const message = pull.error || 'Full pull failed'
+    rememberSyncResult(message, message)
+    return message
+  }
   const repaired = await repairLocalInvoiceNumberState()
   if (pull.pulled > 0) await reloadAllStores()
-  return pull.pulled || repaired ? `Full pull: ${pull.pulled} records${repaired ? `, repaired ${repaired}` : ''}` : 'Cloud has no data for this account'
+  const message = pull.pulled || repaired ? `Full pull: ${pull.pulled} records${repaired ? `, repaired ${repaired}` : ''}` : 'Cloud has no data for this account'
+  rememberSyncResult(message)
+  return message
 }
 
 /** Upload all local data to cloud (fixes phone missing data after PC import). */
 export async function runFullPushToCloud(): Promise<string> {
   const push = await pushAllToCloud()
-  if (!push.ok) return push.error || 'Full push failed'
-  return push.pushed ? `Full push: ${push.pushed} records` : 'No local records to push'
+  if (!push.ok) {
+    const message = push.error || 'Full push failed'
+    rememberSyncResult(message, message)
+    return message
+  }
+  const message = push.pushed ? `Full push: ${push.pushed} records` : 'No local records to push'
+  rememberSyncResult(message)
+  return message
 }
 
 export async function runSync(): Promise<string> {
   const pull = await pullFromCloud()
-  if (!pull.ok) return pull.error || 'Pull failed'
+  if (!pull.ok) {
+    const message = pull.error || 'Pull failed'
+    rememberSyncResult(message, message)
+    return message
+  }
   const repaired = await repairLocalInvoiceNumberState()
   const push = await pushDirtyToCloud()
-  if (!push.ok) return push.error || 'Sync failed'
+  if (!push.ok) {
+    const message = push.error || 'Sync failed'
+    rememberSyncResult(message, message)
+    return message
+  }
   if (pull.pulled > 0) await reloadAllStores()
   const parts: string[] = []
   if (pull.pulled) parts.push(`pulled ${pull.pulled}`)
   if (repaired) parts.push(`repaired ${repaired}`)
   if (push.pushed) parts.push(`pushed ${push.pushed}`)
-  return parts.length ? `Synced (${parts.join(', ')})` : 'Already up to date'
+  const message = parts.length ? `Synced (${parts.join(', ')})` : 'Already up to date'
+  rememberSyncResult(message)
+  return message
 }
 
 let realtimeChannel: RealtimeChannel | null = null

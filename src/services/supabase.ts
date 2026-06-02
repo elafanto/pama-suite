@@ -2,6 +2,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
 const LS_URL = 'pama_supabase_url'
 const LS_ANON = 'pama_supabase_anon_key'
+const AUTH_STORAGE_PREFIX = 'pama_supabase_auth'
 
 const envUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim()
 const envAnon = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim()
@@ -25,6 +26,37 @@ function getBrowserStorage(): Storage | undefined {
 
 function readLocalStorage(key: string): string {
   return (getBrowserStorage()?.getItem(key) || '').trim()
+}
+
+function projectRefFromUrl(url: string): string {
+  try {
+    return new URL(url).hostname.split('.')[0] || 'default'
+  } catch {
+    return 'default'
+  }
+}
+
+export function getSupabaseAuthStorageKey(url = getSupabaseConfig().url): string {
+  return `${AUTH_STORAGE_PREFIX}_${projectRefFromUrl(url)}`
+}
+
+function migrateLegacyAuthStorage(storage: Storage, url: string): void {
+  const targetKey = getSupabaseAuthStorageKey(url)
+  if (storage.getItem(targetKey)) return
+
+  const projectRef = projectRefFromUrl(url)
+  const legacyKeys = [
+    `sb-${projectRef}-auth-token`,
+    'supabase.auth.token',
+  ]
+
+  for (const legacyKey of legacyKeys) {
+    const value = storage.getItem(legacyKey)
+    if (value) {
+      storage.setItem(targetKey, value)
+      return
+    }
+  }
 }
 
 /** Resolved URL + anon: build-time .env first, then browser localStorage (Settings). */
@@ -89,11 +121,13 @@ export function getSupabase(): SupabaseClient | null {
   const key = `${url}|${anon.slice(0, 12)}`
   if (client && clientKey === key) return client
   const storage = getBrowserStorage()
+  if (storage) migrateLegacyAuthStorage(storage, url)
   client = createClient(url, anon, {
     auth: {
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
+      storageKey: getSupabaseAuthStorageKey(url),
       ...(storage ? { storage } : {}),
     },
   })

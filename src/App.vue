@@ -9,6 +9,7 @@ import PwaInstallPrompt from '@/components/PwaInstallPrompt.vue'
 
 const route = useRoute()
 const auth = useAuthStore()
+const firmStore = useFirmStore()
 const sidebarOpen = ref(false)
 const clock = ref('')
 const syncing = ref(false)
@@ -34,6 +35,7 @@ const cloudTarget = computed(() => {
   if (!auth.isLoggedIn) return '/login'
   return '/settings'
 })
+const activeFirmLabel = computed(() => firmStore.activeFirm?.name || 'No firm selected')
 
 let timer: number
 let stopRealtime: (() => void) | null = null
@@ -52,18 +54,6 @@ async function cloudSync() {
   } finally {
     syncing.value = false
   }
-}
-
-async function clearAppUpdateCaches() {
-  if (!('caches' in window)) return
-
-  const cacheNames = await window.caches.keys()
-  const appShellCaches = cacheNames.filter((name) => {
-    const normalized = name.toLowerCase()
-    return normalized.includes('workbox') || normalized.includes('precache') || normalized.includes('vite-pwa')
-  })
-
-  await Promise.all(appShellCaches.map((name) => window.caches.delete(name)))
 }
 
 async function activateWaitingWorker(registration: ServiceWorkerRegistration) {
@@ -97,8 +87,6 @@ async function refreshApp() {
         await activateWaitingWorker(registration)
       }
     }
-
-    await clearAppUpdateCaches()
   } catch (err) {
     console.warn('App refresh update check failed; reloading anyway.', err)
   } finally {
@@ -126,7 +114,7 @@ watch(
 )
 
 onMounted(async () => {
-  await useFirmStore().load()
+  await firmStore.load()
   tick(); timer = window.setInterval(tick, 1000)
   window.addEventListener('online', onOnline)
 })
@@ -151,6 +139,13 @@ onUnmounted(() => {
         </div>
       </RouterLink>
       <div class="ml-auto flex items-center gap-1.5 sm:gap-3 shrink-0">
+        <RouterLink
+          to="/settings"
+          class="inline-flex max-w-[96px] items-center rounded-lg border border-teal-300/30 bg-teal-400/15 px-2 py-1 text-[10px] font-semibold text-teal-50 no-underline hover:bg-teal-400/25 sm:max-w-[180px] lg:max-w-[260px] sm:text-[11px]"
+          :title="`Active firm: ${activeFirmLabel}`"
+        >
+          <span class="truncate">Firm: {{ activeFirmLabel }}</span>
+        </RouterLink>
         <button
           type="button"
           class="pp-btn pp-btn-ghost !py-1 !px-2 text-[10px] sm:text-xs !text-sky-100 !bg-white/10 hover:!bg-white/20 border border-white/20 whitespace-nowrap"
@@ -162,13 +157,15 @@ onUnmounted(() => {
         </button>
         <RouterLink
           :to="cloudTarget"
-          class="text-[10px] sm:text-[11px] text-sky-300 hover:text-white max-w-[128px] sm:max-w-[260px] truncate no-underline"
+          class="inline-flex max-w-[128px] items-center rounded-lg border border-white/15 bg-white/10 px-2 py-1 text-[10px] font-semibold text-sky-50 no-underline hover:bg-white/20 hover:text-white sm:max-w-[220px] sm:text-[11px]"
           :title="cloudDetail"
-        >☁️ {{ cloudLabel }}</RouterLink>
+        >
+          <span class="truncate">☁️ {{ cloudLabel }}</span>
+        </RouterLink>
         <button
           v-if="auth.canSync"
           type="button"
-          class="pp-btn pp-btn-ghost !py-1 !px-2 text-[10px] sm:text-xs text-sky-100 border border-white/20"
+          class="pp-btn !py-1 !px-2 text-[10px] sm:text-xs !bg-accent !text-white hover:!bg-accent-dk border border-sky-300/30 disabled:opacity-60"
           :disabled="syncing"
           @click="cloudSync"
         >
@@ -177,7 +174,7 @@ onUnmounted(() => {
         <RouterLink
           v-else-if="auth.isConfigured && !auth.isLoggedIn"
           to="/login"
-          class="text-[10px] sm:text-xs font-semibold text-sky-200 hover:text-white no-underline"
+          class="inline-flex items-center rounded-lg border border-sky-300/30 bg-accent px-2 py-1 text-[10px] font-semibold text-white no-underline hover:bg-accent-dk sm:text-xs"
         >
           Sign in
         </RouterLink>

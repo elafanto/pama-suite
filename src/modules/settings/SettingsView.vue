@@ -7,7 +7,7 @@ import { useAuthStore } from '@/stores/auth'
 import { getSupabaseConfig } from '@/services/supabase'
 import { useSettingsStore } from '@/stores/settings'
 import { exportAll, downloadBackup, importBackup } from '@/services/backup'
-import { runSync, runFullPullFromCloud, runFullPushToCloud } from '@/services/sync'
+import { getSyncDiagnostics, runSync, runFullPullFromCloud, runFullPushToCloud } from '@/services/sync'
 import { usePwaInstall } from '@/composables/usePwaInstall'
 import type { Firm } from '@/types/models'
 
@@ -25,6 +25,7 @@ const supabaseAnonInput = ref('')
 const supabaseKeyMsg = ref('')
 const supabaseKeyOk = ref(false)
 const includeSensitiveBackup = ref(false)
+const syncDiag = ref(getSyncDiagnostics())
 
 const blank = (): NewFirm => ({
   name: '', gst: '', addr: '', city: '', state: '05', pin: '', phone: '', email: '',
@@ -82,6 +83,7 @@ async function doSync() {
     return
   }
   syncMsg.value = await runSync()
+  refreshSyncDiag()
 }
 
 async function doFullPull() {
@@ -92,6 +94,7 @@ async function doFullPull() {
   if (!confirm('Cloud se SAARA data dubara download karein? Local changes overwrite ho sakte hain agar cloud naya hai.')) return
   syncMsg.value = 'Pulling all records…'
   syncMsg.value = await runFullPullFromCloud()
+  refreshSyncDiag()
   await firmStore.load()
   location.reload()
 }
@@ -104,6 +107,7 @@ async function doFullPush() {
   if (!confirm('Is device ka SAARA local data cloud par upload karein? (Import ke baad zaroori)')) return
   syncMsg.value = 'Pushing all records…'
   syncMsg.value = await runFullPushToCloud()
+  refreshSyncDiag()
 }
 
 function saveGemini() {
@@ -121,12 +125,30 @@ async function saveSupabaseKeys() {
   } else {
     supabaseKeyMsg.value = auth.error || 'Save failed — URL aur anon key check karein'
   }
+  refreshSyncDiag()
 }
 
 async function setupOrg() {
   syncMsg.value = 'Setting up organization…'
   const ok = await auth.ensureOrgSetup()
   syncMsg.value = ok ? 'Organization ready — ab Sync kar sakte hain.' : (auth.orgSetupError || auth.error || 'Setup failed')
+  refreshSyncDiag()
+}
+
+function refreshSyncDiag() {
+  syncDiag.value = getSyncDiagnostics()
+}
+
+function fmtSyncTime(value: string) {
+  if (!value) return 'Never'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return value
+  return d.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+async function doSignOut() {
+  await auth.signOut()
+  refreshSyncDiag()
 }
 
 onMounted(() => {
@@ -134,6 +156,7 @@ onMounted(() => {
   const cfg = getSupabaseConfig()
   supabaseUrlInput.value = cfg.url
   supabaseAnonInput.value = cfg.anon
+  refreshSyncDiag()
 })
 </script>
 
@@ -272,6 +295,28 @@ onMounted(() => {
           :class="{ 'opacity-60': !auth.canSync }"
           @click="doFullPush"
         >Full Push to Cloud</button>
+        <button
+          v-if="auth.isLoggedIn"
+          class="pp-btn pp-btn-ghost"
+          @click="doSignOut"
+        >Sign Out</button>
+      </div>
+      <div class="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h3 class="text-sm font-semibold text-slate-700">Sync Status</h3>
+          <button type="button" class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs" @click="refreshSyncDiag">Refresh Status</button>
+        </div>
+        <div class="grid grid-cols-1 gap-2 text-xs text-slate-600 sm:grid-cols-2">
+          <div><span class="font-semibold text-slate-500">Last sync:</span> {{ fmtSyncTime(syncDiag.lastSyncAt) }}</div>
+          <div><span class="font-semibold text-slate-500">Last pull anchor:</span> {{ fmtSyncTime(syncDiag.lastPull) }}</div>
+          <div class="sm:col-span-2"><span class="font-semibold text-slate-500">Result:</span> {{ syncDiag.lastSyncResult || 'No sync run on this device yet' }}</div>
+          <div v-if="syncDiag.lastSyncError" class="sm:col-span-2 rounded border border-red-200 bg-white px-2 py-1 text-red-700">
+            <span class="font-semibold">Last error:</span> {{ syncDiag.lastSyncError }}
+          </div>
+        </div>
+        <p class="mt-2 text-xs text-slate-500">
+          Mobile me data missing ho to PC par Full Push, phir phone par Full Pull dabayein. Update button app shell refresh karta hai; login/local data clear nahi hota.
+        </p>
       </div>
       <p class="text-xs text-slate-500 mt-3 leading-relaxed">
         Data kam dikhe? Pehle PC par <strong>Full Push</strong>, phir phone par <strong>Full Pull</strong>.
