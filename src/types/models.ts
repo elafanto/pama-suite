@@ -309,3 +309,18 @@ export interface StockMovement extends BaseRecord {
   notes?: string
 }
 
+export type ItemStockMovementSource = 'manual' | 'purchase' | 'invoice' | 'production' | 'import'
+
+export interface ItemStockMovement extends BaseRecord {
+  item_id: string
+  date: string
+  source: ItemStockMovementSource
+  ref_type: 'manual_adjustment' | 'purchase' | 'invoice' | 'production' | 'opening' | string
+  ref_id?: string
+  qty_delta: number
+  unit: ItemUnit
+  rate?: number
+  reason_code: string
+  notes?: string
+}
+

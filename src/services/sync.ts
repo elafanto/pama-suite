@@ -4,7 +4,7 @@ import { getSupabase } from '@/services/supabase'
 import { reloadAllStores } from '@/services/reloadStores'
 import { useAuthStore } from '@/stores/auth'
 import { allocateBillNo, findDuplicateBillNoGroups, resolveNextSequence } from '@/services/invoiceNumber'
-import type { Firm, Party, Item, Invoice, Purchase, Recipe, Account, Voucher } from '@/types/models'
+import type { Firm, Party, Item, Invoice, Purchase, Recipe, Account, Voucher, ItemStockMovement } from '@/types/models'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 
 type SyncTable =
@@ -20,6 +20,7 @@ type SyncTable =
   | 'production_jobs'
   | 'production_stages'
   | 'stock_movements'
+  | 'item_stock_movements'
 
 const TABLE_MAP: Record<SyncTable, string> = {
   firms: 'firms',
@@ -34,6 +35,7 @@ const TABLE_MAP: Record<SyncTable, string> = {
   production_jobs: 'production_jobs',
   production_stages: 'production_stages',
   stock_movements: 'stock_movements',
+  item_stock_movements: 'item_stock_movements',
 }
 
 const PAYLOAD_TABLES: SyncTable[] = [
@@ -46,6 +48,7 @@ const PAYLOAD_TABLES: SyncTable[] = [
   'production_jobs',
   'production_stages',
   'stock_movements',
+  'item_stock_movements',
 ]
 
 function isNewer(remote: string, local?: string): boolean {
@@ -354,7 +357,7 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
       )
       const table = (db as any)[name] as { get: (id: string) => Promise<any>; put: (r: any) => Promise<void> }
       for (const r of rows) {
-        const payload = r.payload as Invoice | Purchase | Recipe | Account | Voucher
+        const payload = r.payload as Invoice | Purchase | Recipe | Account | Voucher | ItemStockMovement
         const rec = {
           ...payload,
           id: r.id,

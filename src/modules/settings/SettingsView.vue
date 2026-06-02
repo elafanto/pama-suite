@@ -23,6 +23,7 @@ const geminiInput = ref(settings.geminiKey)
 const supabaseUrlInput = ref('')
 const supabaseAnonInput = ref('')
 const supabaseKeyMsg = ref('')
+const includeSensitiveBackup = ref(false)
 
 const blank = (): NewFirm => ({
   name: '', gst: '', addr: '', city: '', state: '05', pin: '', phone: '', email: '',
@@ -53,7 +54,8 @@ async function save() {
 }
 
 async function doExport() {
-  const data = await exportAll()
+  if (includeSensitiveBackup.value && !confirm('Backup file me Gemini/Supabase API keys include honge. Is file ko private rakhein. Continue?')) return
+  const data = await exportAll({ includeSensitiveSettings: includeSensitiveBackup.value })
   downloadBackup(data)
 }
 
@@ -165,6 +167,10 @@ onMounted(() => {
     <section class="pp-card p-5 mb-5">
       <h2 class="font-bold text-navy mb-3">💾 Backup &amp; Import</h2>
       <p class="text-sm text-slate-500 mb-4">Export full suite JSON (including deleted records for restore) or import from PamaTools <code>pama_tools_live.json</code> / unified backup.</p>
+      <label class="flex items-start gap-2 text-sm text-slate-600 mb-3">
+        <input v-model="includeSensitiveBackup" type="checkbox" class="mt-1" />
+        <span>Include saved API keys (Gemini + Supabase local config). Use only for private encrypted storage.</span>
+      </label>
       <div class="flex flex-wrap gap-2">
         <button class="pp-btn pp-btn-primary" @click="doExport">Download Backup</button>
         <label class="pp-btn pp-btn-ghost cursor-pointer">

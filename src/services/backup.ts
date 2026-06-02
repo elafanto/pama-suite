@@ -4,11 +4,15 @@ import { allocateBillNo, findDuplicateBillNoGroups, resolveNextSequence } from '
 import { normalizeGstType } from '@/services/gst'
 import type {
   Party, Firm, Item, Invoice, Purchase, Recipe, Account, Voucher, ActivityLog,
-  ReelStock, ProductionJob, ProductionStageEntry, StockMovement,
+  ReelStock, ProductionJob, ProductionStageEntry, StockMovement, ItemStockMovement,
 } from '@/types/models'
 
 export const BACKUP_FORMAT = 'pama_suite_backup'
 export const BACKUP_VERSION = 1
+
+export interface ExportOptions {
+  includeSensitiveSettings?: boolean
+}
 
 export interface SuiteBackup {
   format: typeof BACKUP_FORMAT
@@ -27,8 +31,11 @@ export interface SuiteBackup {
   production_jobs?: ProductionJob[]
   production_stages?: ProductionStageEntry[]
   stock_movements?: StockMovement[]
+  item_stock_movements?: ItemStockMovement[]
   settings?: {
     geminiKey?: string
+    supabaseUrl?: string
+    supabaseAnon?: string
     bankEmail?: string
     rtgsAccounts?: Record<string, string>
     activeFirmId?: string
@@ -36,10 +43,10 @@ export interface SuiteBackup {
   }
 }
 
-export async function exportAll(): Promise<SuiteBackup> {
+export async function exportAll(options: ExportOptions = {}): Promise<SuiteBackup> {
   const [
     firms, parties, items, invoices, purchases, recipes, accounts, vouchers, activity_log,
-    reel_stocks, production_jobs, production_stages, stock_movements,
+    reel_stocks, production_jobs, production_stages, stock_movements, item_stock_movements,
   ] = await Promise.all([
     db.firms.toArray(),
     db.parties.toArray(),
@@ -54,6 +61,7 @@ export async function exportAll(): Promise<SuiteBackup> {
     db.production_jobs.toArray(),
     db.production_stages.toArray(),
     db.stock_movements.toArray(),
+    db.item_stock_movements.toArray(),
   ])
 
   let templates: unknown[] = []
@@ -62,19 +70,26 @@ export async function exportAll(): Promise<SuiteBackup> {
   let rtgsAccounts: Record<string, string> = {}
   try { rtgsAccounts = JSON.parse(localStorage.getItem('pama_rtgs_accounts') || '{}') } catch { /* */ }
 
+  const settings: SuiteBackup['settings'] = {
+    bankEmail: localStorage.getItem('pama_bank_email') || '',
+    rtgsAccounts,
+    activeFirmId: localStorage.getItem('pama_active_firm') || '',
+    templates,
+  }
+
+  if (options.includeSensitiveSettings) {
+    settings.geminiKey = localStorage.getItem('pama_gemini_key') || ''
+    settings.supabaseUrl = localStorage.getItem('pama_supabase_url') || ''
+    settings.supabaseAnon = localStorage.getItem('pama_supabase_anon_key') || ''
+  }
+
   return {
     format: BACKUP_FORMAT,
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
     firms, parties, items, invoices, purchases, recipes, accounts, vouchers, activity_log,
-    reel_stocks, production_jobs, production_stages, stock_movements,
-    settings: {
-      geminiKey: localStorage.getItem('pama_gemini_key') || '',
-      bankEmail: localStorage.getItem('pama_bank_email') || '',
-      rtgsAccounts,
-      activeFirmId: localStorage.getItem('pama_active_firm') || '',
-      templates,
-    },
+    reel_stocks, production_jobs, production_stages, stock_movements, item_stock_movements,
+    settings,
   }
 }
 
@@ -139,9 +154,12 @@ async function importSuiteBackup(data: any, mode: 'merge' | 'replace'): Promise<
   await upsertAll(db.production_jobs, data.production_jobs || [], 'production_jobs')
   await upsertAll(db.production_stages, data.production_stages || [], 'production_stages')
   await upsertAll(db.stock_movements, data.stock_movements || [], 'stock_movements')
+  await upsertAll(db.item_stock_movements, data.item_stock_movements || [], 'item_stock_movements')
 
   if (data.settings) {
     if (data.settings.geminiKey) localStorage.setItem('pama_gemini_key', data.settings.geminiKey)
+    if (data.settings.supabaseUrl) localStorage.setItem('pama_supabase_url', data.settings.supabaseUrl)
+    if (data.settings.supabaseAnon) localStorage.setItem('pama_supabase_anon_key', data.settings.supabaseAnon)
     if (data.settings.bankEmail) localStorage.setItem('pama_bank_email', data.settings.bankEmail)
     if (data.settings.rtgsAccounts) localStorage.setItem('pama_rtgs_accounts', JSON.stringify(data.settings.rtgsAccounts))
     if (data.settings.activeFirmId) localStorage.setItem('pama_active_firm', data.settings.activeFirmId)

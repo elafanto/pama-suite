@@ -32,6 +32,7 @@ Open the URL shown in the terminal (usually `http://localhost:5173`).
    - `003_bootstrap_user_org.sql` — RPC function for org auto-setup
    - `004_inventory_and_firm_sync_fields.sql` — stock fields + firm sync columns
    - `005_production_tracking.sql` — reel stock, production jobs, stages, stock ledger
+   - `006_item_stock_movements.sql` — item-level stock adjustment ledger
 
 5. Go to **Authentication** → **Providers** → enable **Email** (password sign-in).
 6. Go to **Settings** → **API** and copy:

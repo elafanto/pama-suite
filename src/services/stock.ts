@@ -1,4 +1,5 @@
-import type { Item, Invoice, Purchase } from '@/types/models'
+import { manualAdjustmentTotals } from '@/services/inventoryLedger'
+import type { Item, Invoice, Purchase, ItemStockMovement } from '@/types/models'
 
 export type StockStatus = 'out' | 'low' | 'ok'
 
@@ -9,6 +10,7 @@ export interface StockRow {
   opening: number
   purchased: number
   sold: number
+  adjusted: number
   onHand: number
   reorder: number
   status: StockStatus
@@ -31,6 +33,7 @@ export function computeStock(
   purchases: Purchase[],
   invoices: Invoice[],
   firmId: string,
+  movements: ItemStockMovement[] = [],
 ): StockRow[] {
   const live = items.filter((i) => !i.is_deleted && i.firm_id === firmId && i.track_stock !== false)
   const byKey = new Map<string, Item>()
@@ -59,20 +62,22 @@ export function computeStock(
   }
 
   const rows: StockRow[] = []
+  const adjustments = manualAdjustmentTotals(movements, firmId)
   for (const it of live) {
     const k1 = lineKey(it.id, it.name)
     const k2 = `name:${it.name.trim().toLowerCase()}`
     const purchased = (purchasedMap.get(k1) || 0) + (k2 !== k1 ? purchasedMap.get(k2) || 0 : 0)
     const sold = (soldMap.get(k1) || 0) + (k2 !== k1 ? soldMap.get(k2) || 0 : 0)
+    const adjusted = adjustments.get(it.id) || 0
     const opening = Number(it.opening_stock) || 0
-    const onHand = opening + purchased - sold
+    const onHand = opening + purchased - sold + adjusted
     const reorder = Number(it.reorder_level) || 0
     const rate = Number(it.purchase_rate) || Number(it.rate) || 0
     const status: StockStatus = onHand <= 0 ? 'out' : reorder > 0 && onHand <= reorder ? 'low' : 'ok'
     rows.push({
       itemId: it.id, name: it.name, unit: it.unit,
       opening, purchased, sold, onHand, reorder, status,
-      rate, value: Math.round(onHand * rate * 100) / 100,
+      adjusted, rate, value: Math.round(onHand * rate * 100) / 100,
     })
   }
   return rows.sort((a, b) => a.name.localeCompare(b.name))
