@@ -133,6 +133,7 @@ Play Store ke liye signed release bundle banani hogi (Android Studio → Generat
 | `Local only` header | `.env.local` keys check karo, dev server restart |
 | Sign up fail / RLS error | migrations `001` se `006` order me dubara verify/run karo |
 | Organization setup pending | `003_bootstrap_user_org.sql` run karo, phir Settings → Setup Organization |
+| `item_stock_movements` / schema cache sync error | Supabase SQL Editor me `supabase/migrations/006_item_stock_movements.sql` run karo, phir Sync/Full Push dabao. Local pending rows dirty rahenge. |
 | Sync 0 records | Pehle local data ho (Import JSON), phir Full Push |
 | Phone par data kam dikhe | PC par Full Push, phone par Full Pull, phir Sync Status check karo |
 | Realtime nahi | Supabase → Database → Publications → `supabase_realtime` me tables ON |

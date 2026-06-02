@@ -9,6 +9,8 @@ const search = ref('')
 const roleFilter = ref<'all' | PartyRole>('all')
 const showModal = ref(false)
 const editingId = ref<string | null>(null)
+const deleteTarget = ref<Party | null>(null)
+const deleteConfirmText = ref('')
 
 const blank = (): NewParty => ({
   name: '', roles: ['customer'], gst: '', phone: '', email: '', addr: '',
@@ -24,6 +26,10 @@ const filtered = computed(() => {
     if (!q) return true
     return p.name.toLowerCase().includes(q) || p.gst.toLowerCase().includes(q) || p.phone.includes(q)
   })
+})
+const deleteConfirmed = computed(() => {
+  const target = deleteTarget.value
+  return !!target && deleteConfirmText.value.trim() === target.name
 })
 
 function openAdd() {
@@ -53,8 +59,18 @@ async function save() {
   else await store.add({ ...form })
   showModal.value = false
 }
-async function del(p: Party) {
-  if (confirm(`Delete "${p.name}"?`)) await store.remove(p.id)
+function openDelete(p: Party) {
+  deleteTarget.value = p
+  deleteConfirmText.value = ''
+}
+function closeDelete() {
+  deleteTarget.value = null
+  deleteConfirmText.value = ''
+}
+async function confirmDelete() {
+  if (!deleteTarget.value || !deleteConfirmed.value) return
+  await store.remove(deleteTarget.value.id)
+  closeDelete()
 }
 
 onMounted(store.load)
@@ -111,7 +127,7 @@ onMounted(store.load)
             <td class="px-4 py-2.5 hidden lg:table-cell text-slate-600">{{ p.city || '—' }}</td>
             <td class="px-4 py-2.5 text-right whitespace-nowrap">
               <button class="pp-btn pp-btn-ghost !px-2 !py-1 mr-1" @click="openEdit(p)">✏️</button>
-              <button class="pp-btn pp-btn-danger !px-2 !py-1" @click="del(p)">🗑️</button>
+              <button class="pp-btn pp-btn-danger !px-2 !py-1" @click="openDelete(p)">🗑️</button>
             </td>
           </tr>
         </tbody>
@@ -162,6 +178,37 @@ onMounted(store.load)
         <div class="flex justify-end gap-2 pt-2">
           <button class="pp-btn pp-btn-ghost" @click="showModal = false">Cancel</button>
           <button class="pp-btn pp-btn-primary" @click="save">Save</button>
+        </div>
+      </div>
+    </PpModal>
+
+    <PpModal
+      v-if="deleteTarget"
+      title="Delete Party?"
+      :close-on-backdrop="false"
+      @close="closeDelete"
+    >
+      <div class="space-y-4">
+        <div class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <p class="font-semibold">This will move the party to Recycle Bin, not permanently delete it.</p>
+          <p class="mt-1">Party can be restored later from Recycle Bin. Type the exact party name to confirm.</p>
+        </div>
+
+        <div>
+          <label class="pp-label">Type party name: <span class="font-semibold">{{ deleteTarget.name }}</span></label>
+          <input
+            v-model="deleteConfirmText"
+            class="pp-input"
+            autocomplete="off"
+            :placeholder="deleteTarget.name"
+          />
+        </div>
+
+        <div class="flex justify-end gap-2 pt-2">
+          <button class="pp-btn pp-btn-ghost" @click="closeDelete">Cancel</button>
+          <button class="pp-btn pp-btn-danger" :disabled="!deleteConfirmed" :class="{ 'opacity-50': !deleteConfirmed }" @click="confirmDelete">
+            Move to Recycle Bin
+          </button>
         </div>
       </div>
     </PpModal>

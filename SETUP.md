@@ -128,6 +128,7 @@ npm run preview
 | Issue | Fix |
 |-------|-----|
 | Sync says "Login required" | Sign in and ensure `.env.local` has valid Supabase keys |
+| Sync says `item_stock_movements` table missing / schema cache error | Supabase SQL Editor me `supabase/migrations/006_item_stock_movements.sql` run karein, phir Sync/Full Push dobara dabayein. Local pending rows dirty rahenge. |
 | RLS / permission errors | Re-run `001_initial_schema.sql`; check user is in `org_members` |
 | Blank after deploy | Confirm Vercel env vars are set for the **Production** environment |
 | AI scan fails | Save Gemini key in Settings; check browser network to Google API |

@@ -61,12 +61,34 @@ const EPOCH_ISO = '1970-01-01T00:00:00.000Z'
 const LAST_SYNC_AT_KEY = 'pama_last_sync_at'
 const LAST_SYNC_RESULT_KEY = 'pama_last_sync_result'
 const LAST_SYNC_ERROR_KEY = 'pama_last_sync_error'
+const OPTIONAL_TABLE_MIGRATIONS: Partial<Record<SyncTable, string>> = {
+  item_stock_movements: '006_item_stock_movements.sql',
+}
 
 export interface SyncDiagnostics {
   lastPull: string
   lastSyncAt: string
   lastSyncResult: string
   lastSyncError: string
+}
+
+function isMissingRemoteTableError(message: string): boolean {
+  return /Could not find the table .* in the schema cache|relation .* does not exist/i.test(message)
+}
+
+function optionalTableWarning(localName: SyncTable, message: string): string {
+  const migration = OPTIONAL_TABLE_MIGRATIONS[localName]
+  if (!migration || !isMissingRemoteTableError(message)) return ''
+  return `Supabase table "${TABLE_MAP[localName]}" missing. Run supabase/migrations/${migration} in Supabase SQL Editor. Local pending rows stay dirty and will sync after migration.`
+}
+
+function uniqWarnings(warnings: string[]): string[] {
+  return [...new Set(warnings.filter(Boolean))]
+}
+
+function withWarnings(message: string, warnings?: string[]): string {
+  const unique = uniqWarnings(warnings || [])
+  return unique.length ? `${message}. ${unique.join(' ')}` : message
 }
 
 function readLocalStorage(key: string): string {
@@ -131,7 +153,7 @@ async function upsertCloudRow(
   remoteName: string,
   rec: any,
   cloudUpdatedAt: string,
-): Promise<string | null> {
+): Promise<{ error?: string; skipped?: string }> {
   const row: any = {
     id: rec.id,
     org_id: orgId,
@@ -182,7 +204,12 @@ async function upsertCloudRow(
     }
     ;({ error } = await sb.from(remoteName).upsert(row))
   }
-  return error?.message || null
+  if (error) {
+    const skipped = optionalTableWarning(localName, error.message || '')
+    if (skipped) return { skipped }
+    return { error: error.message || 'Cloud upsert failed' }
+  }
+  return {}
 }
 
 async function repairLocalInvoiceNumberState(): Promise<number> {
@@ -214,7 +241,7 @@ async function repairLocalInvoiceNumberState(): Promise<number> {
 }
 
 /** Push all _dirty records to Supabase (jsonb payload tables). */
-export async function pushDirtyToCloud(): Promise<{ ok: boolean; pushed: number; error?: string }> {
+export async function pushDirtyToCloud(): Promise<{ ok: boolean; pushed: number; error?: string; warnings?: string[] }> {
   const auth = useAuthStore()
   const sb = getSupabase()
   if (!sb || !auth.canSync || !auth.orgId) {
@@ -222,6 +249,7 @@ export async function pushDirtyToCloud(): Promise<{ ok: boolean; pushed: number;
   }
 
   let pushed = 0
+  const warnings: string[] = []
   const orgId = auth.orgId
   const cloudUpdatedAt = nowISO()
 
@@ -231,19 +259,23 @@ export async function pushDirtyToCloud(): Promise<{ ok: boolean; pushed: number;
     const dirty = await table.filter((r: any) => r._dirty === true).toArray()
 
     for (const rec of dirty) {
-      const err = await upsertCloudRow(sb, orgId, localName, remoteName, rec, cloudUpdatedAt)
-      if (err) return { ok: false, pushed, error: err }
+      const result = await upsertCloudRow(sb, orgId, localName, remoteName, rec, cloudUpdatedAt)
+      if (result.error) return { ok: false, pushed, error: result.error, warnings: uniqWarnings(warnings) }
+      if (result.skipped) {
+        warnings.push(result.skipped)
+        break
+      }
 
       await table.update(rec.id, { _dirty: false, updated_at: cloudUpdatedAt })
       pushed++
     }
   }
 
-  return { ok: true, pushed }
+  return { ok: true, pushed, warnings: uniqWarnings(warnings) }
 }
 
 /** Push every local record to cloud (use after import or when cloud is missing data). */
-export async function pushAllToCloud(): Promise<{ ok: boolean; pushed: number; error?: string }> {
+export async function pushAllToCloud(): Promise<{ ok: boolean; pushed: number; error?: string; warnings?: string[] }> {
   const auth = useAuthStore()
   const sb = getSupabase()
   if (!sb || !auth.canSync || !auth.orgId) {
@@ -251,6 +283,7 @@ export async function pushAllToCloud(): Promise<{ ok: boolean; pushed: number; e
   }
 
   let pushed = 0
+  const warnings: string[] = []
   const orgId = auth.orgId
   const cloudUpdatedAt = nowISO()
 
@@ -260,18 +293,23 @@ export async function pushAllToCloud(): Promise<{ ok: boolean; pushed: number; e
     const rows = await table.toArray()
 
     for (const rec of rows) {
-      const err = await upsertCloudRow(sb, orgId, localName, remoteName, rec, cloudUpdatedAt)
-      if (err) return { ok: false, pushed, error: err }
+      const result = await upsertCloudRow(sb, orgId, localName, remoteName, rec, cloudUpdatedAt)
+      if (result.error) return { ok: false, pushed, error: result.error, warnings: uniqWarnings(warnings) }
+      if (result.skipped) {
+        warnings.push(result.skipped)
+        for (const row of rows) await table.update(row.id, { _dirty: true })
+        break
+      }
       await table.update(rec.id, { _dirty: false, updated_at: cloudUpdatedAt })
       pushed++
     }
   }
 
-  return { ok: true, pushed }
+  return { ok: true, pushed, warnings: uniqWarnings(warnings) }
 }
 
 /** Pull cloud records updated after `since` and merge into Dexie when remote is newer. */
-export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pulled: number; _maxCloudTs?: string; error?: string }> {
+export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pulled: number; _maxCloudTs?: string; error?: string; warnings?: string[] }> {
   const auth = useAuthStore()
   const sb = getSupabase()
   if (!sb || !auth.canSync || !auth.orgId) {
@@ -282,6 +320,7 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
   const sinceIso = since || localStorage.getItem('pama_last_pull') || EPOCH_ISO
   let pulled = 0
   let _maxCloudTs = ''
+  const warnings: string[] = []
 
   const merge = async <T extends { id: string; updated_at: string }>(
     table: { get: (id: string) => Promise<T | undefined>; put: (r: T) => Promise<unknown> },
@@ -389,13 +428,23 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
     }
 
     for (const name of PAYLOAD_TABLES) {
-      const rows = await fetchAllOrgRows(
-        sb,
-        TABLE_MAP[name],
-        orgId,
-        sinceIso,
-        'id, firm_id, payload, is_deleted, created_at, updated_at',
-      )
+      let rows: any[]
+      try {
+        rows = await fetchAllOrgRows(
+          sb,
+          TABLE_MAP[name],
+          orgId,
+          sinceIso,
+          'id, firm_id, payload, is_deleted, created_at, updated_at',
+        )
+      } catch (e: any) {
+        const skipped = optionalTableWarning(name, e?.message || '')
+        if (skipped) {
+          warnings.push(skipped)
+          continue
+        }
+        throw e
+      }
       const table = (db as any)[name] as { get: (id: string) => Promise<any>; put: (r: any) => Promise<void> }
       for (const r of rows) {
         const payload = r.payload as Invoice | Purchase | Recipe | Account | Voucher | ItemStockMovement
@@ -419,7 +468,7 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
   // a device whose clock is behind never misses recently-updated records.
   if (_maxCloudTs) localStorage.setItem('pama_last_pull', _maxCloudTs)
   else localStorage.setItem('pama_last_pull', new Date().toISOString())
-  return { ok: true, pulled, _maxCloudTs }
+  return { ok: true, pulled, _maxCloudTs, warnings: uniqWarnings(warnings) }
 }
 
 /** Re-download all cloud data (fixes partial sync on new phone / after 1000-row limit). */
@@ -433,8 +482,11 @@ export async function runFullPullFromCloud(): Promise<string> {
   }
   const repaired = await repairLocalInvoiceNumberState()
   if (pull.pulled > 0) await reloadAllStores()
-  const message = pull.pulled || repaired ? `Full pull: ${pull.pulled} records${repaired ? `, repaired ${repaired}` : ''}` : 'Cloud has no data for this account'
-  rememberSyncResult(message)
+  const message = withWarnings(
+    pull.pulled || repaired ? `Full pull: ${pull.pulled} records${repaired ? `, repaired ${repaired}` : ''}` : 'Cloud has no data for this account',
+    pull.warnings,
+  )
+  rememberSyncResult(message, uniqWarnings(pull.warnings || []).join(' '))
   return message
 }
 
@@ -446,8 +498,8 @@ export async function runFullPushToCloud(): Promise<string> {
     rememberSyncResult(message, message)
     return message
   }
-  const message = push.pushed ? `Full push: ${push.pushed} records` : 'No local records to push'
-  rememberSyncResult(message)
+  const message = withWarnings(push.pushed ? `Full push: ${push.pushed} records` : 'No local records to push', push.warnings)
+  rememberSyncResult(message, uniqWarnings(push.warnings || []).join(' '))
   return message
 }
 
@@ -470,8 +522,9 @@ export async function runSync(): Promise<string> {
   if (pull.pulled) parts.push(`pulled ${pull.pulled}`)
   if (repaired) parts.push(`repaired ${repaired}`)
   if (push.pushed) parts.push(`pushed ${push.pushed}`)
-  const message = parts.length ? `Synced (${parts.join(', ')})` : 'Already up to date'
-  rememberSyncResult(message)
+  const warnings = uniqWarnings([...(pull.warnings || []), ...(push.warnings || [])])
+  const message = withWarnings(parts.length ? `Synced (${parts.join(', ')})` : 'Already up to date', warnings)
+  rememberSyncResult(message, warnings.join(' '))
   return message
 }
 

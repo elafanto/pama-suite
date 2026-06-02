@@ -139,6 +139,10 @@ function refreshSyncDiag() {
   syncDiag.value = getSyncDiagnostics()
 }
 
+function isMigration006SyncIssue(value: string) {
+  return /item_stock_movements|006_item_stock_movements/i.test(value)
+}
+
 function fmtSyncTime(value: string) {
   if (!value) return 'Never'
   const d = new Date(value)
@@ -312,6 +316,9 @@ onMounted(() => {
           <div class="sm:col-span-2"><span class="font-semibold text-slate-500">Result:</span> {{ syncDiag.lastSyncResult || 'No sync run on this device yet' }}</div>
           <div v-if="syncDiag.lastSyncError" class="sm:col-span-2 rounded border border-red-200 bg-white px-2 py-1 text-red-700">
             <span class="font-semibold">Last error:</span> {{ syncDiag.lastSyncError }}
+            <p v-if="isMigration006SyncIssue(syncDiag.lastSyncError)" class="mt-1 text-xs text-red-600">
+              Fix: Supabase SQL Editor me <code>supabase/migrations/006_item_stock_movements.sql</code> run karein. Local item stock movement rows dirty rahenge; migration ke baad Sync/Full Push dabayein.
+            </p>
           </div>
         </div>
         <p class="mt-2 text-xs text-slate-500">
