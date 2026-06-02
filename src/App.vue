@@ -12,6 +12,7 @@ const auth = useAuthStore()
 const sidebarOpen = ref(false)
 const clock = ref('')
 const syncing = ref(false)
+const refreshingApp = ref(false)
 const syncMsg = ref('')
 
 const cloudLabel = computed(() => {
@@ -50,6 +51,58 @@ async function cloudSync() {
     syncMsg.value = await runSync()
   } finally {
     syncing.value = false
+  }
+}
+
+async function clearAppUpdateCaches() {
+  if (!('caches' in window)) return
+
+  const cacheNames = await window.caches.keys()
+  const appShellCaches = cacheNames.filter((name) => {
+    const normalized = name.toLowerCase()
+    return normalized.includes('workbox') || normalized.includes('precache') || normalized.includes('vite-pwa')
+  })
+
+  await Promise.all(appShellCaches.map((name) => window.caches.delete(name)))
+}
+
+async function activateWaitingWorker(registration: ServiceWorkerRegistration) {
+  if (!registration.waiting) return
+
+  await new Promise<void>((resolve) => {
+    let resolved = false
+    const finish = () => {
+      if (resolved) return
+      resolved = true
+      window.clearTimeout(timeout)
+      navigator.serviceWorker.removeEventListener('controllerchange', finish)
+      resolve()
+    }
+    const timeout = window.setTimeout(finish, 1500)
+
+    navigator.serviceWorker.addEventListener('controllerchange', finish)
+    registration.waiting?.postMessage({ type: 'SKIP_WAITING' })
+  })
+}
+
+async function refreshApp() {
+  if (refreshingApp.value) return
+
+  refreshingApp.value = true
+  try {
+    if ('serviceWorker' in navigator) {
+      const registration = await navigator.serviceWorker.getRegistration()
+      if (registration) {
+        await registration.update()
+        await activateWaitingWorker(registration)
+      }
+    }
+
+    await clearAppUpdateCaches()
+  } catch (err) {
+    console.warn('App refresh update check failed; reloading anyway.', err)
+  } finally {
+    window.location.reload()
   }
 }
 
@@ -98,6 +151,15 @@ onUnmounted(() => {
         </div>
       </RouterLink>
       <div class="ml-auto flex items-center gap-1.5 sm:gap-3 shrink-0">
+        <button
+          type="button"
+          class="pp-btn pp-btn-ghost !py-1 !px-2 text-[10px] sm:text-xs !text-sky-100 !bg-white/10 hover:!bg-white/20 border border-white/20 whitespace-nowrap"
+          :disabled="refreshingApp"
+          title="Check for app update and reload"
+          @click="refreshApp"
+        >
+          {{ refreshingApp ? 'Updating…' : 'Update' }}
+        </button>
         <RouterLink
           :to="cloudTarget"
           class="text-[10px] sm:text-[11px] text-sky-300 hover:text-white max-w-[128px] sm:max-w-[260px] truncate no-underline"
