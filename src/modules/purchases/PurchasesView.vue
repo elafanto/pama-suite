@@ -809,31 +809,31 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="p-6 max-w-7xl mx-auto space-y-6">
+  <div class="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
     <!-- Header -->
-    <div class="flex items-center justify-between">
-      <div>
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div class="min-w-0">
         <h1 class="text-2xl font-bold tracking-tight">Purchases Dashboard</h1>
         <p class="text-sm text-slate-500">Record incoming inventory bills and track vendor liabilities</p>
       </div>
-      <div class="flex gap-2">
+      <div class="flex w-full flex-wrap gap-2 sm:w-auto sm:flex-nowrap">
         <button 
           @click="activeTab = 'new'"
-          class="pp-btn"
+          class="pp-btn min-w-[9rem] flex-1 sm:flex-none"
           :class="activeTab === 'new' ? 'pp-btn-primary' : 'pp-btn-ghost'"
         >
           ➕ Record Bill
         </button>
         <button 
           @click="activeTab = 'bulk'"
-          class="pp-btn"
+          class="pp-btn min-w-[9rem] flex-1 sm:flex-none"
           :class="activeTab === 'bulk' ? 'pp-btn-primary' : 'pp-btn-ghost'"
         >
           ➕ Multiple Bills
         </button>
         <button 
           @click="activeTab = 'history'"
-          class="pp-btn"
+          class="pp-btn min-w-[9rem] flex-1 sm:flex-none"
           :class="activeTab === 'history' ? 'pp-btn-primary' : 'pp-btn-ghost'"
         >
           📜 Bill Logs
@@ -1128,27 +1128,28 @@ onMounted(() => {
     </div>
 
     <!-- Active Tab: Quick Multiple Purchases -->
-    <div v-else-if="activeTab === 'bulk'" class="pp-card p-6 space-y-4">
+    <div v-else-if="activeTab === 'bulk'" class="pp-card p-4 sm:p-6 space-y-4">
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-4">
         <div>
           <h2 class="text-md font-semibold text-slate-800">Multiple Purchase Bills</h2>
           <p class="text-xs text-slate-500">Ek ya multiple PDF me purchase invoices upload karo, review karo, phir sab ek sath save karo.</p>
         </div>
-        <div class="flex gap-2">
-          <button @click="addBulkRow()" class="pp-btn pp-btn-ghost">➕ Add Bill Row</button>
-          <button @click="saveBulkPurchases()" class="pp-btn pp-btn-primary">Save All Bills</button>
+        <div class="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+          <button @click="addBulkRow()" class="pp-btn pp-btn-ghost w-full sm:w-auto">➕ Add Bill Row</button>
+          <button @click="saveBulkPurchases()" class="pp-btn pp-btn-primary w-full sm:w-auto">Save All Bills</button>
         </div>
       </div>
 
       <div class="border-2 border-dashed border-slate-300 rounded-xl p-4 bg-slate-50">
         <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-          <div>
+          <div class="min-w-0">
             <p class="text-sm font-semibold text-navy">AI Multi-Bill PDF Scan</p>
             <p class="text-xs text-slate-500">Ek popup me multiple PDF select kar sakte ho. Har PDF me ek ya multiple bills ho sakte hain.</p>
+            <p class="text-xs text-slate-400">Mobile file picker agar multiple select restrict kare, phir bhi PDF upload button yahin se use karo.</p>
           </div>
-          <label class="pp-btn pp-btn-primary cursor-pointer inline-block text-center">
+          <label class="pp-btn pp-btn-primary w-full cursor-pointer text-center sm:w-auto">
             {{ bulkScanLoading ? 'Scanning PDF...' : 'Upload Purchase PDFs' }}
-            <input type="file" accept="application/pdf" multiple class="hidden" :disabled="bulkScanLoading" @change="scanBulkPurchasePdf" />
+            <input type="file" accept="application/pdf,.pdf" multiple class="sr-only" :disabled="bulkScanLoading" @change="scanBulkPurchasePdf" />
           </label>
         </div>
         <p v-if="bulkScanFileName" class="text-xs mt-2 text-slate-500">Selected: {{ bulkScanFileName }}</p>
