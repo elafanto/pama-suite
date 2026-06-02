@@ -144,6 +144,12 @@ function exportOutstanding() {
     ['Customer', '0-30', '31-60', '61-90', '90+', 'Total', 'Bills'],
     agingRows.value.map(r => [r.customer, n2(r.d0_30), n2(r.d31_60), n2(r.d61_90), n2(r.d90plus), n2(r.total), String(r.billCount)]))
 }
+
+function exportItemSales() {
+  exportCsv('Item_Sales.csv',
+    ['Item', 'Bills', 'Qty', 'Value'],
+    itemRows.value.map(r => [r.name, String(r.count), n2(r.qty), n2(r.value)]))
+}
 </script>
 
 <template>
@@ -216,6 +222,10 @@ function exportOutstanding() {
 
     <!-- Item sales -->
     <div v-if="tab === 'items'" class="pp-card overflow-x-auto">
+      <div class="flex justify-between items-center p-3 border-b">
+        <span class="font-semibold">Item Sales</span>
+        <button class="pp-btn pp-btn-primary !py-1.5 !text-xs" @click="exportItemSales">📥 Export CSV</button>
+      </div>
       <table class="w-full text-sm">
         <thead><tr class="border-b"><th>Item</th><th class="text-right">Bills</th><th class="text-right">Qty</th><th class="text-right">Value</th></tr></thead>
         <tbody>

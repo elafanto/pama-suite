@@ -83,6 +83,12 @@ const reelFilters = reactive({
   status: 'all',
 })
 
+const reportFilters = reactive({
+  from: '',
+  to: '',
+  job_id: '',
+})
+
 const stagePairs: Record<ProductionStage, { input: ProductionStockType; output: ProductionStockType }> = {
   corrugation: { input: 'raw_reel', output: '2ply' },
   paper_cutting: { input: '2ply', output: 'cut_sheet' },
@@ -134,6 +140,101 @@ const recentReelMoves = computed(() => {
     .filter((m) => m.stock_type === 'raw_reel')
     .slice(0, 12)
 })
+const reelBalanceReportRows = computed(() => {
+  const rows = new Map<string, {
+    key: string
+    paper_type: PaperType
+    gsm: string
+    bf: string
+    deckle: string
+    color: string
+    reels: number
+    activeReels: number
+    openingWeight: number
+    currentWeight: number
+  }>()
+
+  for (const reel of production.reels) {
+    const row = {
+      paper_type: paperTypeOf(reel),
+      gsm: reel.gsm || '-',
+      bf: reel.bf || '-',
+      deckle: reel.deckle_size || '-',
+      color: reel.color || '-',
+    }
+    const key = [row.paper_type, row.gsm, row.bf, row.deckle, row.color].join('|')
+    if (!rows.has(key)) rows.set(key, { key, ...row, reels: 0, activeReels: 0, openingWeight: 0, currentWeight: 0 })
+    const out = rows.get(key)!
+    out.reels += 1
+    if (reel.status === 'active' && reel.current_weight > 0) out.activeReels += 1
+    out.openingWeight += Number(reel.opening_weight) || 0
+    out.currentWeight += Number(reel.current_weight) || 0
+  }
+
+  return [...rows.values()].sort((a, b) =>
+    a.paper_type.localeCompare(b.paper_type) ||
+    a.gsm.localeCompare(b.gsm, undefined, { numeric: true }) ||
+    a.bf.localeCompare(b.bf, undefined, { numeric: true }) ||
+    a.deckle.localeCompare(b.deckle, undefined, { numeric: true }) ||
+    a.color.localeCompare(b.color)
+  )
+})
+const reelConsumptionReportRows = computed(() => {
+  const reelsById = new Map(production.reels.map((reel) => [reel.id, reel]))
+  const rows = new Map<string, {
+    key: string
+    date: string
+    jobId: string
+    job: string
+    reels: Set<string>
+    entries: number
+    usedWeight: number
+  }>()
+
+  for (const move of production.movements) {
+    if (move.stock_type !== 'raw_reel' || (Number(move.weight_out) || 0) <= 0) continue
+    if (!matchesReportFilters(move.date, move.job_id)) continue
+    const jobId = move.job_id || ''
+    const key = `${move.date}|${jobId}`
+    if (!rows.has(key)) rows.set(key, { key, date: move.date, jobId, job: jobLabel(jobId), reels: new Set(), entries: 0, usedWeight: 0 })
+    const out = rows.get(key)!
+    const reelNo = move.stock_ref_id ? reelsById.get(move.stock_ref_id)?.reel_no : ''
+    if (reelNo) out.reels.add(reelNo)
+    out.entries += 1
+    out.usedWeight += Number(move.weight_out) || 0
+  }
+
+  return [...rows.values()]
+    .map((row) => ({ ...row, reelCount: row.reels.size }))
+    .sort((a, b) => b.date.localeCompare(a.date) || a.job.localeCompare(b.job))
+})
+const wasteReportRows = computed(() => {
+  const rows = new Map<string, {
+    key: string
+    date: string
+    jobId: string
+    job: string
+    inputWeight: number
+    outputWeight: number
+    wasteWeight: number
+    wasteQty: number
+  }>()
+
+  for (const stage of production.stages) {
+    if (!matchesReportFilters(stage.date, stage.job_id)) continue
+    const key = `${stage.date}|${stage.job_id}`
+    if (!rows.has(key)) rows.set(key, { key, date: stage.date, jobId: stage.job_id, job: jobLabel(stage.job_id), inputWeight: 0, outputWeight: 0, wasteWeight: 0, wasteQty: 0 })
+    const out = rows.get(key)!
+    out.inputWeight += Number(stage.input_weight) || 0
+    out.outputWeight += Number(stage.output_weight) || 0
+    out.wasteWeight += Number(stage.waste_weight) || 0
+    out.wasteQty += Number(stage.waste_qty) || 0
+  }
+
+  return [...rows.values()]
+    .map((row) => ({ ...row, wastePercent: wastePercent(row.wasteWeight, row.inputWeight, row.outputWeight) }))
+    .sort((a, b) => b.date.localeCompare(a.date) || a.job.localeCompare(b.job))
+})
 
 watch(() => firmStore.activeFirmId, () => {
   production.load()
@@ -153,6 +254,41 @@ function n2(v: number) {
 
 function paperTypeOf(reel: Pick<ReelStock, 'paper_type'>) {
   return normalizePaperType(reel.paper_type)
+}
+
+function matchesReportFilters(date: string, jobId?: string) {
+  if (reportFilters.from && date < reportFilters.from) return false
+  if (reportFilters.to && date > reportFilters.to) return false
+  if (reportFilters.job_id && jobId !== reportFilters.job_id) return false
+  return true
+}
+
+function jobLabel(jobId?: string) {
+  if (!jobId) return 'No job'
+  const job = production.jobs.find((j) => j.id === jobId)
+  return job ? `${job.job_no} - ${job.customer_name}` : 'Unknown job'
+}
+
+function wastePercent(wasteWeight: number, inputWeight: number, outputWeight: number) {
+  const base = inputWeight > 0 ? inputWeight : outputWeight + wasteWeight
+  return base > 0 ? (wasteWeight / base) * 100 : 0
+}
+
+function exportCsv(filename: string, headers: string[], rows: string[][]) {
+  const csv = [headers.join(','), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\n')
+  const blob = new Blob([csv], { type: 'text/csv' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = filename
+  a.click()
+}
+
+function exportProductionBalance() {
+  const job = production.jobs.find((j) => j.id === selectedJobId.value)
+  const suffix = job ? `_${job.job_no}` : ''
+  exportCsv(`Production_Stock_Balance${suffix}.csv`,
+    ['Stock Type', 'Qty', 'Weight KG', 'Waste Qty', 'Waste KG'],
+    balanceRows.value.map((row) => [row.label, n2(row.qty), n2(row.weight), n2(row.wasteQty), n2(row.wasteWeight)]))
 }
 
 function applyStageDefaults() {
@@ -735,10 +871,13 @@ onMounted(async () => {
     <div v-else class="pp-card p-6">
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-4 mb-4">
         <h2 class="font-semibold">Production Stock Balance</h2>
-        <select v-model="selectedJobId" class="pp-input sm:w-80">
-          <option value="">All jobs</option>
-          <option v-for="job in production.jobs" :key="job.id" :value="job.id">{{ job.job_no }} - {{ job.customer_name }}</option>
-        </select>
+        <div class="flex flex-col sm:flex-row gap-2 sm:items-center">
+          <select v-model="selectedJobId" class="pp-input sm:w-80">
+            <option value="">All jobs</option>
+            <option v-for="job in production.jobs" :key="job.id" :value="job.id">{{ job.job_no }} - {{ job.customer_name }}</option>
+          </select>
+          <button class="pp-btn pp-btn-primary !py-2 !text-xs" @click="exportProductionBalance">📥 Export CSV</button>
+        </div>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <div v-for="row in balanceRows" :key="row.type" class="border rounded-xl p-4 bg-white">
