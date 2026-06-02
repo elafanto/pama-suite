@@ -45,11 +45,30 @@ export function newStockMovement(data: Omit<StockMovement, 'id' | 'created_at' |
   return plain({ ...data, id: uid(), created_at: now, updated_at: now, is_deleted: false, _dirty: true })
 }
 
-export async function createReelsFromPurchase(purchase: Purchase) {
-  const existing = await db.reel_stocks.where('purchase_id').equals(purchase.id).toArray().catch(() => [])
-  const existingIds = new Set(existing.filter((r) => !r.is_deleted).map((r) => r.reel_no.trim().toLowerCase()))
-  const now = nowISO()
-  let count = 0
+const CONSUMABLE_STOCK_TYPES = new Set<ProductionStockType>(['glue', 'ink', 'stitching_wire'])
+
+interface PurchaseReelSpec {
+  reel_no: string
+  paper_type: PaperType
+  deckle_size: string
+  gsm: string
+  bf: string
+  color: string
+  opening_weight: number
+  rate: number
+  note: string
+}
+
+function roundWeight(value: number) {
+  return Math.round((Number(value) || 0) * 1000) / 1000
+}
+
+function reelKey(reelNo: string) {
+  return reelNo.trim().toLowerCase()
+}
+
+function purchaseReelSpecs(purchase: Purchase): PurchaseReelSpec[] {
+  const specs: PurchaseReelSpec[] = []
   let autoSeq = 1
 
   for (const row of purchase.items) {
@@ -57,7 +76,7 @@ export async function createReelsFromPurchase(purchase: Purchase) {
     const reelCount = Math.max(1, Math.floor(Number(row.reel_count) || 1))
     const totalWeight = Number(row.reel_weight || row.qty || 0)
     // P0 stores one line-level reel weight; split it evenly until per-reel weights exist.
-    const perReelWeight = reelCount > 0 ? Math.round((totalWeight / reelCount) * 1000) / 1000 : totalWeight
+    const perReelWeight = reelCount > 0 ? roundWeight(totalWeight / reelCount) : roundWeight(totalWeight)
     const manualBase = (row.reel_no || '').trim()
 
     for (let reelIdx = 0; reelIdx < reelCount; reelIdx++) {
@@ -67,34 +86,164 @@ export async function createReelsFromPurchase(purchase: Purchase) {
         : autoNo
       autoSeq++
 
-      const reelNoKey = reelNo.trim().toLowerCase()
-      if (!reelNoKey || existingIds.has(reelNoKey)) continue
-      existingIds.add(reelNoKey)
-
-      const reel: ReelStock = plain({
-        id: uid(),
-        firm_id: purchase.firm_id,
+      if (!reelKey(reelNo)) continue
+      const paperType = normalizePaperType(row.paper_type)
+      specs.push({
         reel_no: reelNo,
-        paper_type: normalizePaperType(row.paper_type),
-        supplier_id: purchase.supplier_id,
-        supplier_name: purchase.supplier_name,
-        purchase_id: purchase.id,
-        purchase_bill_no: purchase.bill_no,
+        paper_type: paperType,
         deckle_size: row.deckle_size || '',
         gsm: row.gsm || '',
         bf: row.bf || '',
         color: row.color || 'NS',
         opening_weight: perReelWeight,
-        current_weight: perReelWeight,
         rate: Number(row.rate) || 0,
-        status: perReelWeight > 0 ? 'active' : 'consumed',
-        created_at: now,
-        updated_at: now,
-        is_deleted: false,
-        _dirty: true,
-      }) as ReelStock
-      await db.reel_stocks.add(reel)
-      await db.stock_movements.add(newStockMovement({
+        note: `${paperType} reel ${reelNo} from purchase ${purchase.bill_no}${reelCount > 1 ? ` (${reelIdx + 1}/${reelCount}, split from ${totalWeight} KG line weight)` : ''}`,
+      })
+    }
+  }
+
+  return specs
+}
+
+export function purchaseReelStockChanged(before: Purchase, after: Purchase) {
+  const signature = (purchase: Purchase) => JSON.stringify(purchaseReelSpecs(purchase).map((spec) => ({
+    reel_no: spec.reel_no,
+    paper_type: spec.paper_type,
+    deckle_size: spec.deckle_size,
+    gsm: spec.gsm,
+    bf: spec.bf,
+    color: spec.color,
+    opening_weight: spec.opening_weight,
+    rate: spec.rate,
+  })))
+  return signature(before) !== signature(after)
+}
+
+export async function getPurchaseReelConsumptionHistory(purchaseId: string) {
+  const reels = await db.reel_stocks.where('purchase_id').equals(purchaseId).toArray().catch(() => [])
+  const reelIds = new Set(reels.map((r) => r.id))
+  if (reelIds.size === 0) return []
+
+  return db.stock_movements
+    .filter((movement) =>
+      !movement.is_deleted &&
+      movement.source !== 'purchase' &&
+      !!movement.stock_ref_id &&
+      reelIds.has(movement.stock_ref_id),
+    )
+    .toArray()
+}
+
+export async function assertPurchaseReelsHaveNoConsumptionHistory(purchaseId: string, action: 'update' | 'delete') {
+  const history = await getPurchaseReelConsumptionHistory(purchaseId)
+  if (history.length === 0) return
+  const verb = action === 'delete' ? 'delete this purchase' : 'edit these paper reel lines'
+  throw new Error(`Cannot ${verb}: one or more reels from this purchase already have production/consumption history. Adjust the reel usage first, or make a non-stock purchase edit.`)
+}
+
+export async function createReelsFromPurchase(purchase: Purchase) {
+  const specs = purchaseReelSpecs(purchase)
+  const existing = await db.reel_stocks.where('purchase_id').equals(purchase.id).toArray().catch(() => [])
+  const existingByNo = new Map<string, ReelStock[]>()
+  for (const reel of existing) {
+    const key = reelKey(reel.reel_no)
+    if (!key) continue
+    existingByNo.set(key, [...(existingByNo.get(key) || []), reel])
+  }
+  for (const reels of existingByNo.values()) {
+    reels.sort((a, b) => Number(a.is_deleted) - Number(b.is_deleted))
+  }
+
+  const existingMovements = await db.stock_movements
+    .where('ref_id')
+    .equals(purchase.id)
+    .filter((m) => m.source === 'purchase' && m.stock_type === 'raw_reel')
+    .toArray()
+  const usedMovementIds = new Set<string>()
+  const now = nowISO()
+  let count = 0
+
+  await db.transaction('rw', db.reel_stocks, db.stock_movements, async () => {
+    for (const spec of specs) {
+      const candidates = existingByNo.get(reelKey(spec.reel_no)) || []
+      const matched = candidates.shift()
+      let reel: ReelStock
+
+      if (matched) {
+        const currentWeight = matched.is_deleted ? spec.opening_weight : Number(matched.current_weight) || 0
+        reel = plain({
+          ...matched,
+          firm_id: purchase.firm_id,
+          reel_no: spec.reel_no,
+          paper_type: spec.paper_type,
+          supplier_id: purchase.supplier_id,
+          supplier_name: purchase.supplier_name,
+          purchase_id: purchase.id,
+          purchase_bill_no: purchase.bill_no,
+          deckle_size: spec.deckle_size,
+          gsm: spec.gsm,
+          bf: spec.bf,
+          color: spec.color,
+          opening_weight: spec.opening_weight,
+          current_weight: currentWeight,
+          rate: spec.rate,
+          status: currentWeight > 0 ? 'active' : 'consumed',
+          updated_at: now,
+          is_deleted: false,
+          _dirty: true,
+        }) as ReelStock
+        await db.reel_stocks.put(reel)
+      } else {
+        reel = plain({
+          id: uid(),
+          firm_id: purchase.firm_id,
+          reel_no: spec.reel_no,
+          paper_type: spec.paper_type,
+          supplier_id: purchase.supplier_id,
+          supplier_name: purchase.supplier_name,
+          purchase_id: purchase.id,
+          purchase_bill_no: purchase.bill_no,
+          deckle_size: spec.deckle_size,
+          gsm: spec.gsm,
+          bf: spec.bf,
+          color: spec.color,
+          opening_weight: spec.opening_weight,
+          current_weight: spec.opening_weight,
+          rate: spec.rate,
+          status: spec.opening_weight > 0 ? 'active' : 'consumed',
+          created_at: now,
+          updated_at: now,
+          is_deleted: false,
+          _dirty: true,
+        }) as ReelStock
+        await db.reel_stocks.add(reel)
+      }
+
+      const matchingMovements = existingMovements.filter((movement) => movement.stock_ref_id === reel.id)
+      const movement = matchingMovements[0]
+      if (movement) {
+        usedMovementIds.add(movement.id)
+        await db.stock_movements.put(plain({
+          ...movement,
+          firm_id: purchase.firm_id,
+          date: purchase.received_date || purchase.date,
+          source: 'purchase',
+          ref_id: purchase.id,
+          stock_type: 'raw_reel',
+          stock_ref_id: reel.id,
+          qty_in: 1,
+          qty_out: 0,
+          weight_in: spec.opening_weight,
+          weight_out: 0,
+          waste_qty: 0,
+          waste_weight: 0,
+          notes: spec.note,
+          updated_at: now,
+          is_deleted: false,
+          _dirty: true,
+        }))
+      } else {
+        const created = newStockMovement({
         firm_id: purchase.firm_id,
         date: purchase.received_date || purchase.date,
         source: 'purchase',
@@ -103,15 +252,29 @@ export async function createReelsFromPurchase(purchase: Purchase) {
         stock_ref_id: reel.id,
         qty_in: 1,
         qty_out: 0,
-        weight_in: perReelWeight,
+          weight_in: spec.opening_weight,
         weight_out: 0,
         waste_qty: 0,
         waste_weight: 0,
-        notes: `${normalizePaperType(row.paper_type)} reel ${reelNo} from purchase ${purchase.bill_no}${reelCount > 1 ? ` (${reelIdx + 1}/${reelCount}, split from ${totalWeight} KG line weight)` : ''}`,
-      }))
+          notes: spec.note,
+        })
+        await db.stock_movements.add(created)
+        usedMovementIds.add(created.id)
+      }
+      for (const duplicate of matchingMovements.slice(1)) {
+        usedMovementIds.add(duplicate.id)
+        await db.stock_movements.put({ ...duplicate, is_deleted: true, updated_at: now, _dirty: true })
+      }
       count++
     }
-  }
+
+    for (const movement of existingMovements) {
+      if (!usedMovementIds.has(movement.id) && !movement.is_deleted) {
+        await db.stock_movements.put({ ...movement, is_deleted: true, updated_at: now, _dirty: true })
+      }
+    }
+  })
+
   return count
 }
 
@@ -171,27 +334,66 @@ export async function consumePaperReel(data: {
 }
 
 export async function createConsumablesFromPurchase(purchase: Purchase) {
+  const rows = (purchase.items || [])
+    .filter((row) => row.is_consumable && row.consumable_type)
+    .map((row) => {
+      const qty = Number(row.qty) || 0
+      const weight = row.unit?.toUpperCase() === 'KG' ? qty : 0
+      return {
+        firm_id: purchase.firm_id,
+        date: purchase.received_date || purchase.date,
+        source: 'purchase' as const,
+        ref_id: purchase.id,
+        stock_type: row.consumable_type!,
+        qty_in: qty,
+        qty_out: 0,
+        weight_in: weight,
+        weight_out: 0,
+        waste_qty: 0,
+        waste_weight: 0,
+        notes: `${STOCK_LABELS[row.consumable_type!]} from purchase ${purchase.bill_no}`,
+      }
+    })
+
+  const existing = await db.stock_movements
+    .where('ref_id')
+    .equals(purchase.id)
+    .filter((m) => m.source === 'purchase' && CONSUMABLE_STOCK_TYPES.has(m.stock_type))
+    .toArray()
+  const unused = [...existing]
+  const now = nowISO()
   let count = 0
-  for (const row of purchase.items) {
-    if (!row.is_consumable || !row.consumable_type) continue
-    const qty = Number(row.qty) || 0
-    const weight = row.unit?.toUpperCase() === 'KG' ? qty : 0
-    await db.stock_movements.add(newStockMovement({
-      firm_id: purchase.firm_id,
-      date: purchase.received_date || purchase.date,
-      source: 'purchase',
-      ref_id: purchase.id,
-      stock_type: row.consumable_type,
-      qty_in: qty,
-      qty_out: 0,
-      weight_in: weight,
-      weight_out: 0,
-      waste_qty: 0,
-      waste_weight: 0,
-      notes: `${STOCK_LABELS[row.consumable_type]} from purchase ${purchase.bill_no}`,
-    }))
-    count++
-  }
+
+  await db.transaction('rw', db.stock_movements, async () => {
+    for (const row of rows) {
+      const existingIdx = unused.findIndex((movement) =>
+        movement.stock_type === row.stock_type &&
+        Number(movement.qty_in) === row.qty_in &&
+        Number(movement.weight_in) === row.weight_in &&
+        movement.date === row.date,
+      )
+      const movement = existingIdx >= 0 ? unused.splice(existingIdx, 1)[0] : undefined
+      if (movement) {
+        await db.stock_movements.put(plain({
+          ...movement,
+          ...row,
+          updated_at: now,
+          is_deleted: false,
+          _dirty: true,
+        }))
+      } else {
+        await db.stock_movements.add(newStockMovement(row))
+      }
+      count++
+    }
+
+    for (const movement of unused) {
+      if (!movement.is_deleted) {
+        await db.stock_movements.put({ ...movement, is_deleted: true, updated_at: now, _dirty: true })
+      }
+    }
+  })
+
   return count
 }
 

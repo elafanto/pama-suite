@@ -130,6 +130,10 @@ async function replaceMovementsForRef(
 }
 
 export async function recordPurchaseMovements(purchase: Purchase): Promise<ItemStockMovement[]> {
+  if (purchase.is_deleted) {
+    return replaceMovementsForRef(purchase.firm_id, 'purchase', 'purchase', purchase.id, [])
+  }
+
   const rows = (purchase.items || [])
     .filter((line) => !!line.item_id && Number(line.qty) !== 0)
     .map((line) => ({
@@ -148,7 +152,7 @@ export async function recordPurchaseMovements(purchase: Purchase): Promise<ItemS
 }
 
 export async function recordInvoiceMovements(invoice: Invoice): Promise<ItemStockMovement[]> {
-  if (invoice.doc_type !== 'INVOICE' && invoice.doc_type !== 'invoice') {
+  if (invoice.is_deleted || (invoice.doc_type !== 'INVOICE' && invoice.doc_type !== 'invoice')) {
     return replaceMovementsForRef(invoice.firm_id, 'invoice', 'invoice', invoice.id, [])
   }
 

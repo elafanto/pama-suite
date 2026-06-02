@@ -116,7 +116,9 @@ export const useAccountingStore = defineStore('accounting', () => {
     const firmStore = useFirmStore()
     const firmId = firmStore.activeFirmId
     const list = await db.vouchers
-      .filter((v) => v.firm_id === firmId && v.type === type && !v.is_deleted)
+      .where('firm_id')
+      .equals(firmId)
+      .filter((v) => v.type === type && !v.is_deleted)
       .toArray()
     return `${type}-${String(list.length + 1).padStart(4, '0')}`
   }
@@ -315,7 +317,16 @@ export const useAccountingStore = defineStore('accounting', () => {
     await postVoucher(pur.received_date || pur.date, 'PURCHASE', narration, entries, pur.id, 'purchase')
   }
 
-  async function postPaymentVoucher(refId: string, refType: 'invoice' | 'purchase', amount: number, isWriteOff: boolean, writeOffAmt: number, date: string, note: string) {
+  async function postPaymentVoucher(
+    refId: string,
+    refType: 'invoice' | 'purchase',
+    amount: number,
+    isWriteOff: boolean,
+    writeOffAmt: number,
+    date: string,
+    note: string,
+    paymentAccountName = 'Bank Account (Primary)'
+  ) {
     const firmStore = useFirmStore()
     const firmId = firmStore.activeFirmId
     if (!firmId) return
@@ -324,6 +335,13 @@ export const useAccountingStore = defineStore('accounting', () => {
 
     const entries: LedgerEntry[] = []
     const now = date || nowISO().split('T')[0]
+    const cashAmount = Math.round(Math.max(0, Number(amount) || 0) * 100) / 100
+    const writeOffAmount = Math.round(Math.max(0, isWriteOff ? Number(writeOffAmt) || 0 : 0) * 100) / 100
+
+    if (cashAmount <= 0 && writeOffAmount <= 0) {
+      await load()
+      return
+    }
 
     if (refType === 'invoice') {
       // Receipt: Dr Bank/Cash / Cr Sundry Debtors
@@ -333,16 +351,16 @@ export const useAccountingStore = defineStore('accounting', () => {
 
       entries.push({
         accountId: `${firmId}_1002`, // Bank
-        accountName: 'Bank Account (Primary)',
-        debit: amount,
+        accountName: paymentAccountName,
+        debit: cashAmount,
         credit: 0,
       })
 
-      if (isWriteOff && writeOffAmt > 0) {
+      if (writeOffAmount > 0) {
         entries.push({
           accountId: `${firmId}_5208`,
           accountName: 'Round Off Expense',
-          debit: writeOffAmt,
+          debit: writeOffAmount,
           credit: 0,
         })
       }
@@ -351,7 +369,7 @@ export const useAccountingStore = defineStore('accounting', () => {
         accountId: `${firmId}_1003`,
         accountName: 'Sundry Debtors',
         debit: 0,
-        credit: amount + (isWriteOff ? writeOffAmt : 0),
+        credit: cashAmount + writeOffAmount,
       })
 
       const narration = `Receipt for Bill ${bill.bill_no} — ${bill.party_name}${note ? ' | ' + note : ''}`
@@ -365,23 +383,23 @@ export const useAccountingStore = defineStore('accounting', () => {
       entries.push({
         accountId: `${firmId}_2001`,
         accountName: 'Sundry Creditors',
-        debit: amount + (isWriteOff ? writeOffAmt : 0),
+        debit: cashAmount + writeOffAmount,
         credit: 0,
       })
 
       entries.push({
         accountId: `${firmId}_1002`,
-        accountName: 'Bank Account (Primary)',
+        accountName: paymentAccountName,
         debit: 0,
-        credit: amount,
+        credit: cashAmount,
       })
 
-      if (isWriteOff && writeOffAmt > 0) {
+      if (writeOffAmount > 0) {
         entries.push({
           accountId: `${firmId}_5208`,
           accountName: 'Round Off Expense',
           debit: 0,
-          credit: writeOffAmt,
+          credit: writeOffAmount,
         })
       }
 
@@ -598,8 +616,8 @@ export const useAccountingStore = defineStore('accounting', () => {
     if (!firmId) return { invoices: 0, purchases: 0 }
     await load()
 
-    const invoices = (await db.invoices.toArray()).filter((b) => !b.is_deleted && b.firm_id === firmId)
-    const purchases = (await db.purchases.toArray()).filter((p) => !p.is_deleted && p.firm_id === firmId)
+    const invoices = await db.invoices.where('firm_id').equals(firmId).filter((b) => !b.is_deleted).toArray()
+    const purchases = await db.purchases.where('firm_id').equals(firmId).filter((p) => !p.is_deleted).toArray()
 
     for (const inv of invoices) await postSaleToLedger(inv)
     for (const pur of purchases) await postPurchaseToLedger(pur)

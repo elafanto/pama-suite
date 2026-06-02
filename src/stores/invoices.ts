@@ -6,12 +6,24 @@ import { uid, nowISO } from '@/data/util'
 import { useFirmStore } from './firm'
 import { useAccountingStore } from './accounting'
 import { logActivity } from '@/services/activityLog'
+import { recordInvoiceMovements } from '@/services/inventoryLedger'
 import { allocateBillNo } from '@/services/invoiceNumber'
 import type { Invoice } from '@/types/models'
 
 const repo = createRepo<Invoice>(db.invoices)
 const plain = <X>(o: X): X => JSON.parse(JSON.stringify(o))
 let addQueue = Promise.resolve()
+const money = (n: number) => Math.round((Number(n) || 0) * 100) / 100
+
+async function syncReceiptVoucher(invoice: Invoice) {
+  const accounting = useAccountingStore()
+  const paid = money(Math.min(Math.max(invoice.amt_paid || 0, 0), invoice.grand_total || 0))
+  if (paid <= 0) {
+    await accounting.reverseLedgerByRef(`${invoice.id}_PAY`)
+    return
+  }
+  await accounting.postPaymentVoucher(invoice.id, 'invoice', paid, false, 0, invoice.date, 'Recorded on invoice save')
+}
 
 export const useInvoiceStore = defineStore('invoices', () => {
   const list = ref<Invoice[]>([])
@@ -39,7 +51,7 @@ export const useInvoiceStore = defineStore('invoices', () => {
     await db.transaction('rw', db.firms, db.invoices, async () => {
       const firm = await db.firms.get(firmId)
       if (!firm) throw new Error('Active firm required')
-      const invoices = await db.invoices.filter((b) => b.firm_id === firmId && !b.is_deleted).toArray()
+      const invoices = await db.invoices.where('firm_id').equals(firmId).filter((b) => !b.is_deleted).toArray()
       const payload = { ...data }
 
       if (useAutoNumber) {
@@ -70,9 +82,11 @@ export const useInvoiceStore = defineStore('invoices', () => {
     try {
       await accounting.load()
       await accounting.postSaleToLedger(rec)
+      await syncReceiptVoucher(rec)
     } catch (e) {
       console.warn('Ledger posting skipped:', e)
     }
+    await recordInvoiceMovements(rec)
     await logActivity(firmId, 'create', 'invoice', rec.id, `Invoice ${rec.bill_no} created`)
 
     await load()
@@ -89,6 +103,8 @@ export const useInvoiceStore = defineStore('invoices', () => {
     if (rec) {
       const accounting = useAccountingStore()
       await accounting.postSaleToLedger(rec)
+      await syncReceiptVoucher(rec)
+      await recordInvoiceMovements(rec)
       await logActivity(rec.firm_id, 'update', 'invoice', rec.id, `Invoice ${rec.bill_no} updated`)
     }
     await load()
@@ -99,7 +115,9 @@ export const useInvoiceStore = defineStore('invoices', () => {
     await repo.remove(id)
     const accounting = useAccountingStore()
     await accounting.reverseLedgerByRef(id)
+    await accounting.reverseLedgerByRef(`${id}_PAY`)
     if (existing) {
+      await recordInvoiceMovements({ ...existing, is_deleted: true })
       await logActivity(existing.firm_id, 'delete', 'invoice', id, `Invoice ${existing.bill_no} deleted`)
     }
     await load()
@@ -110,6 +128,8 @@ export const useInvoiceStore = defineStore('invoices', () => {
     if (rec) {
       const accounting = useAccountingStore()
       await accounting.postSaleToLedger(rec)
+      await syncReceiptVoucher(rec)
+      await recordInvoiceMovements(rec)
       await logActivity(rec.firm_id, 'restore', 'invoice', id, `Invoice ${rec.bill_no} restored`)
     }
     await load()
@@ -119,13 +139,14 @@ export const useInvoiceStore = defineStore('invoices', () => {
     const existing = await repo.get(id)
     if (!existing) return
 
-    const previousPaid = existing.amt_paid || 0
-    const newAmtPaid = previousPaid + amount
+    const previousPaid = money(existing.amt_paid || 0)
+    const outstanding = Math.max(0, money(existing.grand_total - previousPaid))
+    const paymentAmount = money(Math.min(Math.max(amount, 0), outstanding))
+    const newAmtPaid = money(previousPaid + paymentAmount)
     let newPayStatus = existing.pay_status
-    const outstanding = Math.max(0, existing.grand_total - previousPaid)
-    const writeOffAmt = isWriteOff ? Math.max(0, outstanding - amount) : 0
+    const writeOffAmt = isWriteOff ? money(Math.max(0, outstanding - paymentAmount)) : 0
 
-    const totalRecorded = newAmtPaid + writeOffAmt
+    const totalRecorded = money(newAmtPaid + writeOffAmt)
 
     if (Math.abs(totalRecorded - existing.grand_total) < 0.01 || isWriteOff) {
       newPayStatus = 'PAID'
@@ -136,6 +157,7 @@ export const useInvoiceStore = defineStore('invoices', () => {
     }
 
     const finalAmtPaid = isWriteOff ? existing.grand_total : newAmtPaid
+    const cashPaidForVoucher = isWriteOff ? newAmtPaid : finalAmtPaid
 
     await repo.update(id, {
       amt_paid: finalAmtPaid,
@@ -145,7 +167,7 @@ export const useInvoiceStore = defineStore('invoices', () => {
 
     // Post Receipt Voucher to ledger
     const accounting = useAccountingStore()
-    await accounting.postPaymentVoucher(id, 'invoice', amount, isWriteOff, writeOffAmt, date, note)
+    await accounting.postPaymentVoucher(id, 'invoice', cashPaidForVoucher, isWriteOff, writeOffAmt, date, note)
 
     await load()
   }

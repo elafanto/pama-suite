@@ -62,8 +62,14 @@ const LAST_SYNC_AT_KEY = 'pama_last_sync_at'
 const LAST_SYNC_RESULT_KEY = 'pama_last_sync_result'
 const LAST_SYNC_ERROR_KEY = 'pama_last_sync_error'
 const OPTIONAL_TABLE_MIGRATIONS: Partial<Record<SyncTable, string>> = {
+  reel_stocks: '005_production_tracking.sql',
+  production_jobs: '005_production_tracking.sql',
+  production_stages: '005_production_tracking.sql',
+  stock_movements: '005_production_tracking.sql',
   item_stock_movements: '006_item_stock_movements.sql',
 }
+
+let syncInFlight: Promise<string> | null = null
 
 export interface SyncDiagnostics {
   lastPull: string
@@ -89,6 +95,18 @@ function uniqWarnings(warnings: string[]): string[] {
 function withWarnings(message: string, warnings?: string[]): string {
   const unique = uniqWarnings(warnings || [])
   return unique.length ? `${message}. ${unique.join(' ')}` : message
+}
+
+function dirtyPullWarning(localName: SyncTable): string {
+  return `Skipped incoming "${TABLE_MAP[localName]}" updates because matching local rows have unsynced changes. Local rows stay dirty; resolve conflicts before accepting those cloud updates.`
+}
+
+function runSingleFlightSync(work: () => Promise<string>): Promise<string> {
+  if (syncInFlight) return syncInFlight
+  syncInFlight = work().finally(() => {
+    syncInFlight = null
+  })
+  return syncInFlight
 }
 
 function readLocalStorage(key: string): string {
@@ -216,7 +234,7 @@ async function repairLocalInvoiceNumberState(): Promise<number> {
   let repaired = 0
   const firms = await db.firms.filter((f) => !f.is_deleted).toArray()
   for (const firm of firms) {
-    let invoices = await db.invoices.filter((b) => b.firm_id === firm.id && !b.is_deleted).toArray()
+    let invoices = await db.invoices.where('firm_id').equals(firm.id).filter((b) => !b.is_deleted).toArray()
     const groups = findDuplicateBillNoGroups(invoices)
     for (const group of groups) {
       const ordered = [...group].sort((a, b) =>
@@ -230,7 +248,7 @@ async function repairLocalInvoiceNumberState(): Promise<number> {
         repaired++
       }
     }
-    const freshInvoices = await db.invoices.filter((b) => b.firm_id === firm.id && !b.is_deleted).toArray()
+    const freshInvoices = await db.invoices.where('firm_id').equals(firm.id).filter((b) => !b.is_deleted).toArray()
     const resolved = resolveNextSequence(firm, freshInvoices)
     if ((firm.next_bill_no || 1) < resolved) {
       await db.firms.put({ ...firm, next_bill_no: resolved, updated_at: nowISO(), _dirty: true })
@@ -322,14 +340,23 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
   let _maxCloudTs = ''
   const warnings: string[] = []
 
+  const noteCloudTs = (updatedAt?: string) => {
+    if (updatedAt && updatedAt > _maxCloudTs) _maxCloudTs = updatedAt
+  }
+
   const merge = async <T extends { id: string; updated_at: string }>(
+    localName: SyncTable,
     table: { get: (id: string) => Promise<T | undefined>; put: (r: T) => Promise<unknown> },
     row: T,
   ) => {
     // Track highest cloud timestamp to anchor next incremental pull.
-    if (row.updated_at && row.updated_at > _maxCloudTs) _maxCloudTs = row.updated_at
+    noteCloudTs(row.updated_at)
     const local = await table.get(row.id)
     if (!isNewer(row.updated_at, local?.updated_at)) return
+    if ((local as any)?._dirty) {
+      warnings.push(dirtyPullWarning(localName))
+      return
+    }
     await table.put({ ...row, _dirty: false })
     pulled++
   }
@@ -361,8 +388,13 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
         is_deleted: r.is_deleted,
         _dirty: false,
       }
+      noteCloudTs(firm.updated_at)
       const local = await db.firms.get(firm.id)
       if (local && isNewer(firm.updated_at, local.updated_at)) {
+        if (local._dirty) {
+          warnings.push(dirtyPullWarning('firms'))
+          continue
+        }
         const nextBillNo = Math.max(local.next_bill_no || 1, firm.next_bill_no || 1)
         await db.firms.put({
           ...firm,
@@ -371,7 +403,7 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
         })
         pulled++
       } else if (!local) {
-        await merge(db.firms, firm)
+        await merge('firms', db.firms, firm)
       }
     }
 
@@ -399,7 +431,7 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
         is_deleted: r.is_deleted,
         _dirty: false,
       }
-      await merge(db.parties, party)
+      await merge('parties', db.parties, party)
     }
 
     const items = await fetchAllOrgRows(sb, 'items', orgId, sinceIso, '*')
@@ -424,7 +456,7 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
         is_deleted: r.is_deleted,
         _dirty: false,
       }
-      await merge(db.items, item)
+      await merge('items', db.items, item)
     }
 
     for (const name of PAYLOAD_TABLES) {
@@ -457,7 +489,7 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
           updated_at: r.updated_at,
           _dirty: false,
         }
-        await merge(table, rec)
+        await merge(name, table, rec)
       }
     }
   } catch (e: any) {
@@ -467,65 +499,70 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
   // Use the highest cloud updated_at we saw (instead of device clock) so
   // a device whose clock is behind never misses recently-updated records.
   if (_maxCloudTs) localStorage.setItem('pama_last_pull', _maxCloudTs)
-  else localStorage.setItem('pama_last_pull', new Date().toISOString())
   return { ok: true, pulled, _maxCloudTs, warnings: uniqWarnings(warnings) }
 }
 
 /** Re-download all cloud data (fixes partial sync on new phone / after 1000-row limit). */
 export async function runFullPullFromCloud(): Promise<string> {
-  localStorage.removeItem('pama_last_pull')
-  const pull = await pullFromCloud(EPOCH_ISO)
-  if (!pull.ok) {
-    const message = pull.error || 'Full pull failed'
-    rememberSyncResult(message, message)
+  return runSingleFlightSync(async () => {
+    localStorage.removeItem('pama_last_pull')
+    const pull = await pullFromCloud(EPOCH_ISO)
+    if (!pull.ok) {
+      const message = pull.error || 'Full pull failed'
+      rememberSyncResult(message, message)
+      return message
+    }
+    const repaired = await repairLocalInvoiceNumberState()
+    if (pull.pulled > 0) await reloadAllStores()
+    const message = withWarnings(
+      pull.pulled || repaired ? `Full pull: ${pull.pulled} records${repaired ? `, repaired ${repaired}` : ''}` : 'Cloud has no data for this account',
+      pull.warnings,
+    )
+    rememberSyncResult(message, uniqWarnings(pull.warnings || []).join(' '))
     return message
-  }
-  const repaired = await repairLocalInvoiceNumberState()
-  if (pull.pulled > 0) await reloadAllStores()
-  const message = withWarnings(
-    pull.pulled || repaired ? `Full pull: ${pull.pulled} records${repaired ? `, repaired ${repaired}` : ''}` : 'Cloud has no data for this account',
-    pull.warnings,
-  )
-  rememberSyncResult(message, uniqWarnings(pull.warnings || []).join(' '))
-  return message
+  })
 }
 
 /** Upload all local data to cloud (fixes phone missing data after PC import). */
 export async function runFullPushToCloud(): Promise<string> {
-  const push = await pushAllToCloud()
-  if (!push.ok) {
-    const message = push.error || 'Full push failed'
-    rememberSyncResult(message, message)
+  return runSingleFlightSync(async () => {
+    const push = await pushAllToCloud()
+    if (!push.ok) {
+      const message = push.error || 'Full push failed'
+      rememberSyncResult(message, message)
+      return message
+    }
+    const message = withWarnings(push.pushed ? `Full push: ${push.pushed} records` : 'No local records to push', push.warnings)
+    rememberSyncResult(message, uniqWarnings(push.warnings || []).join(' '))
     return message
-  }
-  const message = withWarnings(push.pushed ? `Full push: ${push.pushed} records` : 'No local records to push', push.warnings)
-  rememberSyncResult(message, uniqWarnings(push.warnings || []).join(' '))
-  return message
+  })
 }
 
 export async function runSync(): Promise<string> {
-  const pull = await pullFromCloud()
-  if (!pull.ok) {
-    const message = pull.error || 'Pull failed'
-    rememberSyncResult(message, message)
+  return runSingleFlightSync(async () => {
+    const pull = await pullFromCloud()
+    if (!pull.ok) {
+      const message = pull.error || 'Pull failed'
+      rememberSyncResult(message, message)
+      return message
+    }
+    const repaired = await repairLocalInvoiceNumberState()
+    const push = await pushDirtyToCloud()
+    if (!push.ok) {
+      const message = push.error || 'Sync failed'
+      rememberSyncResult(message, message)
+      return message
+    }
+    if (pull.pulled > 0) await reloadAllStores()
+    const parts: string[] = []
+    if (pull.pulled) parts.push(`pulled ${pull.pulled}`)
+    if (repaired) parts.push(`repaired ${repaired}`)
+    if (push.pushed) parts.push(`pushed ${push.pushed}`)
+    const warnings = uniqWarnings([...(pull.warnings || []), ...(push.warnings || [])])
+    const message = withWarnings(parts.length ? `Synced (${parts.join(', ')})` : 'Already up to date', warnings)
+    rememberSyncResult(message, warnings.join(' '))
     return message
-  }
-  const repaired = await repairLocalInvoiceNumberState()
-  const push = await pushDirtyToCloud()
-  if (!push.ok) {
-    const message = push.error || 'Sync failed'
-    rememberSyncResult(message, message)
-    return message
-  }
-  if (pull.pulled > 0) await reloadAllStores()
-  const parts: string[] = []
-  if (pull.pulled) parts.push(`pulled ${pull.pulled}`)
-  if (repaired) parts.push(`repaired ${repaired}`)
-  if (push.pushed) parts.push(`pushed ${push.pushed}`)
-  const warnings = uniqWarnings([...(pull.warnings || []), ...(push.warnings || [])])
-  const message = withWarnings(parts.length ? `Synced (${parts.join(', ')})` : 'Already up to date', warnings)
-  rememberSyncResult(message, warnings.join(' '))
-  return message
+  })
 }
 
 let realtimeChannel: RealtimeChannel | null = null
