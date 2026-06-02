@@ -4,8 +4,9 @@ withDefaults(
     title: string
     show?: boolean
     maxWidth?: string
+    closeOnBackdrop?: boolean
   }>(),
-  { show: true, maxWidth: 'max-w-lg' },
+  { show: true, maxWidth: 'max-w-lg', closeOnBackdrop: true },
 )
 const emit = defineEmits<{ close: [] }>()
 </script>
@@ -14,7 +15,7 @@ const emit = defineEmits<{ close: [] }>()
   <div
     v-if="show"
     class="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 overflow-y-auto"
-    @click.self="emit('close')"
+    @click.self="closeOnBackdrop && emit('close')"
   >
     <div :class="['pp-card w-full mt-10 mb-10', maxWidth]">
       <div class="flex items-center justify-between px-5 py-3 border-b border-slate-200">

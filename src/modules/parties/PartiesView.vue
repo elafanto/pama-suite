@@ -118,7 +118,12 @@ onMounted(store.load)
       </table>
     </div>
 
-    <PpModal v-if="showModal" :title="editingId ? 'Edit Party' : 'Add Party'" @close="showModal = false">
+    <PpModal
+      v-if="showModal"
+      :title="editingId ? 'Edit Party' : 'Add Party'"
+      :close-on-backdrop="false"
+      @close="showModal = false"
+    >
       <div class="space-y-3">
         <div>
           <label class="pp-label">Name *</label>
