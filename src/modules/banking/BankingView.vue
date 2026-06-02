@@ -25,7 +25,8 @@ const ccAc = ref(localStorage.getItem('pama_rtgs_ccAc') || '663205090000180')
 const debitFrom = ref(localStorage.getItem('pama_rtgs_debitFrom') || '')
 const txnDate = ref('')
 const purpose = ref(localStorage.getItem('pama_rtgs_purpose') || 'procurement of plant & machinery and construction of industrial unit')
-const bankEmail = ref(localStorage.getItem('pama_bank_email') || 'ubijaspur@unionbankofindia.co.in')
+const BANK_EMAIL_KEY = 'pama_bank_email'
+const bankEmail = ref(localStorage.getItem(BANK_EMAIL_KEY) || 'ubijaspur@unionbankofindia.co.in')
 const autoOpenGmail = ref(localStorage.getItem('pama_rtgs_auto_gmail') !== '0')
 
 // Active beneficiaries in this transaction
@@ -126,7 +127,7 @@ watch([loanAc, currentAc, ccAc, debitFrom, purpose, bankEmail], () => {
   localStorage.setItem('pama_rtgs_ccAc', ccAc.value)
   localStorage.setItem('pama_rtgs_debitFrom', debitFrom.value)
   localStorage.setItem('pama_rtgs_purpose', purpose.value)
-  localStorage.setItem('pama_bank_email', bankEmail.value)
+  localStorage.setItem(BANK_EMAIL_KEY, bankEmail.value.trim())
 })
 
 watch(autoOpenGmail, (newVal) => {
@@ -151,6 +152,20 @@ watch(debitOptions, (opts) => {
 
 // Helper to format currency
 const n2 = (val: number) => (val || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const cleanText = (val: string) => val.trim().replace(/\s+/g, ' ')
+
+const selectedDebitOption = computed(() => {
+  return debitOptions.value.find(o => o.value === debitFrom.value)
+})
+
+const selectedDebitLabel = computed(() => selectedDebitOption.value?.label || debitFrom.value)
+const enteredPurposeText = computed(() => cleanText(purpose.value) || 'the stated business purpose')
+const isTermLoanDebit = computed(() => debitFrom.value.startsWith('Term Loan'))
+
+const branchEmailAddress = computed(() => {
+  const saved = localStorage.getItem(BANK_EMAIL_KEY)
+  return cleanText(bankEmail.value || saved || '')
+})
 
 // Add empty beneficiary
 function addBene(data: Partial<BankBeneficiary> = {}) {
@@ -285,17 +300,25 @@ ${idx}. ${b.name}
   const totalWords = numberToWords(totalDisbursement.value)
 
   let subjectType = 'Fund Transfer'
-  if (debitFrom.value.startsWith('Term Loan')) subjectType = 'Term Loan Disbursement'
+  if (isTermLoanDebit.value) subjectType = 'Term Loan Disbursement'
   else if (debitFrom.value.startsWith('CC')) subjectType = 'CC Account Disbursement'
 
-  let openingLine = ''
-  if (debitFrom.value.startsWith('Term Loan')) {
-    openingLine = 'We, M/s Pama Packaging, respectfully request you to kindly disburse funds from our Term Loan Account towards the'
+  const enteredPurpose = enteredPurposeText.value
+  const selectedDebitAccount = cleanText(debitFrom.value || selectedDebitLabel.value)
+  const selectedDebitDisplay = cleanText(selectedDebitLabel.value || selectedDebitAccount)
+  let sourceAccountName = 'selected debit account'
+  if (isTermLoanDebit.value) {
+    sourceAccountName = 'Term Loan Account'
   } else if (debitFrom.value.startsWith('CC')) {
-    openingLine = 'We, M/s Pama Packaging, respectfully request you to kindly disburse funds from our Cash Credit (CC) Account towards the'
+    sourceAccountName = 'Cash Credit (CC) Account'
   } else {
-    openingLine = 'We, M/s Pama Packaging, respectfully request you to kindly transfer funds from our Current Account towards the'
+    sourceAccountName = 'Current Account'
   }
+  const transferAction = debitFrom.value.startsWith('Current') ? 'transfer funds' : 'disburse funds'
+  const openingLine = `We, M/s Pama Packaging, respectfully request you to kindly ${transferAction} from our ${sourceAccountName} (${selectedDebitDisplay}) towards ${enteredPurpose}.`
+  const sanctionConfirmation = isTermLoanDebit.value
+    ? `\nWe confirm that the funds shall be utilised for ${enteredPurpose} and in accordance with the terms and conditions of the loan sanction.\n`
+    : ''
 
   let acBlock = ''
   if (loanAc.value) acBlock += `  Term Loan A/c No.       : ${loanAc.value}\n`
@@ -315,24 +338,23 @@ Jaspur Branch
 
 Dear Sir / Madam,
 
-${openingLine} ${purpose.value}, as per the sanctioned purpose.
+${openingLine}
 
 Our account details are as follows:
 
 ${acBlock}
 
-I kindly request that you debit our ${debitFrom.value} and remit the payments to the following beneficiaries via RTGS/NEFT. The details of the parties and amounts are listed below:
+I kindly request that you debit our selected account (${selectedDebitAccount}) and remit the payments to the following beneficiaries via RTGS/NEFT. The details of the parties and amounts are listed below:
 ${beneLines}
 ──────────────────────────────────────────
 Total Amount  : ₹${totalFmt}
 (In Words     : ${totalWords})
 ──────────────────────────────────────────
 
-Reference: Pama Packaging Loan Account No.: ${loanAc.value}
+Reference: Pama Packaging debit account: ${selectedDebitAccount}
 
 Kindly process these payments as soon as possible and confirm the transaction.
-
-We confirm that the funds shall be utilised strictly for the purpose for which the loan was sanctioned and in accordance with the terms and conditions of the sanction.
+${sanctionConfirmation}
 
 We request that you kindly process the above disbursement at the earliest.
 
@@ -372,17 +394,21 @@ function copyEmail() {
 
 function openGmailCompose() {
   if (!generatedBody.value) return
-  if (!bankEmail.value.trim()) {
+  if (!branchEmailAddress.value) {
     alert('Please enter a Bank Email address.')
     return
   }
-  const url = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(bankEmail.value.trim())}&su=${encodeURIComponent(generatedSubject.value)}&body=${encodeURIComponent(generatedBody.value)}`
+  const url = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(branchEmailAddress.value)}&su=${encodeURIComponent(generatedSubject.value)}&body=${encodeURIComponent(generatedBody.value)}`
   window.open(url, '_blank')
 }
 
 function openMailtoFallback() {
   if (!generatedBody.value) return
-  const url = `mailto:${encodeURIComponent(bankEmail.value.trim())}?subject=${encodeURIComponent(generatedSubject.value)}&body=${encodeURIComponent(generatedBody.value)}`
+  if (!branchEmailAddress.value) {
+    alert('Please enter a Bank Email address.')
+    return
+  }
+  const url = `mailto:${encodeURIComponent(branchEmailAddress.value)}?subject=${encodeURIComponent(generatedSubject.value)}&body=${encodeURIComponent(generatedBody.value)}`
   window.location.href = url
 }
 
@@ -461,7 +487,7 @@ onMounted(() => {
               <input type="date" v-model="txnDate" class="pp-input" />
             </div>
             <div>
-              <label class="pp-label">Sanctioned Purpose</label>
+              <label class="pp-label">Purpose</label>
               <input v-model="purpose" class="pp-input text-sm" placeholder="Purpose statement" />
             </div>
           </div>
@@ -729,7 +755,8 @@ onMounted(() => {
           </p>
 
           <p class="mb-4">
-            We respectfully request you to kindly disburse funds from our credit/debit account details below, for the purpose of <u>{{ purpose }}</u>.
+            We respectfully request you to kindly disburse/transfer funds from our selected debit account
+            (<u>{{ selectedDebitLabel }}</u>) towards <u>{{ enteredPurposeText }}</u>.
           </p>
 
           <div class="mb-4 bg-slate-50/80 p-3 border rounded text-xs leading-5">
@@ -781,8 +808,8 @@ onMounted(() => {
             <strong>TOTAL AMOUNT IN WORDS:</strong> {{ numberToWords(totalDisbursement) }}
           </div>
 
-          <p class="mb-6 text-xs text-justify">
-            We confirm that the funds shall be utilised strictly for the purpose for which the credit facility was sanctioned and in accordance with the terms and conditions of the sanction.
+          <p v-if="isTermLoanDebit" class="mb-6 text-xs text-justify">
+            We confirm that the funds shall be utilised for {{ enteredPurposeText }} and in accordance with the terms and conditions of the loan sanction.
           </p>
 
           <div class="mt-12 flex justify-between">
