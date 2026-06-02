@@ -19,11 +19,11 @@ interface SyncFields {
 export function createRepo<T extends SyncFields>(table: Table<T, string>) {
   return {
     async all(firmId?: string): Promise<T[]> {
-      const rows = await table.filter((r) => !r.is_deleted).toArray()
-      const list = firmId
-        ? rows.filter((r) => (r as any).firm_id === firmId)
-        : rows
-      return list.sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))
+      const rows = await (firmId
+        ? table.where('firm_id').equals(firmId).filter((r) => !r.is_deleted)
+        : table.filter((r) => !r.is_deleted)
+      ).toArray()
+      return rows.sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))
     },
 
     async get(id: string): Promise<T | undefined> {

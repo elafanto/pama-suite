@@ -55,8 +55,8 @@ export async function movePurchaseBillsToFirm(input: MovePurchaseBillsInput): Pr
     db.firms.get(input.fromFirmId),
     db.firms.get(input.toFirmId),
     db.purchases.bulkGet(purchaseIds),
-    db.parties.filter((p) => !p.is_deleted && p.firm_id === input.toFirmId).toArray(),
-    db.items.filter((i) => !i.is_deleted && i.firm_id === input.toFirmId).toArray(),
+    db.parties.where('firm_id').equals(input.toFirmId).filter((p) => !p.is_deleted).toArray(),
+    db.items.where('firm_id').equals(input.toFirmId).filter((i) => !i.is_deleted).toArray(),
   ])
 
   if (!fromFirm) throw new Error('Source firm not found')
@@ -143,6 +143,8 @@ export async function movePurchaseBillsToFirm(input: MovePurchaseBillsInput): Pr
       }
 
       const vouchers = await db.vouchers
+        .where('firm_id')
+        .equals(input.fromFirmId)
         .filter((v) => !!v.ref_id && (idSet.has(v.ref_id) || paymentRefSet.has(v.ref_id)))
         .toArray()
       for (const voucher of vouchers) {
@@ -157,6 +159,8 @@ export async function movePurchaseBillsToFirm(input: MovePurchaseBillsInput): Pr
       }
 
       const reels = await db.reel_stocks
+        .where('firm_id')
+        .equals(input.fromFirmId)
         .filter((r) => !!r.purchase_id && idSet.has(r.purchase_id))
         .toArray()
       for (const reel of reels) {
@@ -171,6 +175,8 @@ export async function movePurchaseBillsToFirm(input: MovePurchaseBillsInput): Pr
       }
 
       const stockMovements = await db.stock_movements
+        .where('firm_id')
+        .equals(input.fromFirmId)
         .filter((m) => m.source === 'purchase' && idSet.has(m.ref_id))
         .toArray()
       for (const movement of stockMovements) {
@@ -184,6 +190,8 @@ export async function movePurchaseBillsToFirm(input: MovePurchaseBillsInput): Pr
       }
 
       const itemStockMovements = await db.item_stock_movements
+        .where('firm_id')
+        .equals(input.fromFirmId)
         .filter((m) => m.source === 'purchase' && m.ref_type === 'purchase' && !!m.ref_id && idSet.has(m.ref_id))
         .toArray()
       for (const movement of itemStockMovements) {
@@ -198,6 +206,8 @@ export async function movePurchaseBillsToFirm(input: MovePurchaseBillsInput): Pr
       }
 
       const activityLogs = await db.activity_log
+        .where('firm_id')
+        .equals(input.fromFirmId)
         .filter((log) => log.entity_type === 'purchase' && idSet.has(log.entity_id))
         .toArray()
       for (const log of activityLogs) {

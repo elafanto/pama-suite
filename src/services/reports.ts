@@ -1,4 +1,4 @@
-import type { Invoice } from '@/types/models'
+import type { Account, Invoice } from '@/types/models'
 
 const STATE_NAMES: Record<string, string> = {
   '01': 'Jammu & Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab', '04': 'Chandigarh',
@@ -35,6 +35,27 @@ export function filterInvoices(
   if (from) list = list.filter(i => i.date >= from)
   if (to) list = list.filter(i => i.date <= to)
   return list
+}
+
+function salesDocKind(invoice: Invoice) {
+  return String(invoice.doc_type || 'INVOICE').toUpperCase()
+}
+
+function isReceivableDebitDoc(invoice: Invoice) {
+  const kind = salesDocKind(invoice)
+  return kind === 'INVOICE' || kind === 'BILL_OF_SUPPLY' || kind === 'DEBIT_NOTE'
+}
+
+function isReceivableCreditDoc(invoice: Invoice) {
+  return salesDocKind(invoice) === 'CREDIT_NOTE'
+}
+
+function receivableDebitOutstanding(invoice: Invoice) {
+  return Math.max(0, (invoice.grand_total || 0) - (invoice.amt_paid || 0))
+}
+
+function receivableCreditAmount(invoice: Invoice) {
+  return Math.max(0, invoice.grand_total || 0)
 }
 
 export function gstrB2B(invoices: Invoice[]) {
@@ -91,26 +112,80 @@ export interface AgingRow {
 
 export function outstandingAging(invoices: Invoice[]): AgingRow[] {
   const today = new Date()
-  const byCust = new Map<string, AgingRow>()
+  const byCust = new Map<string, { row: AgingRow; debits: { date: string; amount: number }[]; credit: number }>()
 
   for (const b of invoices) {
-    const out = (b.grand_total || 0) - (b.amt_paid || 0)
-    if (out <= 0.01) continue
     const name = b.party_name || 'Unknown'
     if (!byCust.has(name)) {
-      byCust.set(name, { customer: name, d0_30: 0, d31_60: 0, d61_90: 0, d90plus: 0, total: 0, billCount: 0 })
+      byCust.set(name, {
+        row: { customer: name, d0_30: 0, d31_60: 0, d61_90: 0, d90plus: 0, total: 0, billCount: 0 },
+        debits: [],
+        credit: 0,
+      })
     }
-    const row = byCust.get(name)!
-    const billDate = new Date(b.date)
-    const days = Math.floor((today.getTime() - billDate.getTime()) / 86400000)
-    if (days <= 30) row.d0_30 += out
-    else if (days <= 60) row.d31_60 += out
-    else if (days <= 90) row.d61_90 += out
-    else row.d90plus += out
-    row.total += out
-    row.billCount++
+    const bucket = byCust.get(name)!
+    if (isReceivableCreditDoc(b)) {
+      bucket.credit += receivableCreditAmount(b)
+      continue
+    }
+    if (!isReceivableDebitDoc(b)) continue
+    const out = receivableDebitOutstanding(b)
+    if (out <= 0.01) continue
+    bucket.debits.push({ date: b.date, amount: out })
   }
-  return [...byCust.values()].sort((a, b) => b.total - a.total)
+
+  for (const bucket of byCust.values()) {
+    let credit = bucket.credit
+    const row = bucket.row
+    const debits = bucket.debits.sort((a, b) => a.date.localeCompare(b.date))
+
+    for (const debit of debits) {
+      const appliedCredit = Math.min(credit, debit.amount)
+      credit -= appliedCredit
+      const out = debit.amount - appliedCredit
+      if (out <= 0.01) continue
+
+      const billDate = new Date(debit.date)
+      const days = Math.floor((today.getTime() - billDate.getTime()) / 86400000)
+      if (days <= 30) row.d0_30 += out
+      else if (days <= 60) row.d31_60 += out
+      else if (days <= 90) row.d61_90 += out
+      else row.d90plus += out
+      row.total += out
+      row.billCount++
+    }
+
+    row.d0_30 = Math.round(row.d0_30 * 100) / 100
+    row.d31_60 = Math.round(row.d31_60 * 100) / 100
+    row.d61_90 = Math.round(row.d61_90 * 100) / 100
+    row.d90plus = Math.round(row.d90plus * 100) / 100
+    row.total = Math.round(row.total * 100) / 100
+  }
+
+  return [...byCust.values()].map(({ row }) => row).filter(r => r.total > 0.01).sort((a, b) => b.total - a.total)
+}
+
+export function customerReceivableSummary(invoices: Invoice[]) {
+  const map = new Map<string, { customer: string; billed: number; received: number; credits: number; outstanding: number; bills: number }>()
+  for (const inv of invoices) {
+    const key = inv.party_name || 'Unknown'
+    const row = map.get(key) || { customer: key, billed: 0, received: 0, credits: 0, outstanding: 0, bills: 0 }
+    if (isReceivableCreditDoc(inv)) {
+      const credit = receivableCreditAmount(inv)
+      row.credits += credit
+      row.outstanding -= credit
+    } else if (isReceivableDebitDoc(inv)) {
+      row.billed += inv.grand_total || 0
+      row.received += inv.amt_paid || 0
+      row.outstanding += receivableDebitOutstanding(inv)
+    } else {
+      continue
+    }
+    row.bills += 1
+    row.outstanding = Math.round(row.outstanding * 100) / 100
+    map.set(key, row)
+  }
+  return [...map.values()].sort((a, b) => b.outstanding - a.outstanding)
 }
 
 export interface CashBookRow {
@@ -122,16 +197,60 @@ export interface CashBookRow {
   balance: number
 }
 
+export interface CashBookOptions {
+  accounts?: Pick<Account, 'id' | 'name' | 'open_bal_dr' | 'open_bal_cr'>[]
+  accountIds?: string[]
+  accountNames?: string[]
+  from?: string
+  to?: string
+  includeOpening?: boolean
+}
+
+function resolveCashBookOptions(optionsOrNames?: CashBookOptions | string[]): CashBookOptions {
+  if (Array.isArray(optionsOrNames)) return { accountNames: optionsOrNames }
+  return optionsOrNames || {}
+}
+
+function cashBookAccountMatches(
+  entry: { accountId?: string; accountName: string },
+  accountIds: Set<string>,
+  accountNames: Set<string>,
+) {
+  if (accountIds.size > 0) return !!entry.accountId && accountIds.has(entry.accountId)
+  return accountNames.has(entry.accountName)
+}
+
+function cashBookOpening(accounts: CashBookOptions['accounts'] = [], accountIds: Set<string>, accountNames: Set<string>) {
+  return accounts.reduce((sum, account) => {
+    if (accountIds.size > 0 && !accountIds.has(account.id)) return sum
+    if (accountIds.size === 0 && accountNames.size > 0 && !accountNames.has(account.name)) return sum
+    return sum + (account.open_bal_dr || 0) - (account.open_bal_cr || 0)
+  }, 0)
+}
+
 export function cashBookFromVouchers(
-  vouchers: { date: string; voucher_no: string; narration: string; entries: { accountName: string; debit: number; credit: number }[] }[],
-  accountNames: string[] = ['Cash in Hand', 'Bank Account (Primary)']
+  vouchers: { date: string; voucher_no: string; narration: string; entries: { accountId?: string; accountName: string; debit: number; credit: number }[] }[],
+  optionsOrNames?: CashBookOptions | string[]
 ): CashBookRow[] {
+  const options = resolveCashBookOptions(optionsOrNames)
+  const accountIds = new Set(options.accountIds || [])
+  const accountNames = new Set(options.accountNames || options.accounts?.map(a => a.name) || ['Cash in Hand', 'Bank Account (Primary)'])
   const rows: CashBookRow[] = []
-  let balance = 0
-  const sorted = [...vouchers].sort((a, b) => a.date.localeCompare(b.date))
+  let balance = options.includeOpening === false ? 0 : cashBookOpening(options.accounts, accountIds, accountNames)
+  const openingStart = balance
+  let rangeOpening = balance
+  const sorted = [...vouchers].sort((a, b) => a.date.localeCompare(b.date) || a.voucher_no.localeCompare(b.voucher_no))
+
   for (const v of sorted) {
     for (const e of v.entries) {
-      if (!accountNames.some(n => e.accountName.includes(n.split(' ')[0]))) continue
+      if (!cashBookAccountMatches(e, accountIds, accountNames)) continue
+      if (options.from && v.date < options.from) {
+        balance += e.debit - e.credit
+        rangeOpening = balance
+        continue
+      }
+      if (options.to && v.date > options.to) continue
+
       balance += e.debit - e.credit
       rows.push({
         date: v.date,
@@ -139,10 +258,23 @@ export function cashBookFromVouchers(
         narration: v.narration,
         debit: e.debit,
         credit: e.credit,
-        balance,
+        balance: Math.round(balance * 100) / 100,
       })
     }
   }
+
+  if (options.includeOpening !== false && (Math.abs(openingStart) > 0.01 || options.from)) {
+    const openingBalance = Math.round((options.from ? rangeOpening : openingStart) * 100) / 100
+    rows.unshift({
+      date: options.from || '',
+      voucher_no: 'OPENING',
+      narration: 'Opening Balance',
+      debit: openingBalance >= 0 ? openingBalance : 0,
+      credit: openingBalance < 0 ? Math.abs(openingBalance) : 0,
+      balance: openingBalance,
+    })
+  }
+
   return rows
 }
 

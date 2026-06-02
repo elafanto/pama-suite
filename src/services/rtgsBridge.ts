@@ -10,7 +10,8 @@ export interface PendingRTGS {
   amount: number
   mode: 'RTGS' | 'NEFT'
   partyId?: string | null
-  source?: string
+  source?: 'billing' | 'purchases' | string
+  sourceId?: string
 }
 
 const KEY = 'pama_pending_rtgs'

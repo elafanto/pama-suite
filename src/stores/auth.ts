@@ -60,9 +60,9 @@ export const useAuthStore = defineStore('auth', () => {
     }
     if (!orgId.value) {
       if (orgSetupError.value) {
-        return `Organization setup failed:\n\n${orgSetupError.value}\n\nFix: Supabase → SQL Editor → run supabase/migrations/003_bootstrap_user_org.sql\n\nPhir Settings me "Setup Organization" dabayein.`
+        return `Organization setup failed:\n\n${orgSetupError.value}\n\nFix: Supabase → SQL Editor → run migrations 003 through 007 in order\n\nPhir Settings me "Setup Organization" dabayein.`
       }
-      return 'Organization not ready yet.\n\nSettings → Cloud Sync → "Setup Organization" dabayein.\n\nAgar error aaye to Supabase SQL migration 003 run karein (see SETUP.md).'
+      return 'Organization not ready yet.\n\nSettings → Cloud Sync → "Setup Organization" dabayein.\n\nAgar error aaye to Supabase SQL migrations 003 through 007 run karein (see SETUP.md).'
     }
     return null
   })
@@ -158,29 +158,8 @@ export const useAuthStore = defineStore('auth', () => {
       return true
     }
 
-    // Fallback if RPC not deployed yet (only migration 001/002)
-    const { data: org, error: orgErr } = await sb.from('orgs').insert({ name: 'Pama Packaging' }).select().single()
-    if (orgErr || !org) {
-      orgSetupError.value = bootErr?.message || orgErr?.message || 'Could not create organization'
-      return false
-    }
-    const { error: memErr } = await sb.from('org_members').insert({ org_id: org.id, user_id: user.value.id, role: 'owner' })
-    if (memErr) {
-      orgSetupError.value = memErr.message
-      return false
-    }
-    const { error: profUpErr } = await sb.from('profiles').upsert({
-      id: user.value.id,
-      org_id: org.id,
-      display_name: displayName,
-    })
-    if (profUpErr) {
-      orgSetupError.value = profUpErr.message
-      return false
-    }
-    orgId.value = org.id
-    localStorage.setItem('pama_org_id', org.id)
-    return true
+    orgSetupError.value = bootErr?.message || 'Could not create organization. Run the latest Supabase migrations and try again.'
+    return false
   }
 
   async function ensureOrgSetup(): Promise<boolean> {

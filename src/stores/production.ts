@@ -20,10 +20,10 @@ export const useProductionStore = defineStore('production', () => {
     const firm = useFirmStore()
     const firmId = firm.activeFirmId
     const [j, s, r, m] = await Promise.all([
-      db.production_jobs.filter((x) => !x.is_deleted && x.firm_id === firmId).toArray(),
-      db.production_stages.filter((x) => !x.is_deleted && x.firm_id === firmId).toArray(),
-      db.reel_stocks.filter((x) => !x.is_deleted && x.firm_id === firmId).toArray(),
-      db.stock_movements.filter((x) => !x.is_deleted && x.firm_id === firmId).toArray(),
+      db.production_jobs.where('firm_id').equals(firmId).filter((x) => !x.is_deleted).toArray(),
+      db.production_stages.where('firm_id').equals(firmId).filter((x) => !x.is_deleted).toArray(),
+      db.reel_stocks.where('firm_id').equals(firmId).filter((x) => !x.is_deleted).toArray(),
+      db.stock_movements.where('firm_id').equals(firmId).filter((x) => !x.is_deleted).toArray(),
     ])
     jobs.value = j.sort((a, b) => (b.date || '').localeCompare(a.date || ''))
     stages.value = s.sort((a, b) => (b.date || '').localeCompare(a.date || ''))

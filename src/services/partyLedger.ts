@@ -38,7 +38,7 @@ export interface PartyLedgerRow {
   narration: string
   debit: number
   credit: number
-  balance: number
+  balance: number | null
   amount: number
   paid: number
   outstanding: number
@@ -48,7 +48,7 @@ export interface PartyLedgerRow {
 export interface PartyLedgerTotals {
   debit: number
   credit: number
-  balance: number
+  balance: number | null
   billed: number
   received: number
   payable: number
@@ -64,6 +64,27 @@ export interface PartyLedgerResult {
 }
 
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100
+
+function invoiceDocKind(inv: Invoice) {
+  return String(inv.doc_type || 'INVOICE').toUpperCase()
+}
+
+function isCustomerDebitDoc(inv: Invoice) {
+  const kind = invoiceDocKind(inv)
+  return kind === 'INVOICE' || kind === 'BILL_OF_SUPPLY' || kind === 'DEBIT_NOTE'
+}
+
+function isCustomerCreditDoc(inv: Invoice) {
+  return invoiceDocKind(inv) === 'CREDIT_NOTE'
+}
+
+function customerDocLabel(inv: Invoice) {
+  const kind = invoiceDocKind(inv)
+  if (kind === 'CREDIT_NOTE') return 'Credit Note'
+  if (kind === 'DEBIT_NOTE') return 'Debit Note'
+  if (kind === 'BILL_OF_SUPPLY') return 'Bill of Supply'
+  return 'Invoice'
+}
 
 export function normalizePartyName(name: string | null | undefined) {
   return (name || '')
@@ -115,18 +136,21 @@ export function buildPartyLedger(
   if (filters.mode === 'customer' || filters.mode === 'both') {
     for (const inv of invoices) {
       if (inv.firm_id !== filters.firmId || inv.is_deleted) continue
-      if (inv.doc_type !== 'INVOICE' && inv.doc_type !== 'invoice') continue
+      if (!isCustomerDebitDoc(inv) && !isCustomerCreditDoc(inv)) continue
       if (!inDateRange(inv.date, filters)) continue
       if (!matchesParty(inv.party_id, inv.party_name, filters)) continue
 
       const amount = round2(inv.grand_total)
       const paid = round2(inv.amt_paid)
-      const outstanding = round2(Math.max(0, amount - paid))
-      if (filters.pendingOnly && outstanding <= 0.01) continue
-      if (!inAmountRange(amount, outstanding, filters)) continue
+      const isCreditNote = isCustomerCreditDoc(inv)
+      const outstanding = isCreditNote ? round2(-amount) : round2(Math.max(0, amount - paid))
+      const filterOutstanding = Math.abs(outstanding)
+      if (filters.pendingOnly && filterOutstanding <= 0.01) continue
+      if (!inAmountRange(amount, filterOutstanding, filters)) continue
 
       seenDocs.add(`invoice:${inv.id}`)
       const writeOffNote = /write-off/i.test(inv.notes || '') ? ' Includes write-off.' : ''
+      const docLabel = customerDocLabel(inv)
       const base = {
         docId: inv.id,
         docType: 'invoice' as const,
@@ -144,13 +168,13 @@ export function buildPartyLedger(
       entries.push({
         ...base,
         id: `${inv.id}:bill`,
-        type: 'Invoice',
-        narration: `Billed to ${base.partyName}`,
-        debit: amount,
-        credit: 0,
+        type: docLabel,
+        narration: isCreditNote ? `Credit note to ${base.partyName}` : `${docLabel} to ${base.partyName}`,
+        debit: isCreditNote ? 0 : amount,
+        credit: isCreditNote ? amount : 0,
       })
 
-      if (paid > 0) {
+      if (!isCreditNote && paid > 0) {
         entries.push({
           ...base,
           id: `${inv.id}:paid`,
@@ -218,6 +242,7 @@ export function buildPartyLedger(
   const rows = entries
     .sort((a, b) => a.date.localeCompare(b.date) || a.refNo.localeCompare(b.refNo) || a.id.localeCompare(b.id))
     .map((row) => {
+      if (filters.mode === 'both') return { ...row, balance: null }
       balance = round2(row.mode === 'customer' ? balance + row.debit - row.credit : balance + row.credit - row.debit)
       return { ...row, balance }
     })
@@ -227,15 +252,15 @@ export function buildPartyLedger(
       acc.debit = round2(acc.debit + row.debit)
       acc.credit = round2(acc.credit + row.credit)
       acc.balance = row.balance
-      if (row.mode === 'customer' && row.type === 'Invoice') acc.billed = round2(acc.billed + row.amount)
-      if (row.mode === 'customer' && row.credit > 0) acc.received = round2(acc.received + row.credit)
+      if (row.mode === 'customer' && row.id.endsWith(':bill') && row.debit > 0) acc.billed = round2(acc.billed + row.debit)
+      if (row.mode === 'customer' && row.type.includes('Receipt')) acc.received = round2(acc.received + row.credit)
       if (row.mode === 'vendor' && row.type === 'Purchase') acc.payable = round2(acc.payable + row.amount)
       if (row.mode === 'vendor' && row.debit > 0) acc.paid = round2(acc.paid + row.debit)
-      acc.outstanding = round2(acc.outstanding + (row.type === 'Invoice' || row.type === 'Purchase' ? row.outstanding : 0))
+      acc.outstanding = round2(acc.outstanding + (row.id.endsWith(':bill') ? row.outstanding : 0))
       acc.rows += 1
       return acc
     },
-    { debit: 0, credit: 0, balance: 0, billed: 0, received: 0, payable: 0, paid: 0, outstanding: 0, rows: 0, documents: seenDocs.size },
+    { debit: 0, credit: 0, balance: filters.mode === 'both' ? null : 0, billed: 0, received: 0, payable: 0, paid: 0, outstanding: 0, rows: 0, documents: seenDocs.size },
   )
 
   return { rows, totals }

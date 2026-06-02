@@ -18,15 +18,28 @@ export interface StockRow {
   rate: number
 }
 
-/** Normalised key to match invoice/purchase lines to an item. */
-function lineKey(itemId: string | null | undefined, name: string): string {
-  return (itemId && itemId.trim()) || `name:${(name || '').trim().toLowerCase()}`
+function normName(name: string): string {
+  return (name || '').trim().toLowerCase()
+}
+
+export function findStockRowForLine(
+  rows: StockRow[],
+  line: Pick<Invoice['items'][number], 'item_id' | 'name'>,
+): StockRow | null {
+  const itemId = (line.item_id || '').trim()
+  if (itemId) {
+    const byId = rows.find((r) => r.itemId === itemId)
+    if (byId) return byId
+  }
+  const nameKey = (line.name || '').trim().toLowerCase()
+  if (!nameKey) return null
+  return rows.find((r) => r.name.trim().toLowerCase() === nameKey) || null
 }
 
 /**
  * On-hand per item = opening_stock + Σ purchased − Σ sold.
- * Lines are matched by item_id when present, else by lowercased name, so
- * transactions entered before an item existed still count.
+ * Lines are matched by item_id when present, else by a unique lowercased name,
+ * so legacy transactions still count without duplicating across same-name items.
  */
 export function computeStock(
   items: Item[],
@@ -36,38 +49,45 @@ export function computeStock(
   movements: ItemStockMovement[] = [],
 ): StockRow[] {
   const live = items.filter((i) => !i.is_deleted && i.firm_id === firmId && i.track_stock !== false)
-  const byKey = new Map<string, Item>()
+  const liveIds = new Set(live.map((it) => it.id))
+  const uniqueItemByName = new Map<string, Item | null>()
   for (const it of live) {
-    byKey.set(lineKey(it.id, it.name), it)
-    byKey.set(`name:${it.name.trim().toLowerCase()}`, it)
+    const key = normName(it.name)
+    uniqueItemByName.set(key, uniqueItemByName.has(key) ? null : it)
   }
 
   const purchasedMap = new Map<string, number>()
   const soldMap = new Map<string, number>()
 
+  function resolveLineItemId(itemId: string | null | undefined, name: string): string | null {
+    const trimmedId = itemId?.trim()
+    if (trimmedId && liveIds.has(trimmedId)) return trimmedId
+    return uniqueItemByName.get(normName(name))?.id || null
+  }
+
   for (const p of purchases) {
     if (p.is_deleted || p.firm_id !== firmId) continue
     for (const l of p.items || []) {
-      const k = lineKey(l.item_id, l.name)
-      purchasedMap.set(k, (purchasedMap.get(k) || 0) + (Number(l.qty) || 0))
+      const itemId = resolveLineItemId(l.item_id, l.name)
+      if (!itemId) continue
+      purchasedMap.set(itemId, (purchasedMap.get(itemId) || 0) + (Number(l.qty) || 0))
     }
   }
   for (const inv of invoices) {
     if (inv.is_deleted || inv.firm_id !== firmId) continue
     if (inv.doc_type !== 'INVOICE' && inv.doc_type !== 'invoice') continue
     for (const l of inv.items || []) {
-      const k = lineKey(l.item_id, l.name)
-      soldMap.set(k, (soldMap.get(k) || 0) + (Number(l.qty) || 0))
+      const itemId = resolveLineItemId(l.item_id, l.name)
+      if (!itemId) continue
+      soldMap.set(itemId, (soldMap.get(itemId) || 0) + (Number(l.qty) || 0))
     }
   }
 
   const rows: StockRow[] = []
   const adjustments = manualAdjustmentTotals(movements, firmId)
   for (const it of live) {
-    const k1 = lineKey(it.id, it.name)
-    const k2 = `name:${it.name.trim().toLowerCase()}`
-    const purchased = (purchasedMap.get(k1) || 0) + (k2 !== k1 ? purchasedMap.get(k2) || 0 : 0)
-    const sold = (soldMap.get(k1) || 0) + (k2 !== k1 ? soldMap.get(k2) || 0 : 0)
+    const purchased = purchasedMap.get(it.id) || 0
+    const sold = soldMap.get(it.id) || 0
     const adjusted = adjustments.get(it.id) || 0
     const opening = Number(it.opening_stock) || 0
     const onHand = opening + purchased - sold + adjusted

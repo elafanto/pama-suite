@@ -14,6 +14,27 @@ export interface ExportOptions {
   includeSensitiveSettings?: boolean
 }
 
+export interface ImportOptions {
+  allowSensitiveSettings?: boolean
+}
+
+export interface ImportPreview {
+  supported: boolean
+  format: string
+  version?: number
+  exportedAt?: string
+  counts: Record<string, number>
+  warnings: string[]
+  hasSensitiveSettings: boolean
+  mergeSkipsOlderRecords?: number
+}
+
+export interface ImportResult {
+  counts: Record<string, number>
+  skipped?: Record<string, number>
+  skippedSensitiveSettings?: boolean
+}
+
 export interface SuiteBackup {
   format: typeof BACKUP_FORMAT
   version: number
@@ -42,6 +63,9 @@ export interface SuiteBackup {
     templates?: unknown[]
   }
 }
+
+type ImportableRecord = { id: string; updated_at?: string }
+type ImportMode = 'merge' | 'replace'
 
 export async function exportAll(options: ExportOptions = {}): Promise<SuiteBackup> {
   const [
@@ -104,73 +128,120 @@ export function downloadBackup(data: SuiteBackup, filename?: string) {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000)
 }
 
+export async function previewImport(data: any): Promise<ImportPreview> {
+  const format = detectBackupFormat(data)
+  const counts = countImportRows(data, format)
+  const warnings: string[] = []
+  const version = typeof data?.version === 'number' ? data.version : undefined
+  const exportedAt = typeof data?.exportedAt === 'string' ? data.exportedAt : undefined
+  const hasSensitiveSettings = hasSensitiveImportSettings(data)
+
+  if (format === 'unknown') {
+    return {
+      supported: false,
+      format,
+      version,
+      exportedAt,
+      counts,
+      warnings: ['Unknown backup format. Import cannot continue.'],
+      hasSensitiveSettings,
+    }
+  }
+
+  if (format === BACKUP_FORMAT && version && version > BACKUP_VERSION) {
+    warnings.push(`Backup version ${version} is newer than this app supports (${BACKUP_VERSION}). Review carefully before importing.`)
+  }
+
+  if (format !== BACKUP_FORMAT) {
+    warnings.push('Legacy backup detected. Imported records will be converted to the current suite format.')
+  }
+
+  if (hasSensitiveSettings) {
+    warnings.push('Backup contains saved API keys/config. They will only overwrite this device after a separate confirmation.')
+  }
+
+  let mergeSkipsOlderRecords = 0
+  if (format === BACKUP_FORMAT) {
+    mergeSkipsOlderRecords = await countOlderSuiteRows(data)
+    if (mergeSkipsOlderRecords) {
+      warnings.push(`Merge will skip ${mergeSkipsOlderRecords} record(s) because this device already has the same or newer updated_at.`)
+    }
+  }
+
+  return {
+    supported: true,
+    format,
+    version,
+    exportedAt,
+    counts,
+    warnings,
+    hasSensitiveSettings,
+    mergeSkipsOlderRecords,
+  }
+}
+
 const LEGACY_VOUCHER_TYPES: Record<string, Voucher['type']> = {
   PV: 'PAYMENT', RV: 'RECEIPT', CV: 'CONTRA', JV: 'JOURNAL',
   PAYMENT: 'PAYMENT', RECEIPT: 'RECEIPT', CONTRA: 'CONTRA', JOURNAL: 'JOURNAL',
   SALE: 'SALE', PURCHASE: 'PURCHASE',
 }
 
-export async function importBackup(data: any, mode: 'merge' | 'replace' = 'merge'): Promise<{ counts: Record<string, number> }> {
-  if (data?.format === BACKUP_FORMAT) {
-    return importSuiteBackup(data, mode)
-  }
-  if (data?.format === 'pama_unified_backup') {
-    return importLegacyUnified(data, mode)
-  }
-  // Legacy billing JSON (custs/bills — suite backups use parties[] and format field)
-  if (data?.bills || data?.custs || (data?.firms?.length && !data?.parties)) {
-    return importLegacyBilling(data, mode)
-  }
+export async function importBackup(data: any, mode: ImportMode = 'merge', options: ImportOptions = {}): Promise<ImportResult> {
+  const format = detectBackupFormat(data)
+  if (format === BACKUP_FORMAT) return importSuiteBackup(data, mode, options)
+  if (format === 'pama_unified_backup') return importLegacyUnified(data, mode, options)
+  if (format === 'legacy_billing') return importLegacyBilling(data, mode)
   throw new Error('Unknown backup format')
 }
 
-async function importSuiteBackup(data: any, mode: 'merge' | 'replace'): Promise<{ counts: Record<string, number> }> {
+async function importSuiteBackup(data: any, mode: ImportMode, options: ImportOptions): Promise<ImportResult> {
   const counts: Record<string, number> = {}
+  const skipped: Record<string, number> = {}
 
-  if (mode === 'replace') {
-    await db.transaction('rw', db.tables.map(t => t.name), async () => {
-      for (const t of db.tables) await t.clear()
-    })
-  }
-
-  const upsertAll = async <T extends { id: string; updated_at?: string }>(table: any, rows: T[], key: string) => {
+  const upsertAll = async <T extends ImportableRecord>(table: any, rows: T[], key: string) => {
     counts[key] = 0
+    skipped[key] = 0
     for (const r of rows) {
+      if (mode === 'merge') {
+        const existing = await table.get(r.id)
+        if (!shouldImportRow(existing, r)) {
+          skipped[key]++
+          continue
+        }
+      }
       await table.put({ ...r, _dirty: true, updated_at: r.updated_at || nowISO() })
       counts[key]++
     }
   }
 
-  await upsertAll(db.firms, data.firms || [], 'firms')
-  await upsertAll(db.parties, data.parties || [], 'parties')
-  await upsertAll(db.items, data.items || [], 'items')
-  await upsertAll(db.invoices, data.invoices || [], 'invoices')
-  await upsertAll(db.purchases, data.purchases || [], 'purchases')
-  await upsertAll(db.recipes, data.recipes || [], 'recipes')
-  await upsertAll(db.accounts, data.accounts || [], 'accounts')
-  await upsertAll(db.vouchers, data.vouchers || [], 'vouchers')
-  await upsertAll(db.activity_log, data.activity_log || [], 'activity_log')
-  await upsertAll(db.reel_stocks, data.reel_stocks || [], 'reel_stocks')
-  await upsertAll(db.production_jobs, data.production_jobs || [], 'production_jobs')
-  await upsertAll(db.production_stages, data.production_stages || [], 'production_stages')
-  await upsertAll(db.stock_movements, data.stock_movements || [], 'stock_movements')
-  await upsertAll(db.item_stock_movements, data.item_stock_movements || [], 'item_stock_movements')
+  await db.transaction('rw', db.tables.map(t => t.name), async () => {
+    if (mode === 'replace') {
+      for (const t of db.tables) await t.clear()
+    }
 
-  if (data.settings) {
-    if (data.settings.geminiKey) localStorage.setItem('pama_gemini_key', data.settings.geminiKey)
-    if (data.settings.supabaseUrl) localStorage.setItem('pama_supabase_url', data.settings.supabaseUrl)
-    if (data.settings.supabaseAnon) localStorage.setItem('pama_supabase_anon_key', data.settings.supabaseAnon)
-    if (data.settings.bankEmail) localStorage.setItem('pama_bank_email', data.settings.bankEmail)
-    if (data.settings.rtgsAccounts) localStorage.setItem('pama_rtgs_accounts', JSON.stringify(data.settings.rtgsAccounts))
-    if (data.settings.activeFirmId) localStorage.setItem('pama_active_firm', data.settings.activeFirmId)
-    if (data.settings.templates) localStorage.setItem('pama_templates_suite', JSON.stringify(data.settings.templates))
-  }
+    await upsertAll(db.firms, data.firms || [], 'firms')
+    await upsertAll(db.parties, data.parties || [], 'parties')
+    await upsertAll(db.items, data.items || [], 'items')
+    await upsertAll(db.invoices, data.invoices || [], 'invoices')
+    await upsertAll(db.purchases, data.purchases || [], 'purchases')
+    await upsertAll(db.recipes, data.recipes || [], 'recipes')
+    await upsertAll(db.accounts, data.accounts || [], 'accounts')
+    await upsertAll(db.vouchers, data.vouchers || [], 'vouchers')
+    await upsertAll(db.activity_log, data.activity_log || [], 'activity_log')
+    await upsertAll(db.reel_stocks, data.reel_stocks || [], 'reel_stocks')
+    await upsertAll(db.production_jobs, data.production_jobs || [], 'production_jobs')
+    await upsertAll(db.production_stages, data.production_stages || [], 'production_stages')
+    await upsertAll(db.stock_movements, data.stock_movements || [], 'stock_movements')
+    await upsertAll(db.item_stock_movements, data.item_stock_movements || [], 'item_stock_movements')
 
-  await repairImportedInvoiceNumbers()
-  return { counts }
+    await repairImportedInvoiceNumbers()
+  })
+
+  const skippedSensitiveSettings = applyImportedSettings(data.settings, options)
+  return { counts, skipped, skippedSensitiveSettings }
 }
 
-async function importLegacyUnified(data: any, mode: 'merge' | 'replace') {
+async function importLegacyUnified(data: any, mode: ImportMode, options: ImportOptions) {
   const billing = data.billing || {}
   const box = data.box || {}
   const rtgs = data.rtgs || {}
@@ -237,12 +308,13 @@ async function importLegacyUnified(data: any, mode: 'merge' | 'replace') {
 
   if (rtgs.bankEmail) localStorage.setItem('pama_bank_email', rtgs.bankEmail)
   if (rtgs.accounts) localStorage.setItem('pama_rtgs_accounts', JSON.stringify(rtgs.accounts))
-  if (data.settings?.geminiKey) localStorage.setItem('pama_gemini_key', data.settings.geminiKey)
+  const skippedSensitiveSettings = applyImportedSettings(data.settings, options)
 
+  if (skippedSensitiveSettings) result.skippedSensitiveSettings = true
   return result
 }
 
-async function importLegacyBilling(data: any, mode: 'merge' | 'replace') {
+async function importLegacyBilling(data: any, mode: ImportMode): Promise<ImportResult> {
   if (mode === 'replace') {
     await db.transaction('rw', db.tables.map(t => t.name), async () => {
       for (const t of db.tables) await t.clear()
@@ -413,7 +485,7 @@ async function importLegacyBilling(data: any, mode: 'merge' | 'replace') {
 async function repairImportedInvoiceNumbers() {
   const allFirms = await db.firms.filter((f) => !f.is_deleted).toArray()
   for (const f of allFirms) {
-    let invs = await db.invoices.filter((i) => !i.is_deleted && i.firm_id === f.id).toArray()
+    let invs = await db.invoices.where('firm_id').equals(f.id).filter((i) => !i.is_deleted).toArray()
     for (const group of findDuplicateBillNoGroups(invs)) {
       const ordered = [...group].sort((a, b) =>
         (a.created_at || a.updated_at || '').localeCompare(b.created_at || b.updated_at || ''),
@@ -430,6 +502,130 @@ async function repairImportedInvoiceNumbers() {
       await db.firms.put({ ...f, next_bill_no: resolved, updated_at: nowISO(), _dirty: true })
     }
   }
+}
+
+function detectBackupFormat(data: any): string {
+  if (data?.format === BACKUP_FORMAT) return BACKUP_FORMAT
+  if (data?.format === 'pama_unified_backup') return 'pama_unified_backup'
+  // Legacy billing JSON (custs/bills; suite backups use parties[] and format field).
+  if (data?.bills || data?.custs || (data?.firms?.length && !data?.parties)) return 'legacy_billing'
+  return 'unknown'
+}
+
+function countImportRows(data: any, format: string): Record<string, number> {
+  const counts: Record<string, number> = {}
+  if (format === BACKUP_FORMAT) {
+    for (const { key, rows } of suiteImportTables(data)) counts[key] = rows.length
+    return counts
+  }
+
+  if (format === 'pama_unified_backup') {
+    const billing = data.billing || {}
+    const box = data.box || {}
+    const rtgs = data.rtgs || {}
+    counts.firms = arrayCount(billing.firms)
+    counts.parties = arrayCount(billing.custs) + arrayCount(billing.vendors) + arrayCount(rtgs.benes)
+    counts.items = arrayCount(billing.items)
+    counts.invoices = arrayCount(billing.bills)
+    counts.purchases = arrayCount(billing.purchases)
+    counts.accounts = arrayCount(billing.accounts)
+    counts.vouchers = arrayCount(billing.vouchers)
+    counts.recipes = arrayCount(box.recipes)
+    return counts
+  }
+
+  if (format === 'legacy_billing') {
+    counts.firms = arrayCount(data.firms)
+    counts.parties = arrayCount(data.custs) + arrayCount(data.vendors)
+    counts.items = arrayCount(data.items)
+    counts.invoices = arrayCount(data.bills)
+    counts.purchases = arrayCount(data.purchases)
+    counts.accounts = arrayCount(data.accounts)
+    counts.vouchers = arrayCount(data.vouchers)
+  }
+  return counts
+}
+
+async function countOlderSuiteRows(data: any): Promise<number> {
+  let count = 0
+  for (const { table, rows } of suiteImportTables(data)) {
+    for (const row of rows) {
+      const existing = await table.get(row.id)
+      if (existing && !shouldImportRow(existing, row)) count++
+    }
+  }
+  return count
+}
+
+function suiteImportTables(data: any) {
+  return [
+    { key: 'firms', table: db.firms, rows: asArray<ImportableRecord>(data.firms) },
+    { key: 'parties', table: db.parties, rows: asArray<ImportableRecord>(data.parties) },
+    { key: 'items', table: db.items, rows: asArray<ImportableRecord>(data.items) },
+    { key: 'invoices', table: db.invoices, rows: asArray<ImportableRecord>(data.invoices) },
+    { key: 'purchases', table: db.purchases, rows: asArray<ImportableRecord>(data.purchases) },
+    { key: 'recipes', table: db.recipes, rows: asArray<ImportableRecord>(data.recipes) },
+    { key: 'accounts', table: db.accounts, rows: asArray<ImportableRecord>(data.accounts) },
+    { key: 'vouchers', table: db.vouchers, rows: asArray<ImportableRecord>(data.vouchers) },
+    { key: 'activity_log', table: db.activity_log, rows: asArray<ImportableRecord>(data.activity_log) },
+    { key: 'reel_stocks', table: db.reel_stocks, rows: asArray<ImportableRecord>(data.reel_stocks) },
+    { key: 'production_jobs', table: db.production_jobs, rows: asArray<ImportableRecord>(data.production_jobs) },
+    { key: 'production_stages', table: db.production_stages, rows: asArray<ImportableRecord>(data.production_stages) },
+    { key: 'stock_movements', table: db.stock_movements, rows: asArray<ImportableRecord>(data.stock_movements) },
+    { key: 'item_stock_movements', table: db.item_stock_movements, rows: asArray<ImportableRecord>(data.item_stock_movements) },
+  ]
+}
+
+function shouldImportRow(existing: ImportableRecord | undefined, incoming: ImportableRecord): boolean {
+  if (!existing) return true
+  const existingUpdatedAt = timestampMs(existing.updated_at)
+  const incomingUpdatedAt = timestampMs(incoming.updated_at)
+
+  if (incomingUpdatedAt !== undefined && existingUpdatedAt !== undefined) {
+    return incomingUpdatedAt > existingUpdatedAt
+  }
+  if (incomingUpdatedAt !== undefined) return true
+  if (existingUpdatedAt !== undefined) return false
+  return true
+}
+
+function applyImportedSettings(settings: SuiteBackup['settings'] | undefined, options: ImportOptions): boolean {
+  if (!settings) return false
+  let skippedSensitiveSettings = false
+
+  if (options.allowSensitiveSettings) {
+    if (settings.geminiKey) localStorage.setItem('pama_gemini_key', settings.geminiKey)
+    if (settings.supabaseUrl) localStorage.setItem('pama_supabase_url', settings.supabaseUrl)
+    if (settings.supabaseAnon) localStorage.setItem('pama_supabase_anon_key', settings.supabaseAnon)
+  } else if (settings.geminiKey || settings.supabaseUrl || settings.supabaseAnon) {
+    skippedSensitiveSettings = true
+  }
+
+  if (settings.bankEmail) localStorage.setItem('pama_bank_email', settings.bankEmail)
+  if (settings.rtgsAccounts) localStorage.setItem('pama_rtgs_accounts', JSON.stringify(settings.rtgsAccounts))
+  if (settings.activeFirmId) localStorage.setItem('pama_active_firm', settings.activeFirmId)
+  if (settings.templates) localStorage.setItem('pama_templates_suite', JSON.stringify(settings.templates))
+
+  return skippedSensitiveSettings
+}
+
+function hasSensitiveImportSettings(data: any): boolean {
+  const settings = data?.settings
+  return !!(settings?.geminiKey || settings?.supabaseUrl || settings?.supabaseAnon)
+}
+
+function timestampMs(value: unknown): number | undefined {
+  if (typeof value !== 'string' || !value) return undefined
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? value : []
+}
+
+function arrayCount(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0
 }
 
 function num(v: any): number {

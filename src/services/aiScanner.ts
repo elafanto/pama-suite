@@ -2,6 +2,13 @@
 
 const GEMINI_MODEL = 'gemini-2.5-flash'
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta'
+const GEMINI_TIMEOUT_MS = 45_000
+const GEMINI_MAX_ATTEMPTS = 3
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const MAX_PDF_BYTES = 20 * 1024 * 1024
+
+const SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const SUPPORTED_PDF_MIME_TYPES = new Set(['application/pdf'])
 
 export type ConsumableScanType = 'glue' | 'ink' | 'stitching_wire'
 
@@ -49,11 +56,105 @@ export interface PurchaseBillsScanResult {
   bills: ScanResult[]
 }
 
+type ScanFileOptions = {
+  allowImages?: boolean
+  allowPdf?: boolean
+}
+
+const DEFAULT_SCAN_FILE_OPTIONS: Required<ScanFileOptions> = {
+  allowImages: true,
+  allowPdf: true,
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function formatBytes(bytes: number) {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  if (bytes >= 1024) return `${Math.ceil(bytes / 1024)} KB`
+  return `${bytes} B`
+}
+
+function isRetryableStatus(status: number) {
+  return status === 408 || status === 429 || status >= 500
+}
+
+function isRetryableError(err: unknown) {
+  return err instanceof Error && (err.name === 'AbortError' || err.name === 'TypeError')
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
+  const controller = new AbortController()
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } finally {
+    globalThis.clearTimeout(timeoutId)
+  }
+}
+
+function extractJsonPayload(text: string, label: string) {
+  const trimmed = text.trim()
+  const unfenced = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+  const direct = tryParseJson(unfenced)
+  if (direct.ok) return direct.value
+
+  for (const opener of ['{', '['] as const) {
+    const start = unfenced.indexOf(opener)
+    if (start === -1) continue
+
+    const closer = opener === '{' ? '}' : ']'
+    let depth = 0
+    let inString = false
+    let escaped = false
+
+    for (let idx = start; idx < unfenced.length; idx += 1) {
+      const char = unfenced[idx]
+
+      if (inString) {
+        if (escaped) {
+          escaped = false
+        } else if (char === '\\') {
+          escaped = true
+        } else if (char === '"') {
+          inString = false
+        }
+        continue
+      }
+
+      if (char === '"') {
+        inString = true
+      } else if (char === opener) {
+        depth += 1
+      } else if (char === closer) {
+        depth -= 1
+        if (depth === 0) {
+          const parsed = tryParseJson(unfenced.slice(start, idx + 1))
+          if (parsed.ok) return parsed.value
+          break
+        }
+      }
+    }
+  }
+
+  throw new Error(`Could not parse ${label} scan result as JSON`)
+}
+
+function tryParseJson(text: string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: JSON.parse(text) }
+  } catch {
+    return { ok: false }
+  }
+}
+
 async function generateJson<T>(apiKey: string, prompt: string, base64: string, mimeType: string, label: string): Promise<T> {
   if (!apiKey) throw new Error('Gemini API key missing — Settings me save karo')
 
   const url = `${GEMINI_API_BASE}/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`
-  const res = await fetch(url, {
+  const init: RequestInit = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -65,18 +166,41 @@ async function generateJson<T>(apiKey: string, prompt: string, base64: string, m
       }],
       generationConfig: { response_mime_type: 'application/json' },
     }),
-  })
-
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`Gemini ${GEMINI_MODEL} error while scanning ${label}: ${res.status} ${err.slice(0, 240)}`)
   }
 
-  const json = await res.json()
-  const text = json?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text || '').join('\n') || ''
-  const match = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/)
-  if (!match) throw new Error(`Could not parse ${label} scan result`)
-  return JSON.parse(match[0]) as T
+  let lastError: unknown
+  for (let attempt = 1; attempt <= GEMINI_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const res = await fetchWithTimeout(url, init, GEMINI_TIMEOUT_MS)
+
+      if (!res.ok) {
+        const err = await res.text()
+        const message = `Gemini ${GEMINI_MODEL} error while scanning ${label}: ${res.status} ${err.slice(0, 240)}`
+        if (attempt < GEMINI_MAX_ATTEMPTS && isRetryableStatus(res.status)) {
+          lastError = new Error(message)
+          await sleep(500 * attempt)
+          continue
+        }
+        throw new Error(message)
+      }
+
+      const json = await res.json()
+      const text = json?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text || '').join('\n') || ''
+      return extractJsonPayload(text, label) as T
+    } catch (err) {
+      lastError = err
+      if (attempt < GEMINI_MAX_ATTEMPTS && isRetryableError(err)) {
+        await sleep(500 * attempt)
+        continue
+      }
+      throw err instanceof Error && err.name === 'AbortError'
+        ? new Error(`Gemini ${GEMINI_MODEL} timed out while scanning ${label}`)
+        : err
+    }
+  }
+
+  if (lastError instanceof Error) throw lastError
+  throw new Error(`Gemini ${GEMINI_MODEL} failed while scanning ${label}`)
 }
 
 export async function scanInvoiceImage(
@@ -199,18 +323,46 @@ function inferMimeType(file: File): string {
     png: 'image/png',
     webp: 'image/webp',
   }
-  return byExtension[ext || ''] || 'image/jpeg'
+  return byExtension[ext || ''] || ''
 }
 
-export function fileToBase64(file: File): Promise<{ base64: string; mime: string }> {
+export function validateScanFile(file: File, options: ScanFileOptions = {}) {
+  const { allowImages, allowPdf } = { ...DEFAULT_SCAN_FILE_OPTIONS, ...options }
+  const mime = inferMimeType(file)
+  const isImage = SUPPORTED_IMAGE_MIME_TYPES.has(mime)
+  const isPdf = SUPPORTED_PDF_MIME_TYPES.has(mime)
+
+  if ((!allowImages || !isImage) && (!allowPdf || !isPdf)) {
+    const allowed = [
+      allowImages ? 'JPG, PNG or WebP image' : '',
+      allowPdf ? 'PDF' : '',
+    ].filter(Boolean).join(' or ')
+    throw new Error(`${file.name}: unsupported file type. Upload ${allowed}.`)
+  }
+
+  const maxBytes = isPdf ? MAX_PDF_BYTES : MAX_IMAGE_BYTES
+  if (file.size > maxBytes) {
+    throw new Error(`${file.name}: file is ${formatBytes(file.size)}. Maximum allowed is ${formatBytes(maxBytes)}.`)
+  }
+
+  return { mime, isImage, isPdf }
+}
+
+export function fileToBase64(file: File, options?: ScanFileOptions): Promise<{ base64: string; mime: string }> {
+  const { mime } = validateScanFile(file, options)
+
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => {
       const dataUrl = reader.result as string
       const base64 = dataUrl.split(',')[1]
-      resolve({ base64, mime: inferMimeType(file) })
+      if (!base64) {
+        reject(new Error(`${file.name}: could not read file contents`))
+        return
+      }
+      resolve({ base64, mime })
     }
-    reader.onerror = reject
+    reader.onerror = () => reject(new Error(`${file.name}: could not read file contents`))
     reader.readAsDataURL(file)
   })
 }
