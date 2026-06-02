@@ -79,6 +79,9 @@ interface BulkScanFileStatus {
   message: string
 }
 
+const BULK_SCAN_ACCEPT = 'application/pdf,.pdf,image/*'
+const BULK_SCAN_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp']
+
 const bulkRows = ref<BulkPurchaseRow[]>([])
 const scannedBills = ref<ScanResult[]>([])
 
@@ -421,7 +424,7 @@ async function saveScannedBill(bill: ScanResult) {
     grand_total: totals.grandTotal,
     amt_paid: 0,
     pay_status: 'UNPAID',
-    notes: bill.grandTotal ? `AI PDF total: ₹${bill.grandTotal}` : 'AI multi-PDF import',
+    notes: bill.grandTotal ? `AI scan total: ₹${bill.grandTotal}` : 'AI multi-bill import',
   })
 }
 
@@ -593,23 +596,31 @@ async function saveBulkPurchases() {
   activeTab.value = 'history'
 }
 
-async function scanBulkPurchasePdf(e: Event) {
+function isBulkScanFile(file: File) {
+  const name = file.name.toLowerCase()
+  return file.type === 'application/pdf'
+    || file.type.startsWith('image/')
+    || name.endsWith('.pdf')
+    || BULK_SCAN_IMAGE_EXTENSIONS.some((ext) => name.endsWith(ext))
+}
+
+async function scanBulkPurchaseFiles(e: Event) {
   const input = e.target as HTMLInputElement
   const files = Array.from(input.files || [])
   if (files.length === 0) return
 
-  const invalidFile = files.find((file) => file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf'))
+  const invalidFile = files.find((file) => !isBulkScanFile(file))
   if (invalidFile) {
-    bulkScanStatus.value = `Only PDF files allowed. Remove: ${invalidFile.name}`
+    bulkScanStatus.value = `Only PDF or image files allowed. Remove: ${invalidFile.name}`
     input.value = ''
     return
   }
 
-  bulkScanFileName.value = files.length === 1 ? files[0].name : `${files.length} PDF files selected`
+  bulkScanFileName.value = files.length === 1 ? files[0].name : `${files.length} bill files selected`
   bulkScanLoading.value = true
   bulkScanStatus.value = files.length === 1
-    ? 'Scanning PDF with Gemini...'
-    : `Scanning 1 of ${files.length} PDFs with Gemini...`
+    ? 'Scanning bill file with Gemini...'
+    : `Scanning 1 of ${files.length} bill files with Gemini...`
   scannedBills.value = []
   bulkScanFileStatuses.value = files.map((file) => ({
     name: file.name,
@@ -626,8 +637,8 @@ async function scanBulkPurchasePdf(e: Event) {
         message: `Scanning ${idx + 1}/${files.length}`,
       }
       bulkScanStatus.value = files.length === 1
-        ? 'Scanning PDF with Gemini...'
-        : `Scanning ${idx + 1} of ${files.length} PDFs with Gemini...`
+        ? 'Scanning bill file with Gemini...'
+        : `Scanning ${idx + 1} of ${files.length} bill files with Gemini...`
 
       try {
         const { base64, mime } = await fileToBase64(file)
@@ -651,10 +662,10 @@ async function scanBulkPurchasePdf(e: Event) {
 
     const failedCount = bulkScanFileStatuses.value.filter((file) => file.status === 'error').length
     bulkScanStatus.value = extractedBills.length
-      ? `Done - ${extractedBills.length} bill(s) extracted from ${files.length - failedCount}/${files.length} PDF(s). Review and save.`
+      ? `Done - ${extractedBills.length} bill(s) extracted from ${files.length - failedCount}/${files.length} file(s). Review and save.`
       : failedCount
-        ? `No bills extracted. ${failedCount} PDF(s) failed.`
-        : `No purchase bills found in ${files.length === 1 ? 'this PDF' : 'selected PDFs'}.`
+        ? `No bills extracted. ${failedCount} file(s) failed.`
+        : `No purchase bills found in ${files.length === 1 ? 'this file' : 'selected files'}.`
   } finally {
     bulkScanLoading.value = false
     input.value = ''
@@ -668,7 +679,7 @@ function removeScannedBill(idx: number) {
 async function saveScannedBills() {
   const bills = scannedBills.value.filter((b) => b.supplierName?.trim() && b.billNo?.trim() && b.items?.length)
   if (bills.length === 0) {
-    alert('PDF se koi complete bill extract nahi hua.')
+    alert('Scan se koi complete bill extract nahi hua.')
     return
   }
   const duplicateBill = bills.find((bill, idx) =>
@@ -678,7 +689,7 @@ async function saveScannedBills() {
     ) !== idx,
   )
   if (duplicateBill) {
-    alert(`PDF me duplicate bill found: ${duplicateBill.supplierName} / ${duplicateBill.billNo}`)
+    alert(`Scanned bills me duplicate bill found: ${duplicateBill.supplierName} / ${duplicateBill.billNo}`)
     return
   }
   const existingBill = bills.find((bill) =>
@@ -1132,7 +1143,7 @@ onMounted(() => {
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-4">
         <div>
           <h2 class="text-md font-semibold text-slate-800">Multiple Purchase Bills</h2>
-          <p class="text-xs text-slate-500">Ek ya multiple PDF me purchase invoices upload karo, review karo, phir sab ek sath save karo.</p>
+          <p class="text-xs text-slate-500">Ek ya multiple PDF/image me purchase invoices upload karo, review karo, phir sab ek sath save karo.</p>
         </div>
         <div class="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
           <button @click="addBulkRow()" class="pp-btn pp-btn-ghost w-full sm:w-auto">➕ Add Bill Row</button>
@@ -1143,13 +1154,13 @@ onMounted(() => {
       <div class="border-2 border-dashed border-slate-300 rounded-xl p-4 bg-slate-50">
         <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div class="min-w-0">
-            <p class="text-sm font-semibold text-navy">AI Multi-Bill PDF Scan</p>
-            <p class="text-xs text-slate-500">Ek popup me multiple PDF select kar sakte ho. Har PDF me ek ya multiple bills ho sakte hain.</p>
-            <p class="text-xs text-slate-400">Mobile file picker agar multiple select restrict kare, phir bhi PDF upload button yahin se use karo.</p>
+            <p class="text-sm font-semibold text-navy">AI Multi-Bill Scan</p>
+            <p class="text-xs text-slate-500">Ek popup me multiple PDF ya image files select kar sakte ho. Har file me ek ya multiple bills ho sakte hain.</p>
+            <p class="text-xs text-slate-400">Mobile file picker agar multiple select restrict kare, phir bhi upload button yahin se use karo.</p>
           </div>
           <label class="pp-btn pp-btn-primary w-full cursor-pointer text-center sm:w-auto">
-            {{ bulkScanLoading ? 'Scanning PDF...' : 'Upload Purchase PDFs' }}
-            <input type="file" accept="application/pdf,.pdf" multiple class="sr-only" :disabled="bulkScanLoading" @change="scanBulkPurchasePdf" />
+            {{ bulkScanLoading ? 'Scanning bills...' : 'Upload Purchase Bills' }}
+            <input type="file" :accept="BULK_SCAN_ACCEPT" multiple class="sr-only" :disabled="bulkScanLoading" @change="scanBulkPurchaseFiles" />
           </label>
         </div>
         <p v-if="bulkScanFileName" class="text-xs mt-2 text-slate-500">Selected: {{ bulkScanFileName }}</p>

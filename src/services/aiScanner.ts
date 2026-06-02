@@ -113,8 +113,8 @@ export async function scanPurchaseBillsPdf(
   base64: string,
   mimeType: string,
 ): Promise<PurchaseBillsScanResult> {
-  const prompt = `You are an OCR assistant for Indian purchase invoice PDFs.
-The uploaded PDF may contain one or many supplier bills/invoices, often one invoice per page.
+  const prompt = `You are an OCR assistant for Indian purchase invoice documents.
+The uploaded file may be a PDF or image and may contain one or many supplier bills/invoices, often one invoice per page.
 Extract all purchase bills as JSON only, no markdown. If uncertain, still return the best structured data and leave missing fields blank.
 Classify glue, ink and stitching wire line items as consumables.
 Classify kraft paper reel line items as kraft reels only when reel/deckle/gsm/bf details are visible.
@@ -157,7 +157,7 @@ For kraft paper reel lines, extract GSM, BF, color, deckle/reel size and reel we
     }
   ]
 }`
-  const result = await generateJson<PurchaseBillsScanResult>(apiKey, prompt, base64, mimeType, 'multi purchase PDF')
+  const result = await generateJson<PurchaseBillsScanResult>(apiKey, prompt, base64, mimeType, 'multi purchase bill document')
   return { bills: Array.isArray(result?.bills) ? result.bills : [] }
 }
 
@@ -186,13 +186,26 @@ export async function scanVoucherImage(
   return generateJson<VoucherScanResult>(apiKey, prompt, base64, mimeType, 'voucher')
 }
 
+function inferMimeType(file: File): string {
+  if (file.type) return file.type
+  const ext = file.name.toLowerCase().split('.').pop()
+  const byExtension: Record<string, string> = {
+    pdf: 'application/pdf',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    webp: 'image/webp',
+  }
+  return byExtension[ext || ''] || 'image/jpeg'
+}
+
 export function fileToBase64(file: File): Promise<{ base64: string; mime: string }> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => {
       const dataUrl = reader.result as string
       const base64 = dataUrl.split(',')[1]
-      resolve({ base64, mime: file.type || 'image/jpeg' })
+      resolve({ base64, mime: inferMimeType(file) })
     }
     reader.onerror = reject
     reader.readAsDataURL(file)
