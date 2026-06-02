@@ -6,9 +6,10 @@ import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { usePurchaseStore } from '@/stores/purchases'
+import { useSettingsStore } from '@/stores/settings'
 import PpModal from '@/components/PpModal.vue'
 import AiScanPanel from '@/components/AiScanPanel.vue'
-import type { ScanResult } from '@/services/aiScanner'
+import { fileToBase64, scanPurchaseBillsPdf, type ScanResult } from '@/services/aiScanner'
 import type { Purchase, PurchaseItemLine, PayStatus, GstType } from '@/types/models'
 
 // Stores
@@ -16,6 +17,7 @@ const firmStore = useFirmStore()
 const partyStore = usePartyStore()
 const itemStore = useItemStore()
 const purchaseStore = usePurchaseStore()
+const settingsStore = useSettingsStore()
 const router = useRouter()
 
 // State
@@ -23,6 +25,9 @@ const activeTab = ref<'new' | 'bulk' | 'history'>('new')
 const search = ref('')
 const statusFilter = ref<'all' | PayStatus>('all')
 const editingId = ref<string | null>(null)
+const bulkScanStatus = ref('')
+const bulkScanLoading = ref(false)
+const bulkScanFileName = ref('')
 
 // Payment Modal State
 const showPaymentModal = ref(false)
@@ -68,6 +73,7 @@ interface BulkPurchaseRow {
 }
 
 const bulkRows = ref<BulkPurchaseRow[]>([])
+const scannedBills = ref<ScanResult[]>([])
 
 function newBulkRow(): BulkPurchaseRow {
   const today = new Date().toISOString().slice(0, 10)
@@ -277,6 +283,106 @@ function calcBulkAmounts(row: BulkPurchaseRow) {
   return { sub, totalTax, roundOff, grandTotal }
 }
 
+function calcPurchaseTotals(items: PurchaseItemLine[]) {
+  const sub = Math.round(items.reduce((sum, item) => sum + ((Number(item.qty) || 0) * (Number(item.rate) || 0)), 0) * 100) / 100
+  const totalTax = Math.round(items.reduce((sum, item) => {
+    const taxable = (Number(item.qty) || 0) * (Number(item.rate) || 0)
+    return sum + taxable * ((Number(item.gst) || 0) / 100)
+  }, 0) * 100) / 100
+  const raw = sub + totalTax
+  const grandTotal = Math.round(raw)
+  const roundOff = Math.round((grandTotal - raw) * 100) / 100
+  return { sub, totalTax, roundOff, grandTotal }
+}
+
+function normalizeConsumableType(v: unknown): PurchaseItemLine['consumable_type'] {
+  const key = String(v || '').toLowerCase().replace(/\s+/g, '_')
+  if (key === 'glue' || key === 'ink' || key === 'stitching_wire') return key
+  return undefined
+}
+
+function normalizeReelColor(v: unknown): string {
+  const key = String(v || '').toUpperCase().replace(/\s+/g, '_')
+  if (key === 'GY') return 'GY'
+  return 'NATURAL_BROWN'
+}
+
+async function ensurePurchaseItemLine(it: NonNullable<ScanResult['items']>[number]): Promise<PurchaseItemLine> {
+  const name = (it.name || '').trim() || 'Purchase Item'
+  let item = itemStore.list.find((i) => i.name.trim().toLowerCase() === name.toLowerCase())
+  if (!item) {
+    item = await itemStore.add({
+      name,
+      unit: it.unit || 'KG',
+      hsn: it.hsn || '48043100',
+      gst: Number(it.gst) || 18,
+      rate: Number(it.rate) || 0,
+      size: '',
+      gsm: it.gsm || '',
+      bf: it.bf || '',
+    })
+  }
+  const consumableType = normalizeConsumableType(it.consumableType)
+  return {
+    item_id: item.id,
+    name: item.name,
+    hsn: it.hsn || item.hsn || '48043100',
+    qty: Number(it.qty) || 0,
+    unit: it.unit || item.unit || 'KG',
+    rate: Number(it.rate) || 0,
+    gst: Number(it.gst) || Number(item.gst) || 18,
+    is_consumable: Boolean(it.isConsumable && consumableType),
+    consumable_type: consumableType,
+    is_kraft_reel: Boolean(it.isKraftReel),
+    reel_no: it.reelNo || '',
+    deckle_size: it.deckleSize || '',
+    gsm: it.gsm || '',
+    bf: it.bf || '',
+    color: normalizeReelColor(it.color),
+    reel_weight: Number(it.reelWeight || it.qty || 0),
+  }
+}
+
+async function saveScannedBill(bill: ScanResult) {
+  const vendor = await partyStore.ensure((bill.supplierName || '').trim(), 'vendor', {
+    gst: bill.gstin,
+    addr: bill.address,
+    city: bill.city,
+    pin: bill.pin,
+    phone: bill.phone,
+    bank: bill.bank,
+    acno: bill.acno,
+    ifsc: bill.ifsc,
+    acname: bill.acname,
+  })
+  const items: PurchaseItemLine[] = []
+  for (const it of bill.items || []) {
+    const line = await ensurePurchaseItemLine(it)
+    if (line.name.trim() && line.qty > 0 && line.rate >= 0) items.push(line)
+  }
+  if (items.length === 0) throw new Error(`No valid items in bill ${bill.billNo || ''}`)
+  const totals = calcPurchaseTotals(items)
+  await purchaseStore.add({
+    supplier_name: vendor.name,
+    supplier_id: vendor.id,
+    bill_no: (bill.billNo || '').trim(),
+    date: bill.date || new Date().toISOString().slice(0, 10),
+    received_date: new Date().toISOString().slice(0, 10),
+    payment: 'BANK',
+    gst_type: firmStore.activeFirm?.state && vendor.state
+      ? (firmStore.activeFirm.state === vendor.state ? 'intra' : 'inter')
+      : 'intra',
+    items,
+    sub: totals.sub,
+    total_tax: totals.totalTax,
+    round_off: totals.roundOff,
+    grand_total: totals.grandTotal,
+    amt_paid: 0,
+    pay_status: 'UNPAID',
+    notes: bill.grandTotal ? `AI PDF total: ₹${bill.grandTotal}` : 'AI multi-PDF import',
+  })
+}
+
 // Save purchase invoice
 async function savePurchase() {
   if (!form.supplier_name.trim()) {
@@ -438,6 +544,79 @@ async function saveBulkPurchases() {
   bulkRows.value = [newBulkRow()]
   alert(`${saved} purchase bill(s) saved successfully!`)
   activeTab.value = 'history'
+}
+
+async function scanBulkPurchasePdf(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  if (file.type !== 'application/pdf') {
+    bulkScanStatus.value = 'Please upload one PDF file containing purchase bills.'
+    return
+  }
+  bulkScanFileName.value = file.name
+  bulkScanLoading.value = true
+  bulkScanStatus.value = 'Scanning PDF with Gemini...'
+  scannedBills.value = []
+  try {
+    const { base64, mime } = await fileToBase64(file)
+    const result = await scanPurchaseBillsPdf(settingsStore.geminiKey, base64, mime)
+    scannedBills.value = (result.bills || []).filter((b) => b.supplierName || b.billNo || b.items?.length)
+    bulkScanStatus.value = scannedBills.value.length
+      ? `Done - ${scannedBills.value.length} bill(s) extracted. Review and save.`
+      : 'No purchase bills found in this PDF.'
+  } catch (err: any) {
+    bulkScanStatus.value = err?.message || 'PDF scan failed'
+  } finally {
+    bulkScanLoading.value = false
+  }
+}
+
+function removeScannedBill(idx: number) {
+  scannedBills.value.splice(idx, 1)
+}
+
+async function saveScannedBills() {
+  const bills = scannedBills.value.filter((b) => b.supplierName?.trim() && b.billNo?.trim() && b.items?.length)
+  if (bills.length === 0) {
+    alert('PDF se koi complete bill extract nahi hua.')
+    return
+  }
+  const duplicateBill = bills.find((bill, idx) =>
+    bills.findIndex((b) =>
+      (b.supplierName || '').trim().toLowerCase() === (bill.supplierName || '').trim().toLowerCase() &&
+      (b.billNo || '').trim().toLowerCase() === (bill.billNo || '').trim().toLowerCase(),
+    ) !== idx,
+  )
+  if (duplicateBill) {
+    alert(`PDF me duplicate bill found: ${duplicateBill.supplierName} / ${duplicateBill.billNo}`)
+    return
+  }
+  const existingBill = bills.find((bill) =>
+    purchaseStore.list.some((p) =>
+      !p.is_deleted &&
+      p.supplier_name.trim().toLowerCase() === (bill.supplierName || '').trim().toLowerCase() &&
+      p.bill_no.trim().toLowerCase() === (bill.billNo || '').trim().toLowerCase(),
+    ),
+  )
+  if (existingBill) {
+    alert(`Already saved bill found: ${existingBill.supplierName} / ${existingBill.billNo}`)
+    return
+  }
+
+  let saved = 0
+  try {
+    for (const bill of bills) {
+      await saveScannedBill(bill)
+      saved++
+    }
+    scannedBills.value = []
+    bulkScanStatus.value = `${saved} scanned purchase bill(s) saved successfully.`
+    alert(`${saved} scanned purchase bill(s) saved successfully!`)
+    activeTab.value = 'history'
+  } catch (err: any) {
+    bulkScanStatus.value = err?.message || 'Saving scanned bills failed'
+    alert(bulkScanStatus.value)
+  }
 }
 
 // Edit purchase bill
@@ -854,12 +1033,96 @@ onMounted(() => {
     <div v-else-if="activeTab === 'bulk'" class="pp-card p-6 space-y-4">
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-4">
         <div>
-          <h2 class="text-md font-semibold text-slate-800">Quick Multiple Purchase Bills</h2>
-          <p class="text-xs text-slate-500">Ek row = ek supplier bill. Detailed reel purchase ke liye Record Bill use karo.</p>
+          <h2 class="text-md font-semibold text-slate-800">Multiple Purchase Bills</h2>
+          <p class="text-xs text-slate-500">Ek PDF me multiple supplier bills upload karo, review karo, phir sab ek sath save karo.</p>
         </div>
         <div class="flex gap-2">
           <button @click="addBulkRow()" class="pp-btn pp-btn-ghost">➕ Add Bill Row</button>
           <button @click="saveBulkPurchases()" class="pp-btn pp-btn-primary">Save All Bills</button>
+        </div>
+      </div>
+
+      <div class="border-2 border-dashed border-slate-300 rounded-xl p-4 bg-slate-50">
+        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div>
+            <p class="text-sm font-semibold text-navy">AI Multi-Bill PDF Scan</p>
+            <p class="text-xs text-slate-500">Single PDF upload karo jisme multiple purchase invoices/bills ho sakte hain.</p>
+          </div>
+          <label class="pp-btn pp-btn-primary cursor-pointer inline-block text-center">
+            {{ bulkScanLoading ? 'Scanning PDF...' : 'Upload Multiple Bills PDF' }}
+            <input type="file" accept="application/pdf" class="hidden" :disabled="bulkScanLoading" @change="scanBulkPurchasePdf" />
+          </label>
+        </div>
+        <p v-if="bulkScanFileName" class="text-xs mt-2 text-slate-500">Selected: {{ bulkScanFileName }}</p>
+        <p v-if="bulkScanStatus" class="text-xs mt-2" :class="bulkScanStatus.startsWith('Done') || bulkScanStatus.includes('saved') ? 'text-green-600' : 'text-slate-500'">
+          {{ bulkScanStatus }}
+        </p>
+      </div>
+
+      <div v-if="scannedBills.length" class="space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <h3 class="font-semibold text-slate-800">Extracted Bills Preview</h3>
+          <button @click="saveScannedBills" class="pp-btn pp-btn-primary">Save Extracted Bills</button>
+        </div>
+        <div v-for="(bill, billIdx) in scannedBills" :key="`${bill.billNo || 'bill'}-${billIdx}`" class="border rounded-xl p-4 bg-white space-y-3">
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div>
+              <label class="pp-label">Supplier *</label>
+              <input v-model="bill.supplierName" class="pp-input" placeholder="Supplier name" />
+            </div>
+            <div>
+              <label class="pp-label">Bill No *</label>
+              <input v-model="bill.billNo" class="pp-input" placeholder="Bill no" />
+            </div>
+            <div>
+              <label class="pp-label">Bill Date</label>
+              <input v-model="bill.date" type="date" class="pp-input" />
+            </div>
+            <div>
+              <label class="pp-label">GSTIN</label>
+              <input v-model="bill.gstin" class="pp-input" placeholder="GSTIN" />
+            </div>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse min-w-[880px]">
+              <thead>
+                <tr class="border-b text-slate-500 font-semibold text-xs uppercase bg-slate-50">
+                  <th class="py-2 px-3">Item</th>
+                  <th class="py-2 px-3 w-28">HSN</th>
+                  <th class="py-2 px-3 w-24">Qty</th>
+                  <th class="py-2 px-3 w-24">Unit</th>
+                  <th class="py-2 px-3 w-28">Rate</th>
+                  <th class="py-2 px-3 w-20">GST</th>
+                  <th class="py-2 px-3 w-44">Stock Type</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y text-sm">
+                <tr v-for="(item, itemIdx) in bill.items || []" :key="`${item.name || 'item'}-${itemIdx}`">
+                  <td class="py-2 px-1"><input v-model="item.name" class="pp-input" /></td>
+                  <td class="py-2 px-1"><input v-model="item.hsn" class="pp-input text-xs font-mono" /></td>
+                  <td class="py-2 px-1"><input v-model.number="item.qty" type="number" class="pp-input text-right" /></td>
+                  <td class="py-2 px-1"><input v-model="item.unit" class="pp-input" /></td>
+                  <td class="py-2 px-1"><input v-model.number="item.rate" type="number" class="pp-input text-right" step="0.01" /></td>
+                  <td class="py-2 px-1"><input v-model.number="item.gst" type="number" class="pp-input text-right" /></td>
+                  <td class="py-2 px-1">
+                    <label class="flex items-center gap-2 text-xs font-semibold">
+                      <input type="checkbox" v-model="item.isConsumable" />
+                      Consumable
+                    </label>
+                    <select v-if="item.isConsumable" v-model="item.consumableType" class="pp-input mt-2 text-xs">
+                      <option value="glue">Glue</option>
+                      <option value="ink">Ink</option>
+                      <option value="stitching_wire">Stitching Wire</option>
+                    </select>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="flex justify-between items-center text-sm">
+            <span class="text-slate-500">AI Total: ₹{{ n2(bill.grandTotal || 0) }}</span>
+            <button @click="removeScannedBill(billIdx)" class="pp-btn pp-btn-ghost px-2 py-1 text-xs text-rose-600">Remove</button>
+          </div>
         </div>
       </div>
 
