@@ -15,6 +15,7 @@ export interface ScanLineItem {
   isConsumable?: boolean
   consumableType?: ConsumableScanType
   isKraftReel?: boolean
+  paperType?: 'KRAFT' | 'DUPLEX' | string
   reelNo?: string
   deckleSize?: string
   reelSize?: string
@@ -84,7 +85,7 @@ export async function scanInvoiceImage(
   mimeType: string
 ): Promise<ScanResult> {
   const prompt = `You are an invoice OCR assistant for Indian GST bills. Extract JSON only (no markdown):
-For kraft paper reel stock lines, extract reel metadata when visible. Use color "NS" for Natural Shade/Natural Brown/Neutral Brown and "GY" for Golden Yellow. Deckle/reel size can go in deckleSize and reelSize.
+For paper reel stock lines, extract reel metadata when visible. Use paperType "KRAFT" for kraft paper and "DUPLEX" for duplex paper. Use color "NS" for Natural Shade/Natural Brown/Neutral Brown and "GY" for Golden Yellow. Deckle/reel size can go in deckleSize and reelSize.
 {
   "supplierName": "", "billNo": "", "date": "YYYY-MM-DD", "gstin": "",
   "address": "", "city": "", "pin": "", "phone": "",
@@ -94,6 +95,7 @@ For kraft paper reel stock lines, extract reel metadata when visible. Use color 
     "isConsumable": false,
     "consumableType": "glue|ink|stitching_wire",
     "isKraftReel": false,
+    "paperType": "KRAFT|DUPLEX",
     "reelNo": "",
     "deckleSize": "",
     "reelSize": "",
@@ -117,8 +119,8 @@ export async function scanPurchaseBillsPdf(
 The uploaded file may be a PDF or image and may contain one or many supplier bills/invoices, often one invoice per page.
 Extract all purchase bills as JSON only, no markdown. If uncertain, still return the best structured data and leave missing fields blank.
 Classify glue, ink and stitching wire line items as consumables.
-Classify kraft paper reel line items as kraft reels only when reel/deckle/gsm/bf details are visible.
-For kraft paper reel lines, extract GSM, BF, color, deckle/reel size and reel weight. Use color "NS" for Natural Shade/Natural Brown/Neutral Brown and "GY" for Golden Yellow. If reel count or reel number is present, include it, but leave blank/0 when absent.
+Classify paper reel line items as reels when reel/deckle/gsm/bf details are visible.
+For paper reel lines, extract paperType ("KRAFT" for kraft paper, "DUPLEX" for duplex paper), GSM, BF, color, deckle/reel size and reel weight. Use color "NS" for Natural Shade/Natural Brown/Neutral Brown and "GY" for Golden Yellow. If reel count or reel number is present, include it, but leave blank/0 when absent.
 {
   "bills": [
     {
@@ -141,6 +143,7 @@ For kraft paper reel lines, extract GSM, BF, color, deckle/reel size and reel we
           "isConsumable": false,
           "consumableType": "glue|ink|stitching_wire",
           "isKraftReel": false,
+          "paperType": "KRAFT|DUPLEX",
           "reelNo": "",
           "deckleSize": "",
           "reelSize": "",

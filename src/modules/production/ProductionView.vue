@@ -1,27 +1,32 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useProductionStore } from '@/stores/production'
-import { productionBalance, STAGE_LABELS, STOCK_LABELS } from '@/services/production'
-import type { ProductionStage, ProductionStockType } from '@/types/models'
+import { normalizePaperType, productionBalance, STAGE_LABELS, STOCK_LABELS } from '@/services/production'
+import type { PaperType, ProductionStage, ProductionStockType, ReelStock } from '@/types/models'
 
 const firmStore = useFirmStore()
 const partyStore = usePartyStore()
 const itemStore = useItemStore()
 const production = useProductionStore()
+const route = useRoute()
 
-const activeTab = ref<'jobs' | 'reels' | 'daily' | 'consumables' | 'reports'>('daily')
+type ProductionTab = 'jobs' | 'reels' | 'daily' | 'consumables' | 'reports'
+
+const activeTab = ref<ProductionTab>(route.path === '/paper-reels' ? 'reels' : 'daily')
 const selectedJobId = ref('')
-const tabItems: { id: typeof activeTab.value; label: string }[] = [
+const tabItems: { id: ProductionTab; label: string }[] = [
   { id: 'daily', label: 'Daily Entry' },
   { id: 'jobs', label: 'Jobs' },
-  { id: 'reels', label: 'Reel Stock' },
+  { id: 'reels', label: 'Paper Reels' },
   { id: 'consumables', label: 'Consumables' },
   { id: 'reports', label: 'Reports' },
 ]
 const consumableTypes: ProductionStockType[] = ['glue', 'ink', 'stitching_wire']
+const paperTypes: PaperType[] = ['KRAFT', 'DUPLEX']
 
 const jobForm = reactive({
   date: new Date().toISOString().slice(0, 10),
@@ -60,7 +65,17 @@ const consumableForm = reactive({
   notes: '',
 })
 
+const reelConsumptionForm = reactive({
+  date: new Date().toISOString().slice(0, 10),
+  reel_id: '',
+  used_weight: 0,
+  job_id: '',
+  reason: 'Plant consumption',
+  notes: '',
+})
+
 const reelFilters = reactive({
+  paper_type: '',
   gsm: '',
   bf: '',
   deckle: '',
@@ -86,6 +101,7 @@ const activeReels = computed(() => production.reels.filter((r) => r.status === '
 const reelFilterOptions = computed(() => {
   const uniq = (values: string[]) => Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
   return {
+    paper_type: uniq(production.reels.map((r) => paperTypeOf(r))),
     gsm: uniq(production.reels.map((r) => r.gsm)),
     bf: uniq(production.reels.map((r) => r.bf)),
     deckle: uniq(production.reels.map((r) => r.deckle_size)),
@@ -93,6 +109,7 @@ const reelFilterOptions = computed(() => {
   }
 })
 const filteredReels = computed(() => production.reels.filter((reel) =>
+  (!reelFilters.paper_type || paperTypeOf(reel) === reelFilters.paper_type) &&
   (!reelFilters.gsm || reel.gsm === reelFilters.gsm) &&
   (!reelFilters.bf || reel.bf === reelFilters.bf) &&
   (!reelFilters.deckle || reel.deckle_size === reelFilters.deckle) &&
@@ -112,6 +129,11 @@ const recentConsumableMoves = computed(() => {
     .filter((m) => consumableTypes.includes(m.stock_type))
     .slice(0, 12)
 })
+const recentReelMoves = computed(() => {
+  return production.movements
+    .filter((m) => m.stock_type === 'raw_reel')
+    .slice(0, 12)
+})
 
 watch(() => firmStore.activeFirmId, () => {
   production.load()
@@ -120,9 +142,17 @@ watch(() => firmStore.activeFirmId, () => {
 })
 
 watch(() => stageForm.stage, applyStageDefaults)
+watch(() => route.path, (path) => {
+  if (path === '/paper-reels') activeTab.value = 'reels'
+  else if (path === '/production' && activeTab.value === 'reels') activeTab.value = 'daily'
+})
 
 function n2(v: number) {
   return (Number(v) || 0).toFixed(2)
+}
+
+function paperTypeOf(reel: Pick<ReelStock, 'paper_type'>) {
+  return normalizePaperType(reel.paper_type)
 }
 
 function applyStageDefaults() {
@@ -216,6 +246,32 @@ async function saveConsumableAdjustment() {
     mode: consumableForm.mode,
     qty: 0,
     weight: 0,
+    notes: '',
+  })
+}
+
+async function saveReelConsumption() {
+  if (!reelConsumptionForm.reel_id) return alert('Paper reel select karo')
+  if (reelConsumptionForm.used_weight <= 0) return alert('Used weight enter karo')
+  const selectedReel = production.reels.find((reel) => reel.id === reelConsumptionForm.reel_id)
+  if (selectedReel && reelConsumptionForm.used_weight > (Number(selectedReel.current_weight) || 0)) {
+    return alert(`Selected reel ${selectedReel.reel_no} me sirf ${n2(selectedReel.current_weight)} KG available hai.`)
+  }
+  try {
+    await production.addReelConsumption({
+      ...reelConsumptionForm,
+      job_id: reelConsumptionForm.job_id || undefined,
+    })
+  } catch (err: any) {
+    alert(err?.message || 'Paper reel consumption save nahi ho payi.')
+    return
+  }
+  Object.assign(reelConsumptionForm, {
+    date: new Date().toISOString().slice(0, 10),
+    reel_id: '',
+    used_weight: 0,
+    job_id: '',
+    reason: 'Plant consumption',
     notes: '',
   })
 }
@@ -429,9 +485,25 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-else-if="activeTab === 'reels'" class="pp-card p-6">
-      <h2 class="font-semibold border-b pb-2 mb-4">Kraft Paper Reel Stock</h2>
-      <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+    <div v-else-if="activeTab === 'reels'" class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+      <div class="xl:col-span-2 pp-card p-6">
+        <div class="flex flex-col gap-2 border-b pb-3 mb-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 class="font-semibold">Paper Reel Stock</h2>
+            <p class="text-xs text-slate-500">Normal inventory se alag reel-wise Kraft/Duplex stock aur movement tracking.</p>
+          </div>
+          <RouterLink to="/purchases" class="pp-btn pp-btn-ghost !py-1.5 !px-3 text-xs no-underline">
+            Add from Purchase
+          </RouterLink>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
+        <div>
+          <label class="pp-label">Paper Type</label>
+          <select v-model="reelFilters.paper_type" class="pp-input">
+            <option value="">All Type</option>
+            <option v-for="type in paperTypes" :key="type" :value="type">{{ type }}</option>
+          </select>
+        </div>
         <div>
           <label class="pp-label">GSM</label>
           <select v-model="reelFilters.gsm" class="pp-input">
@@ -470,10 +542,11 @@ onMounted(async () => {
         </div>
       </div>
       <div class="overflow-x-auto">
-        <table class="w-full text-sm">
+        <table class="w-full text-sm min-w-[1120px]">
           <thead class="text-xs uppercase text-slate-500 bg-slate-50">
             <tr>
               <th class="p-3 text-left">Reel No</th>
+              <th class="p-3 text-left">Type</th>
               <th class="p-3 text-left">Bill No</th>
               <th class="p-3 text-left">Supplier</th>
               <th class="p-3 text-left">Deckle</th>
@@ -487,6 +560,11 @@ onMounted(async () => {
           <tbody class="divide-y">
             <tr v-for="reel in filteredReels" :key="reel.id">
               <td class="p-3 font-mono">{{ reel.reel_no }}</td>
+              <td class="p-3">
+                <span class="pp-badge" :class="paperTypeOf(reel) === 'DUPLEX' ? 'bg-purple-100 text-purple-800' : 'bg-amber-100 text-amber-800'">
+                  {{ paperTypeOf(reel) }}
+                </span>
+              </td>
               <td class="p-3 font-mono">{{ reel.purchase_bill_no || '-' }}</td>
               <td class="p-3">{{ reel.supplier_name }}</td>
               <td class="p-3">{{ reel.deckle_size }}</td>
@@ -497,10 +575,72 @@ onMounted(async () => {
               <td class="p-3 text-center"><span class="pp-badge" :class="reel.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-slate-100'">{{ reel.status }}</span></td>
             </tr>
             <tr v-if="filteredReels.length === 0">
-              <td colspan="9" class="p-8 text-center text-slate-400">Purchase bill me Kraft Reel mark karte hi stock yahan dikhega.</td>
+              <td colspan="10" class="p-8 text-center text-slate-400">Purchase bill me Paper Reel mark karte hi stock yahan dikhega.</td>
             </tr>
           </tbody>
         </table>
+      </div>
+      </div>
+
+      <div class="space-y-6">
+        <div class="pp-card p-6 space-y-4">
+          <h2 class="font-semibold border-b pb-2">Manual Reel Consumption</h2>
+          <div>
+            <label class="pp-label">Date</label>
+            <input v-model="reelConsumptionForm.date" type="date" class="pp-input" />
+          </div>
+          <div>
+            <label class="pp-label">Paper Reel *</label>
+            <select v-model="reelConsumptionForm.reel_id" class="pp-input">
+              <option value="">Select reel</option>
+              <option v-for="reel in activeReels" :key="reel.id" :value="reel.id">
+                {{ reel.reel_no }} - {{ paperTypeOf(reel) }} / {{ reel.deckle_size }} / {{ reel.gsm }} GSM / {{ n2(reel.current_weight) }} KG
+              </option>
+            </select>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="pp-label">Used Weight KG *</label>
+              <input v-model.number="reelConsumptionForm.used_weight" type="number" min="0" step="0.001" class="pp-input text-right" />
+            </div>
+            <div>
+              <label class="pp-label">Job (optional)</label>
+              <select v-model="reelConsumptionForm.job_id" class="pp-input">
+                <option value="">No job</option>
+                <option v-for="job in production.jobs" :key="job.id" :value="job.id">{{ job.job_no }}</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="pp-label">Reason</label>
+            <input v-model="reelConsumptionForm.reason" class="pp-input" placeholder="Plant consumption, sample, damage..." />
+          </div>
+          <div>
+            <label class="pp-label">Notes</label>
+            <textarea v-model="reelConsumptionForm.notes" class="pp-input min-h-[80px]" placeholder="Operator, machine, reference..."></textarea>
+          </div>
+          <button @click="saveReelConsumption" class="pp-btn pp-btn-primary w-full">Consume Reel Stock</button>
+          <p class="text-xs text-slate-500">
+            Consumption current weight se minus hota hai aur stock movement ledger me log hota hai.
+          </p>
+        </div>
+
+        <div class="pp-card p-6">
+          <h2 class="font-semibold border-b pb-2 mb-4">Recent Reel Movements</h2>
+          <div class="space-y-3 max-h-[360px] overflow-auto">
+            <div v-for="move in recentReelMoves" :key="move.id" class="rounded-lg border p-3 text-sm">
+              <div class="flex justify-between gap-2">
+                <span class="font-semibold capitalize">{{ move.source }}</span>
+                <span class="text-slate-500">{{ move.date }}</span>
+              </div>
+              <div class="font-mono text-slate-700">
+                In {{ n2(move.weight_in) }} KG / Out {{ n2(move.weight_out) }} KG
+              </div>
+              <div class="text-slate-500">{{ move.notes }}</div>
+            </div>
+            <div v-if="recentReelMoves.length === 0" class="text-sm text-slate-400">No reel movements yet.</div>
+          </div>
+        </div>
       </div>
     </div>
 

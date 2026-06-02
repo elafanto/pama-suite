@@ -10,7 +10,7 @@ import { useSettingsStore } from '@/stores/settings'
 import PpModal from '@/components/PpModal.vue'
 import AiScanPanel from '@/components/AiScanPanel.vue'
 import { fileToBase64, scanPurchaseBillsPdf, type ScanResult } from '@/services/aiScanner'
-import type { Purchase, PurchaseItemLine, PayStatus, GstType } from '@/types/models'
+import type { GstType, PaperType, PayStatus, Purchase, PurchaseItemLine } from '@/types/models'
 
 // Stores
 const firmStore = useFirmStore()
@@ -89,6 +89,7 @@ interface BulkScanFileStatus {
 
 const BULK_SCAN_ACCEPT = 'application/pdf,.pdf,image/*'
 const BULK_SCAN_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp']
+const paperTypes: PaperType[] = ['KRAFT', 'DUPLEX']
 
 const bulkRows = ref<BulkPurchaseRow[]>([])
 const scannedBills = ref<ScanResult[]>([])
@@ -145,6 +146,7 @@ function addRow(data: Partial<PurchaseItemLine> = {}) {
     rate: data.rate || 0,
     gst: data.gst !== undefined ? data.gst : 18,
     is_kraft_reel: data.is_kraft_reel || false,
+    paper_type: normalizePaperType(data.paper_type),
     reel_no: data.reel_no || '',
     deckle_size: data.deckle_size || '',
     gsm: data.gsm || '',
@@ -241,6 +243,7 @@ function toggleKraftReel(idx: number) {
     row.reel_weight = row.reel_weight || row.qty || 0
     row.reel_count = normalizeReelCount(row.reel_count)
     row.hsn = row.hsn || '48043100'
+    row.paper_type = normalizePaperType(row.paper_type)
     row.is_consumable = false
   }
 }
@@ -339,6 +342,10 @@ function normalizeReelColor(v: unknown): string {
   return 'NS'
 }
 
+function normalizePaperType(v: unknown): PaperType {
+  return String(v || '').trim().toUpperCase() === 'DUPLEX' ? 'DUPLEX' : 'KRAFT'
+}
+
 function scanItemToPurchaseLine(it: NonNullable<ScanResult['items']>[number]): Partial<PurchaseItemLine> {
   const deckleSize = (it.deckleSize || it.reelSize || '').trim()
   const hasReelMetadata = Boolean(
@@ -352,6 +359,7 @@ function scanItemToPurchaseLine(it: NonNullable<ScanResult['items']>[number]): P
     hsn: it.hsn || '48043100',
     gst: it.gst ?? 18,
     is_kraft_reel: Boolean(it.isKraftReel || hasReelMetadata),
+    paper_type: normalizePaperType(it.paperType),
     reel_no: it.reelNo || '',
     deckle_size: deckleSize,
     gsm: it.gsm || '',
@@ -392,6 +400,7 @@ async function ensurePurchaseItemLine(it: NonNullable<ScanResult['items']>[numbe
     is_consumable: Boolean(it.isConsumable && consumableType),
     consumable_type: consumableType,
     is_kraft_reel: scannedLine.is_kraft_reel,
+    paper_type: scannedLine.paper_type,
     reel_no: scannedLine.reel_no,
     deckle_size: scannedLine.deckle_size,
     gsm: scannedLine.gsm,
@@ -460,7 +469,7 @@ async function savePurchase() {
   }
   const badReel = validItems.find(it => it.is_kraft_reel && (!it.deckle_size?.trim() || !it.gsm?.trim() || !it.bf?.trim() || !(it.reel_weight || it.qty) || normalizeReelCount(it.reel_count) <= 0))
   if (badReel) {
-    alert('Kraft reel line me Deckle, GSM, BF, Reel Weight aur No. of Reels required hai. Reel No optional hai.')
+    alert('Paper reel line me Paper Type, Deckle, GSM, BF, Reel Weight aur No. of Reels required hai. Reel No optional hai.')
     return
   }
   const badConsumable = validItems.find(it => it.is_consumable && !it.consumable_type)
@@ -495,6 +504,7 @@ async function savePurchase() {
   const normalizedItems = validItems.map((it) => ({
     ...it,
     reel_count: it.is_kraft_reel ? normalizeReelCount(it.reel_count) : undefined,
+    paper_type: it.is_kraft_reel ? normalizePaperType(it.paper_type) : undefined,
   }))
 
   const purchaseData = {
@@ -1066,7 +1076,7 @@ onMounted(() => {
                   <td class="py-2 px-1">
                     <label class="flex items-center gap-2 text-xs font-semibold">
                       <input type="checkbox" v-model="item.is_kraft_reel" @change="toggleKraftReel(idx)" />
-                      Reel Stock
+                      Paper Reel
                     </label>
                     <label class="mt-2 flex items-center gap-2 text-xs font-semibold">
                       <input type="checkbox" v-model="item.is_consumable" @change="toggleConsumable(idx)" />
@@ -1087,7 +1097,13 @@ onMounted(() => {
                 </tr>
                 <tr v-for="(item, idx) in form.items.filter(i => i.is_kraft_reel)" :key="`reel-${idx}-${item.name}`" class="bg-amber-50/50">
                   <td colspan="9" class="px-3 py-3">
-                    <div class="grid grid-cols-2 md:grid-cols-7 gap-3">
+                    <div class="grid grid-cols-2 md:grid-cols-8 gap-3">
+                      <div>
+                        <label class="pp-label">Paper Type</label>
+                        <select v-model="item.paper_type" class="pp-input">
+                          <option v-for="type in paperTypes" :key="type" :value="type">{{ type }}</option>
+                        </select>
+                      </div>
                       <div>
                         <label class="pp-label">Reel No (optional)</label>
                         <input v-model="item.reel_no" class="pp-input" placeholder="Reel/batch no" />
@@ -1323,7 +1339,7 @@ onMounted(() => {
                     <td class="py-2 px-1">
                       <label class="flex items-center gap-2 text-xs font-semibold">
                         <input type="checkbox" v-model="item.isKraftReel" />
-                        Reel
+                        Paper Reel
                       </label>
                       <label class="mt-2 flex items-center gap-2 text-xs font-semibold">
                         <input type="checkbox" v-model="item.isConsumable" />
@@ -1338,7 +1354,13 @@ onMounted(() => {
                   </tr>
                   <tr v-if="item.isKraftReel" class="bg-amber-50/50">
                     <td colspan="7" class="px-3 py-3">
-                      <div class="grid grid-cols-2 md:grid-cols-7 gap-3">
+                      <div class="grid grid-cols-2 md:grid-cols-8 gap-3">
+                        <div>
+                          <label class="pp-label">Paper Type</label>
+                          <select v-model="item.paperType" class="pp-input">
+                            <option v-for="type in paperTypes" :key="type" :value="type">{{ type }}</option>
+                          </select>
+                        </div>
                         <div>
                           <label class="pp-label">Reel No (optional)</label>
                           <input v-model="item.reelNo" class="pp-input" placeholder="Reel/batch no" />

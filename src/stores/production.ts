@@ -4,7 +4,7 @@ import { db } from '@/data/db'
 import { uid, nowISO } from '@/data/util'
 import { useFirmStore } from './firm'
 import { logActivity } from '@/services/activityLog'
-import { saveProductionStage, saveStockAdjustment } from '@/services/production'
+import { consumePaperReel, saveProductionStage, saveStockAdjustment } from '@/services/production'
 import type { ProductionJob, ProductionStageEntry, ProductionStockType, ReelStock, StockMovement } from '@/types/models'
 
 const plain = <X>(o: X): X => JSON.parse(JSON.stringify(o))
@@ -80,5 +80,20 @@ export const useProductionStore = defineStore('production', () => {
     return rec
   }
 
-  return { jobs, stages, reels, movements, loaded, load, addJob, addStage, closeJob, addStockAdjustment }
+  async function addReelConsumption(data: {
+    reel_id: string
+    date: string
+    used_weight: number
+    job_id?: string
+    reason?: string
+    notes?: string
+  }) {
+    const firm = useFirmStore()
+    const rec = await consumePaperReel({ ...data, firm_id: firm.activeFirmId })
+    await logActivity(rec.firm_id, 'consume', 'reel_stock', data.reel_id, rec.notes || 'Paper reel consumed')
+    await load()
+    return rec
+  }
+
+  return { jobs, stages, reels, movements, loaded, load, addJob, addStage, closeJob, addStockAdjustment, addReelConsumption }
 })

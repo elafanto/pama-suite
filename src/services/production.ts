@@ -1,6 +1,7 @@
 import { db } from '@/data/db'
 import { uid, nowISO } from '@/data/util'
 import type {
+  PaperType,
   ProductionJob,
   ProductionStageEntry,
   ProductionStockType,
@@ -10,6 +11,10 @@ import type {
 } from '@/types/models'
 
 const plain = <X>(o: X): X => JSON.parse(JSON.stringify(o))
+
+export function normalizePaperType(value: unknown): PaperType {
+  return String(value || '').trim().toUpperCase() === 'DUPLEX' ? 'DUPLEX' : 'KRAFT'
+}
 
 export const STAGE_LABELS: Record<ProductionStageEntry['stage'], string> = {
   corrugation: 'Corrugation',
@@ -70,6 +75,7 @@ export async function createReelsFromPurchase(purchase: Purchase) {
         id: uid(),
         firm_id: purchase.firm_id,
         reel_no: reelNo,
+        paper_type: normalizePaperType(row.paper_type),
         supplier_id: purchase.supplier_id,
         supplier_name: purchase.supplier_name,
         purchase_id: purchase.id,
@@ -101,12 +107,67 @@ export async function createReelsFromPurchase(purchase: Purchase) {
         weight_out: 0,
         waste_qty: 0,
         waste_weight: 0,
-        notes: `Reel ${reelNo} from purchase ${purchase.bill_no}${reelCount > 1 ? ` (${reelIdx + 1}/${reelCount}, split from ${totalWeight} KG line weight)` : ''}`,
+        notes: `${normalizePaperType(row.paper_type)} reel ${reelNo} from purchase ${purchase.bill_no}${reelCount > 1 ? ` (${reelIdx + 1}/${reelCount}, split from ${totalWeight} KG line weight)` : ''}`,
       }))
       count++
     }
   }
   return count
+}
+
+export async function consumePaperReel(data: {
+  firm_id: string
+  reel_id: string
+  date: string
+  used_weight: number
+  job_id?: string
+  reason?: string
+  notes?: string
+}) {
+  const usedWeight = Math.round((Number(data.used_weight) || 0) * 1000) / 1000
+  if (!data.reel_id) throw new Error('Reel select karo')
+  if (usedWeight <= 0) throw new Error('Used weight 0 se zyada hona chahiye')
+
+  const now = nowISO()
+  const movement = newStockMovement({
+    firm_id: data.firm_id,
+    date: data.date,
+    source: 'consumption',
+    ref_id: uid(),
+    stock_type: 'raw_reel',
+    stock_ref_id: data.reel_id,
+    job_id: data.job_id || undefined,
+    qty_in: 0,
+    qty_out: 0,
+    weight_in: 0,
+    weight_out: usedWeight,
+    waste_qty: 0,
+    waste_weight: 0,
+    notes: [data.reason || 'Manual reel consumption', data.notes].filter(Boolean).join(' - '),
+  })
+
+  await db.transaction('rw', db.reel_stocks, db.stock_movements, async () => {
+    const reel = await db.reel_stocks.get(data.reel_id)
+    if (!reel || reel.is_deleted || reel.firm_id !== data.firm_id) throw new Error('Selected reel stock nahi mila')
+
+    const available = Number(reel.current_weight) || 0
+    if (usedWeight > available) {
+      throw new Error(`Selected reel ${reel.reel_no} me sirf ${available.toFixed(2)} KG available hai.`)
+    }
+
+    const current = Math.max(0, Math.round((available - usedWeight) * 1000) / 1000)
+    await db.reel_stocks.put(plain({
+      ...reel,
+      paper_type: normalizePaperType(reel.paper_type),
+      current_weight: current,
+      status: current <= 0 ? 'consumed' : 'active',
+      updated_at: now,
+      _dirty: true,
+    }))
+    await db.stock_movements.add(movement)
+  })
+
+  return movement
 }
 
 export async function createConsumablesFromPurchase(purchase: Purchase) {

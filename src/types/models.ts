@@ -158,6 +158,7 @@ export interface PurchaseItemLine {
   rate: number
   gst: number                 // %
   is_kraft_reel?: boolean
+  paper_type?: PaperType
   reel_no?: string
   deckle_size?: string
   gsm?: string
@@ -224,9 +225,11 @@ export interface ActivityLog extends BaseRecord {
 
 export type ReelColor = 'NS' | 'GY' | 'NATURAL_BROWN' | string
 export type ReelStatus = 'active' | 'consumed'
+export type PaperType = 'KRAFT' | 'DUPLEX'
 
 export interface ReelStock extends BaseRecord {
   reel_no: string
+  paper_type?: PaperType
   supplier_id: string | null
   supplier_name: string
   purchase_id?: string
@@ -295,7 +298,7 @@ export interface ProductionStageEntry extends BaseRecord {
 
 export interface StockMovement extends BaseRecord {
   date: string
-  source: 'purchase' | 'production' | 'dispatch' | 'adjustment'
+  source: 'purchase' | 'production' | 'dispatch' | 'adjustment' | 'consumption'
   ref_id: string
   stock_type: ProductionStockType
   stock_ref_id?: string
