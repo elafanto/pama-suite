@@ -36,6 +36,7 @@ const correctionNote = ref('')
 const correctionBusy = ref(false)
 const correctionStatus = ref('')
 const correctionWarnings = ref<string[]>([])
+const correctionMode = ref(false)
 
 // Payment Modal State
 const showPaymentModal = ref(false)
@@ -191,6 +192,7 @@ watch(() => firmStore.activeFirmId, () => {
   correctionConfirmText.value = ''
   correctionStatus.value = ''
   correctionWarnings.value = []
+  correctionMode.value = false
   purchaseStore.load()
   partyStore.load()
   itemStore.load()
@@ -834,11 +836,24 @@ function selectVisiblePurchases() {
   selectedPurchaseIds.value = filteredPurchases.value.map((p) => p.id)
 }
 
+function openCorrectionMode() {
+  correctionMode.value = true
+  correctionStatus.value = ''
+  correctionWarnings.value = []
+}
+
 function clearCorrectionSelection() {
   selectedPurchaseIds.value = []
   correctionConfirmText.value = ''
   correctionStatus.value = ''
   correctionWarnings.value = []
+}
+
+function closeCorrectionMode() {
+  clearCorrectionSelection()
+  correctionTargetFirmId.value = ''
+  correctionNote.value = ''
+  correctionMode.value = false
 }
 
 async function moveSelectedPurchases() {
@@ -875,6 +890,7 @@ async function moveSelectedPurchases() {
     selectedPurchaseIds.value = []
     correctionConfirmText.value = ''
     correctionNote.value = ''
+    correctionMode.value = false
   } catch (err: any) {
     alert(err?.message || 'Purchase firm correction failed')
   } finally {
@@ -1487,10 +1503,13 @@ onMounted(() => {
 
     <!-- Active Tab: Purchase Logs / History -->
     <div v-else class="pp-card p-6 space-y-4">
-      <div class="flex flex-col sm:flex-row gap-4 items-center justify-between border-b pb-4">
-        <h2 class="text-md font-semibold text-slate-800">Purchase Transaction Registers</h2>
+      <div class="flex flex-col gap-4 border-b pb-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h2 class="text-md font-semibold text-slate-800">Purchase Transaction Registers</h2>
+          <p class="text-xs text-slate-500">Bill Logs me wrong-firm purchase bills ko safely correct kar sakte ho.</p>
+        </div>
         
-        <div class="flex gap-2 w-full sm:w-auto">
+        <div class="flex w-full flex-col gap-2 sm:flex-row lg:w-auto">
           <input 
             v-model="search"
             class="pp-input sm:w-64"
@@ -1502,15 +1521,40 @@ onMounted(() => {
             <option value="PARTIAL">PARTIAL</option>
             <option value="UNPAID">UNPAID</option>
           </select>
+          <button
+            v-if="!correctionMode"
+            @click="openCorrectionMode"
+            class="pp-btn pp-btn-primary whitespace-nowrap"
+          >
+            Move Bills to Another Firm
+          </button>
+          <button
+            v-else
+            @click="closeCorrectionMode"
+            class="pp-btn pp-btn-ghost whitespace-nowrap"
+            :disabled="correctionBusy"
+          >
+            Cancel Move Mode
+          </button>
         </div>
       </div>
 
-      <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3">
+      <p v-if="!correctionMode && correctionStatus" class="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700">
+        {{ correctionStatus }}
+      </p>
+      <div v-if="!correctionMode && correctionWarnings.length" class="rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs text-amber-800">
+        <p class="font-semibold">Review warnings:</p>
+        <ul class="mt-1 list-disc pl-5">
+          <li v-for="warning in correctionWarnings" :key="warning">{{ warning }}</li>
+        </ul>
+      </div>
+
+      <div v-if="correctionMode" class="rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-3 shadow-sm">
         <div class="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h3 class="font-semibold text-amber-900">Wrong Firm Correction</h3>
+            <h3 class="font-semibold text-amber-900">Move Selected Purchase Bills to Correct Firm</h3>
             <p class="text-xs text-amber-800">
-              Select only the wrongly uploaded purchase bills, choose the correct firm, type MOVE, then confirm.
+              Step 1: tick the wrong bills in the Move column below. Step 2: choose the correct firm, type MOVE, then confirm.
               Ledger vouchers, reel stock, stock movements, item stock movements and activity logs will be moved with sync dirty flags.
             </p>
             <p class="mt-1 text-xs text-amber-700">
@@ -1576,7 +1620,7 @@ onMounted(() => {
         <table class="w-full text-left border-collapse">
           <thead>
             <tr class="border-b text-slate-500 font-semibold text-xs uppercase bg-slate-50">
-              <th class="py-3 px-4 w-12 text-center">Move</th>
+              <th v-if="correctionMode" class="py-3 px-4 w-12 text-center">Move</th>
               <th class="py-3 px-4">Date</th>
               <th class="py-3 px-4">Bill No</th>
               <th class="py-3 px-4">Supplier Name</th>
@@ -1590,7 +1634,7 @@ onMounted(() => {
           </thead>
           <tbody class="divide-y text-sm">
             <tr v-for="pur in filteredPurchases" :key="pur.id" class="hover:bg-slate-50/50">
-              <td class="py-3 px-4 text-center">
+              <td v-if="correctionMode" class="py-3 px-4 text-center">
                 <input
                   v-model="selectedPurchaseIds"
                   type="checkbox"
@@ -1653,7 +1697,7 @@ onMounted(() => {
               </td>
             </tr>
             <tr v-if="filteredPurchases.length === 0">
-              <td colspan="10" class="py-8 text-center text-slate-400">
+              <td :colspan="correctionMode ? 10 : 9" class="py-8 text-center text-slate-400">
                 No purchase transactions logged for this firm.
               </td>
             </tr>
