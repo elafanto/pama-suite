@@ -15,10 +15,23 @@ const syncing = ref(false)
 const syncMsg = ref('')
 
 const cloudLabel = computed(() => {
+  if (auth.loading && !auth.initialized) return 'Checking login'
   if (!auth.isConfigured) return 'Local only'
-  if (auth.isLoggedIn && auth.canSync) return 'Cloud connected'
-  if (auth.isLoggedIn) return 'Signed in'
-  return 'Not signed in'
+  if (auth.isLoggedIn && auth.canSync) return auth.user?.email || 'Cloud connected'
+  if (auth.isLoggedIn) return 'Org setup pending'
+  return 'Sign in'
+})
+const cloudDetail = computed(() => {
+  if (!auth.isConfigured) return 'Supabase not configured. Open Settings → Cloud Sync.'
+  if (auth.isLoggedIn) {
+    return `${auth.user?.email || 'Signed in'}${auth.orgId ? ` · Org ${auth.orgId}` : ' · Organization setup pending'}${syncMsg.value ? ` · ${syncMsg.value}` : ''}`
+  }
+  return auth.statusMessage || 'Not signed in. Tap to login.'
+})
+const cloudTarget = computed(() => {
+  if (!auth.isConfigured) return '/settings'
+  if (!auth.isLoggedIn) return '/login'
+  return '/settings'
 })
 
 let timer: number
@@ -85,7 +98,11 @@ onUnmounted(() => {
         </div>
       </RouterLink>
       <div class="ml-auto flex items-center gap-1.5 sm:gap-3 shrink-0">
-        <span class="text-[10px] sm:text-[11px] text-sky-300 max-w-[72px] sm:max-w-none truncate" :title="syncMsg || cloudLabel">☁️ {{ cloudLabel }}</span>
+        <RouterLink
+          :to="cloudTarget"
+          class="text-[10px] sm:text-[11px] text-sky-300 hover:text-white max-w-[128px] sm:max-w-[260px] truncate no-underline"
+          :title="cloudDetail"
+        >☁️ {{ cloudLabel }}</RouterLink>
         <button
           v-if="auth.canSync"
           type="button"

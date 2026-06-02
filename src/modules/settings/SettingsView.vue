@@ -23,6 +23,7 @@ const geminiInput = ref(settings.geminiKey)
 const supabaseUrlInput = ref('')
 const supabaseAnonInput = ref('')
 const supabaseKeyMsg = ref('')
+const supabaseKeyOk = ref(false)
 const includeSensitiveBackup = ref(false)
 
 const blank = (): NewFirm => ({
@@ -112,8 +113,10 @@ function saveGemini() {
 
 async function saveSupabaseKeys() {
   supabaseKeyMsg.value = ''
+  supabaseKeyOk.value = false
   const ok = await auth.applySupabaseKeys(supabaseUrlInput.value, supabaseAnonInput.value)
   if (ok) {
+    supabaseKeyOk.value = true
     supabaseKeyMsg.value = 'Supabase connected! Ab Login karein, phir Sync dabayein.'
   } else {
     supabaseKeyMsg.value = auth.error || 'Save failed — URL aur anon key check karein'
@@ -234,6 +237,9 @@ onMounted(() => {
         <p class="text-xs text-slate-600">
           Supabase Dashboard → <strong>Settings → API</strong> se copy karein:
         </p>
+        <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 leading-relaxed">
+          Mobile PWA me ye keys aur login session isi installed app ke storage me save hote hain. Agar app reinstall, browser data clear, ya nayi PWA install hui hai to keys dobara paste karke login karein.
+        </p>
         <div>
           <label class="pp-label">Project URL</label>
           <input v-model="supabaseUrlInput" class="pp-input font-mono text-sm" placeholder="https://xxxxx.supabase.co" />
@@ -243,7 +249,7 @@ onMounted(() => {
           <input v-model="supabaseAnonInput" type="password" class="pp-input font-mono text-sm" placeholder="eyJhbG..." />
         </div>
         <button type="button" class="pp-btn pp-btn-primary" @click="saveSupabaseKeys">Save &amp; Connect</button>
-        <p v-if="supabaseKeyMsg" class="text-sm text-green-700">{{ supabaseKeyMsg }}</p>
+        <p v-if="supabaseKeyMsg" class="text-sm" :class="supabaseKeyOk ? 'text-green-700' : 'text-red-600'">{{ supabaseKeyMsg }}</p>
       </div>
       <div class="flex flex-wrap gap-2">
         <button

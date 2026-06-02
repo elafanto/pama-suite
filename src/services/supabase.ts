@@ -14,6 +14,19 @@ function envAnonValid(anon: string): boolean {
   return !!anon && anon !== 'your_anon_key_here'
 }
 
+function getBrowserStorage(): Storage | undefined {
+  if (typeof window === 'undefined') return undefined
+  try {
+    return window.localStorage
+  } catch {
+    return undefined
+  }
+}
+
+function readLocalStorage(key: string): string {
+  return (getBrowserStorage()?.getItem(key) || '').trim()
+}
+
 /** Resolved URL + anon: build-time .env first, then browser localStorage (Settings). */
 export function getSupabaseConfig(): { url: string; anon: string } {
   if (typeof window === 'undefined') {
@@ -22,8 +35,8 @@ export function getSupabaseConfig(): { url: string; anon: string } {
       anon: envAnonValid(envAnon) ? envAnon : '',
     }
   }
-  const url = envUrlValid(envUrl) ? envUrl : (localStorage.getItem(LS_URL) || '').trim()
-  const anon = envAnonValid(envAnon) ? envAnon : (localStorage.getItem(LS_ANON) || '').trim()
+  const url = envUrlValid(envUrl) ? envUrl : readLocalStorage(LS_URL)
+  const anon = envAnonValid(envAnon) ? envAnon : readLocalStorage(LS_ANON)
   return { url, anon }
 }
 
@@ -56,14 +69,17 @@ export function resetSupabaseClient(): void {
 }
 
 export function saveSupabaseKeys(url: string, anon: string): void {
-  localStorage.setItem(LS_URL, url.trim())
-  localStorage.setItem(LS_ANON, anon.trim())
+  const storage = getBrowserStorage()
+  if (!storage) throw new Error('Browser storage unavailable. PWA/browser storage enable karein, phir dobara try karein.')
+  storage.setItem(LS_URL, url.trim())
+  storage.setItem(LS_ANON, anon.trim())
   resetSupabaseClient()
 }
 
 export function clearSupabaseKeys(): void {
-  localStorage.removeItem(LS_URL)
-  localStorage.removeItem(LS_ANON)
+  const storage = getBrowserStorage()
+  storage?.removeItem(LS_URL)
+  storage?.removeItem(LS_ANON)
   resetSupabaseClient()
 }
 
@@ -72,7 +88,15 @@ export function getSupabase(): SupabaseClient | null {
   if (!url || !anon || url.includes('YOUR_PROJECT')) return null
   const key = `${url}|${anon.slice(0, 12)}`
   if (client && clientKey === key) return client
-  client = createClient(url, anon)
+  const storage = getBrowserStorage()
+  client = createClient(url, anon, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      ...(storage ? { storage } : {}),
+    },
+  })
   clientKey = key
   return client
 }

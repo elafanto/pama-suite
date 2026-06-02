@@ -5,17 +5,19 @@ import {
   isSupabaseConfigured,
   isHostedDeploy,
   saveSupabaseKeys,
-  resetSupabaseClient,
 } from '@/services/supabase'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<{ id: string; email: string } | null>(null)
   const orgId = ref<string | null>(localStorage.getItem('pama_org_id'))
   const loading = ref(false)
+  const initialized = ref(false)
   const error = ref('')
   const orgSetupError = ref('')
+  const statusMessage = ref('')
   /** Bump after manual key save so computed isConfigured refreshes. */
   const configVersion = ref(0)
+  let authSubscription: { unsubscribe: () => void } | null = null
 
   const isConfigured = computed(() => {
     configVersion.value
@@ -29,11 +31,19 @@ export const useAuthStore = defineStore('auth', () => {
       error.value = 'URL aur anon key dono bhari honi chahiye'
       return false
     }
-    saveSupabaseKeys(url, anon)
-    configVersion.value++
-    resetSupabaseClient()
-    await init()
-    return isSupabaseConfigured()
+    try {
+      saveSupabaseKeys(url, anon)
+      user.value = null
+      orgId.value = null
+      localStorage.removeItem('pama_org_id')
+      configVersion.value++
+      initialized.value = false
+      await init()
+      return isSupabaseConfigured()
+    } catch (err: any) {
+      error.value = err?.message || 'Supabase keys save nahi ho paaye'
+      return false
+    }
   }
 
   /** Human-readable reason sync is blocked; null when sync is allowed. */
@@ -59,31 +69,55 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function init() {
     const sb = getSupabase()
-    if (!sb) return
+    if (!sb) {
+      initialized.value = true
+      statusMessage.value = 'Supabase not configured'
+      return
+    }
     loading.value = true
+    statusMessage.value = 'Checking saved login...'
+    authSubscription?.unsubscribe()
+    authSubscription = null
     try {
       const sessionResult = await Promise.race([
         sb.auth.getSession(),
-        new Promise<{ data: { session: null }; error: null }>((resolve) =>
-          setTimeout(() => resolve({ data: { session: null }, error: null }), 8000),
+        new Promise<Awaited<ReturnType<typeof sb.auth.getSession>>>((resolve) =>
+          setTimeout(() => resolve({ data: { session: null }, error: null } as Awaited<ReturnType<typeof sb.auth.getSession>>), 8000),
         ),
       ])
-      const { data } = sessionResult
+      const { data, error: sessionErr } = sessionResult
+      if (sessionErr) {
+        error.value = sessionErr.message
+        statusMessage.value = 'Saved login check failed'
+      }
       if (data?.session?.user) {
         user.value = { id: data.session.user.id, email: data.session.user.email || '' }
+        statusMessage.value = `Signed in as ${user.value.email}`
         await loadOrg()
+      } else {
+        user.value = null
+        statusMessage.value = 'Not signed in'
       }
-      sb.auth.onAuthStateChange((_e, session) => {
+      const { data: listener } = sb.auth.onAuthStateChange((event, session) => {
         if (session?.user) {
           user.value = { id: session.user.id, email: session.user.email || '' }
+          statusMessage.value = `Signed in as ${user.value.email}`
           loadOrg()
         } else {
           user.value = null
-          orgId.value = null
-          localStorage.removeItem('pama_org_id')
+          statusMessage.value = 'Not signed in'
+          if (event === 'SIGNED_OUT') {
+            orgId.value = null
+            localStorage.removeItem('pama_org_id')
+          }
         }
       })
+      authSubscription = listener.subscription
+    } catch (err: any) {
+      error.value = err?.message || 'Auth init failed'
+      statusMessage.value = 'Could not check saved login'
     } finally {
+      initialized.value = true
       loading.value = false
     }
   }
@@ -164,20 +198,26 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function signIn(email: string, password: string) {
     error.value = ''
+    statusMessage.value = ''
     const sb = getSupabase()
     if (!sb) {
       error.value = 'Pehle Settings → Cloud Sync me Supabase URL + anon key save karein (Save & Connect).'
       return false
     }
     loading.value = true
+    statusMessage.value = 'Signing in...'
     try {
       const { data: sessionData, error: err } = await sb.auth.signInWithPassword({ email, password })
-      if (err) { error.value = err.message; return false }
+      if (err) { error.value = err.message; statusMessage.value = 'Sign in failed'; return false }
       if (sessionData.session?.user) {
         user.value = { id: sessionData.session.user.id, email: sessionData.session.user.email || '' }
+        statusMessage.value = `Signed in as ${user.value.email}`
         await loadOrg()
+        return true
       }
-      return true
+      error.value = 'Sign in complete nahi hua. Email/password check karein ya email confirmation pending ho sakti hai.'
+      statusMessage.value = 'Sign in incomplete'
+      return false
     } finally {
       loading.value = false
     }
@@ -185,15 +225,18 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function signUp(email: string, password: string) {
     error.value = ''
+    statusMessage.value = ''
     const sb = getSupabase()
     if (!sb) {
       error.value = 'Pehle Settings → Cloud Sync me Supabase URL + anon key save karein (Save & Connect).'
       return false
     }
     loading.value = true
+    statusMessage.value = 'Creating account...'
     try {
       const { error: err } = await sb.auth.signUp({ email, password })
-      if (err) { error.value = err.message; return false }
+      if (err) { error.value = err.message; statusMessage.value = 'Sign up failed'; return false }
+      statusMessage.value = 'Account created. Email confirm karke sign in karein.'
       return true
     } finally {
       loading.value = false
@@ -205,11 +248,12 @@ export const useAuthStore = defineStore('auth', () => {
     await sb?.auth.signOut()
     user.value = null
     orgId.value = null
+    statusMessage.value = 'Signed out'
     localStorage.removeItem('pama_org_id')
   }
 
   return {
-    user, orgId, loading, error, orgSetupError, isConfigured, isLoggedIn, canSync, syncBlockReason,
+    user, orgId, loading, initialized, error, orgSetupError, statusMessage, isConfigured, isLoggedIn, canSync, syncBlockReason,
     init, signIn, signUp, signOut, applySupabaseKeys, ensureOrgSetup,
   }
 })
