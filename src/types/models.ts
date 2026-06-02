@@ -164,6 +164,7 @@ export interface PurchaseItemLine {
   bf?: string
   color?: 'NS' | 'GY' | 'NATURAL_BROWN' | string
   reel_weight?: number
+  reel_count?: number
   is_consumable?: boolean
   consumable_type?: 'glue' | 'ink' | 'stitching_wire'
 }

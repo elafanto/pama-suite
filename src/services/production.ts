@@ -42,53 +42,69 @@ export function newStockMovement(data: Omit<StockMovement, 'id' | 'created_at' |
 
 export async function createReelsFromPurchase(purchase: Purchase) {
   const existing = await db.reel_stocks.where('purchase_id').equals(purchase.id).toArray().catch(() => [])
-  const existingIds = new Set(existing.filter((r) => !r.is_deleted).map((r) => r.reel_no))
+  const existingIds = new Set(existing.filter((r) => !r.is_deleted).map((r) => r.reel_no.trim().toLowerCase()))
   const now = nowISO()
   let count = 0
+  let autoSeq = 1
 
-  for (const [idx, row] of purchase.items.entries()) {
+  for (const row of purchase.items) {
     if (!row.is_kraft_reel) continue
-    const reelNo = (row.reel_no || `${purchase.bill_no}-${idx + 1}`).trim()
-    if (existingIds.has(reelNo)) continue
-    const weight = Number(row.reel_weight || row.qty || 0)
-    const reel: ReelStock = plain({
-      id: uid(),
-      firm_id: purchase.firm_id,
-      reel_no: reelNo,
-      supplier_id: purchase.supplier_id,
-      supplier_name: purchase.supplier_name,
-      purchase_id: purchase.id,
-      purchase_bill_no: purchase.bill_no,
-      deckle_size: row.deckle_size || '',
-      gsm: row.gsm || '',
-      bf: row.bf || '',
-      color: row.color || 'NS',
-      opening_weight: weight,
-      current_weight: weight,
-      rate: Number(row.rate) || 0,
-      status: weight > 0 ? 'active' : 'consumed',
-      created_at: now,
-      updated_at: now,
-      is_deleted: false,
-      _dirty: true,
-    }) as ReelStock
-    await db.reel_stocks.add(reel)
-    await db.stock_movements.add(newStockMovement({
-      firm_id: purchase.firm_id,
-      date: purchase.received_date || purchase.date,
-      source: 'purchase',
-      ref_id: purchase.id,
-      stock_type: 'raw_reel',
-      stock_ref_id: reel.id,
-      qty_in: 0,
-      qty_out: 0,
-      weight_in: weight,
-      weight_out: 0,
-      waste_qty: 0,
-      waste_weight: 0,
-      notes: `Reel ${reelNo} from purchase ${purchase.bill_no}`,
-    }))
-    count++
+    const reelCount = Math.max(1, Math.floor(Number(row.reel_count) || 1))
+    const totalWeight = Number(row.reel_weight || row.qty || 0)
+    // P0 stores one line-level reel weight; split it evenly until per-reel weights exist.
+    const perReelWeight = reelCount > 0 ? Math.round((totalWeight / reelCount) * 1000) / 1000 : totalWeight
+    const manualBase = (row.reel_no || '').trim()
+
+    for (let reelIdx = 0; reelIdx < reelCount; reelIdx++) {
+      const autoNo = `${purchase.bill_no}-R${String(autoSeq).padStart(2, '0')}`
+      const reelNo = manualBase
+        ? (reelCount === 1 ? manualBase : `${manualBase}-R${String(reelIdx + 1).padStart(2, '0')}`)
+        : autoNo
+      autoSeq++
+
+      const reelNoKey = reelNo.trim().toLowerCase()
+      if (!reelNoKey || existingIds.has(reelNoKey)) continue
+      existingIds.add(reelNoKey)
+
+      const reel: ReelStock = plain({
+        id: uid(),
+        firm_id: purchase.firm_id,
+        reel_no: reelNo,
+        supplier_id: purchase.supplier_id,
+        supplier_name: purchase.supplier_name,
+        purchase_id: purchase.id,
+        purchase_bill_no: purchase.bill_no,
+        deckle_size: row.deckle_size || '',
+        gsm: row.gsm || '',
+        bf: row.bf || '',
+        color: row.color || 'NS',
+        opening_weight: perReelWeight,
+        current_weight: perReelWeight,
+        rate: Number(row.rate) || 0,
+        status: perReelWeight > 0 ? 'active' : 'consumed',
+        created_at: now,
+        updated_at: now,
+        is_deleted: false,
+        _dirty: true,
+      }) as ReelStock
+      await db.reel_stocks.add(reel)
+      await db.stock_movements.add(newStockMovement({
+        firm_id: purchase.firm_id,
+        date: purchase.received_date || purchase.date,
+        source: 'purchase',
+        ref_id: purchase.id,
+        stock_type: 'raw_reel',
+        stock_ref_id: reel.id,
+        qty_in: 1,
+        qty_out: 0,
+        weight_in: perReelWeight,
+        weight_out: 0,
+        waste_qty: 0,
+        waste_weight: 0,
+        notes: `Reel ${reelNo} from purchase ${purchase.bill_no}${reelCount > 1 ? ` (${reelIdx + 1}/${reelCount}, split from ${totalWeight} KG line weight)` : ''}`,
+      }))
+      count++
+    }
   }
   return count
 }
@@ -138,6 +154,9 @@ export async function saveProductionStage(entry: Omit<ProductionStageEntry, 'id'
     if (rec.input_stock_type === 'raw_reel' && rec.input_ref_id && rec.input_weight > 0) {
       const reel = await db.reel_stocks.get(rec.input_ref_id)
       if (reel) {
+        if (rec.input_weight > (Number(reel.current_weight) || 0)) {
+          throw new Error(`Selected reel ${reel.reel_no} has only ${Number(reel.current_weight).toFixed(2)} KG available.`)
+        }
         const current = Math.max(0, (Number(reel.current_weight) || 0) - rec.input_weight)
         await db.reel_stocks.put({
           ...reel,

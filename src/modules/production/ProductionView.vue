@@ -60,6 +60,14 @@ const consumableForm = reactive({
   notes: '',
 })
 
+const reelFilters = reactive({
+  gsm: '',
+  bf: '',
+  deckle: '',
+  color: '',
+  status: 'all',
+})
+
 const stagePairs: Record<ProductionStage, { input: ProductionStockType; output: ProductionStockType }> = {
   corrugation: { input: 'raw_reel', output: '2ply' },
   paper_cutting: { input: '2ply', output: 'cut_sheet' },
@@ -75,6 +83,22 @@ const stockTypes = Object.keys(STOCK_LABELS) as ProductionStockType[]
 const openJobs = computed(() => production.jobs.filter((j) => j.status !== 'closed' && j.status !== 'dispatched'))
 const selectedJob = computed(() => production.jobs.find((j) => j.id === stageForm.job_id) || null)
 const activeReels = computed(() => production.reels.filter((r) => r.status === 'active' && r.current_weight > 0))
+const reelFilterOptions = computed(() => {
+  const uniq = (values: string[]) => Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
+  return {
+    gsm: uniq(production.reels.map((r) => r.gsm)),
+    bf: uniq(production.reels.map((r) => r.bf)),
+    deckle: uniq(production.reels.map((r) => r.deckle_size)),
+    color: uniq(production.reels.map((r) => r.color)),
+  }
+})
+const filteredReels = computed(() => production.reels.filter((reel) =>
+  (!reelFilters.gsm || reel.gsm === reelFilters.gsm) &&
+  (!reelFilters.bf || reel.bf === reelFilters.bf) &&
+  (!reelFilters.deckle || reel.deckle_size === reelFilters.deckle) &&
+  (!reelFilters.color || reel.color === reelFilters.color) &&
+  (reelFilters.status === 'all' || reel.status === reelFilters.status),
+))
 const balanceRows = computed(() => {
   const bal = productionBalance(production.movements, firmStore.activeFirmId, selectedJobId.value || undefined)
   return stockTypes.map((type) => ({ type, label: STOCK_LABELS[type], ...bal[type] }))
@@ -153,7 +177,18 @@ async function saveStage() {
   if (!stageForm.job_id) return alert('Job select karo')
   if (stageForm.output_qty <= 0 && stageForm.output_weight <= 0) return alert('Output quantity ya weight enter karo')
   if (stageForm.stage === 'corrugation' && !stageForm.input_ref_id) return alert('Corrugation ke liye reel select karo')
-  await production.addStage({ ...stageForm })
+  if (stageForm.stage === 'corrugation' && stageForm.input_ref_id && stageForm.input_weight > 0) {
+    const selectedReel = production.reels.find((reel) => reel.id === stageForm.input_ref_id)
+    if (selectedReel && stageForm.input_weight > (Number(selectedReel.current_weight) || 0)) {
+      return alert(`Selected reel ${selectedReel.reel_no} me sirf ${n2(selectedReel.current_weight)} KG available hai.`)
+    }
+  }
+  try {
+    await production.addStage({ ...stageForm })
+  } catch (err: any) {
+    alert(err?.message || 'Daily production entry save nahi ho payi.')
+    return
+  }
   Object.assign(stageForm, {
     date: new Date().toISOString().slice(0, 10),
     job_id: stageForm.job_id,
@@ -396,11 +431,50 @@ onMounted(async () => {
 
     <div v-else-if="activeTab === 'reels'" class="pp-card p-6">
       <h2 class="font-semibold border-b pb-2 mb-4">Kraft Paper Reel Stock</h2>
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+        <div>
+          <label class="pp-label">GSM</label>
+          <select v-model="reelFilters.gsm" class="pp-input">
+            <option value="">All GSM</option>
+            <option v-for="gsm in reelFilterOptions.gsm" :key="gsm" :value="gsm">{{ gsm }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="pp-label">BF</label>
+          <select v-model="reelFilters.bf" class="pp-input">
+            <option value="">All BF</option>
+            <option v-for="bf in reelFilterOptions.bf" :key="bf" :value="bf">{{ bf }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="pp-label">Deckle</label>
+          <select v-model="reelFilters.deckle" class="pp-input">
+            <option value="">All Deckle</option>
+            <option v-for="deckle in reelFilterOptions.deckle" :key="deckle" :value="deckle">{{ deckle }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="pp-label">Color</label>
+          <select v-model="reelFilters.color" class="pp-input">
+            <option value="">All Color</option>
+            <option v-for="color in reelFilterOptions.color" :key="color" :value="color">{{ color }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="pp-label">Status</label>
+          <select v-model="reelFilters.status" class="pp-input">
+            <option value="all">All Status</option>
+            <option value="active">Active</option>
+            <option value="consumed">Consumed</option>
+          </select>
+        </div>
+      </div>
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
           <thead class="text-xs uppercase text-slate-500 bg-slate-50">
             <tr>
               <th class="p-3 text-left">Reel No</th>
+              <th class="p-3 text-left">Bill No</th>
               <th class="p-3 text-left">Supplier</th>
               <th class="p-3 text-left">Deckle</th>
               <th class="p-3 text-left">GSM / BF</th>
@@ -411,8 +485,9 @@ onMounted(async () => {
             </tr>
           </thead>
           <tbody class="divide-y">
-            <tr v-for="reel in production.reels" :key="reel.id">
+            <tr v-for="reel in filteredReels" :key="reel.id">
               <td class="p-3 font-mono">{{ reel.reel_no }}</td>
+              <td class="p-3 font-mono">{{ reel.purchase_bill_no || '-' }}</td>
               <td class="p-3">{{ reel.supplier_name }}</td>
               <td class="p-3">{{ reel.deckle_size }}</td>
               <td class="p-3">{{ reel.gsm }} / {{ reel.bf }}</td>
@@ -421,8 +496,8 @@ onMounted(async () => {
               <td class="p-3 text-right font-mono">{{ n2(reel.current_weight) }}</td>
               <td class="p-3 text-center"><span class="pp-badge" :class="reel.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-slate-100'">{{ reel.status }}</span></td>
             </tr>
-            <tr v-if="production.reels.length === 0">
-              <td colspan="8" class="p-8 text-center text-slate-400">Purchase bill me Kraft Reel mark karte hi stock yahan dikhega.</td>
+            <tr v-if="filteredReels.length === 0">
+              <td colspan="9" class="p-8 text-center text-slate-400">Purchase bill me Kraft Reel mark karte hi stock yahan dikhega.</td>
             </tr>
           </tbody>
         </table>

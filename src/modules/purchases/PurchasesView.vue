@@ -106,6 +106,10 @@ function newBulkRow(): BulkPurchaseRow {
 // Helper functions
 const n2 = (val: number) => (val || 0).toFixed(2)
 
+function normalizeReelCount(v: unknown) {
+  return Math.max(1, Math.floor(Number(v) || 1))
+}
+
 function addBulkRow(data: Partial<BulkPurchaseRow> = {}) {
   bulkRows.value.push({ ...newBulkRow(), ...data })
 }
@@ -136,6 +140,7 @@ function addRow(data: Partial<PurchaseItemLine> = {}) {
     bf: data.bf || '',
     color: data.color || 'NS',
     reel_weight: data.reel_weight || data.qty || 0,
+    reel_count: normalizeReelCount(data.reel_count),
     is_consumable: data.is_consumable || false,
     consumable_type: data.consumable_type || 'glue',
   })
@@ -217,6 +222,7 @@ function toggleKraftReel(idx: number) {
   if (row.is_kraft_reel) {
     row.unit = 'KG'
     row.reel_weight = row.reel_weight || row.qty || 0
+    row.reel_count = normalizeReelCount(row.reel_count)
     row.hsn = row.hsn || '48043100'
     row.is_consumable = false
   }
@@ -335,6 +341,7 @@ function scanItemToPurchaseLine(it: NonNullable<ScanResult['items']>[number]): P
     bf: it.bf || '',
     color: normalizeReelColor(it.color),
     reel_weight: Number(it.reelWeight || it.qty || 0),
+    reel_count: normalizeReelCount(it.reelCount),
     is_consumable: Boolean(it.isConsumable),
     consumable_type: normalizeConsumableType(it.consumableType),
   }
@@ -374,6 +381,7 @@ async function ensurePurchaseItemLine(it: NonNullable<ScanResult['items']>[numbe
     bf: scannedLine.bf,
     color: scannedLine.color,
     reel_weight: scannedLine.reel_weight,
+    reel_count: scannedLine.reel_count,
   }
 }
 
@@ -433,9 +441,9 @@ async function savePurchase() {
     alert('Please add at least one valid line item')
     return
   }
-  const badReel = validItems.find(it => it.is_kraft_reel && (!it.deckle_size?.trim() || !it.gsm?.trim() || !it.bf?.trim() || !(it.reel_weight || it.qty)))
+  const badReel = validItems.find(it => it.is_kraft_reel && (!it.deckle_size?.trim() || !it.gsm?.trim() || !it.bf?.trim() || !(it.reel_weight || it.qty) || normalizeReelCount(it.reel_count) <= 0))
   if (badReel) {
-    alert('Kraft reel line me Deckle, GSM, BF aur Reel Weight required hai. Reel No optional hai.')
+    alert('Kraft reel line me Deckle, GSM, BF, Reel Weight aur No. of Reels required hai. Reel No optional hai.')
     return
   }
   const badConsumable = validItems.find(it => it.is_consumable && !it.consumable_type)
@@ -467,6 +475,11 @@ async function savePurchase() {
     }
   }
 
+  const normalizedItems = validItems.map((it) => ({
+    ...it,
+    reel_count: it.is_kraft_reel ? normalizeReelCount(it.reel_count) : undefined,
+  }))
+
   const purchaseData = {
     supplier_name: vendor.name,
     supplier_id: vendor.id,
@@ -475,7 +488,7 @@ async function savePurchase() {
     received_date: form.received_date,
     payment: form.payment,
     gst_type: form.gst_type,
-    items: validItems,
+    items: normalizedItems,
     sub: Math.round(subtotal.value * 100) / 100,
     total_tax: Math.round(totalTax.value * 100) / 100,
     round_off: Math.round(roundOff.value * 100) / 100,
@@ -710,7 +723,10 @@ function editPurchase(pur: Purchase) {
   form.amt_paid = pur.amt_paid
   form.pay_status = pur.pay_status
   
-  form.items = pur.items.map(it => ({ ...it }))
+  form.items = pur.items.map(it => ({
+    ...it,
+    reel_count: it.is_kraft_reel ? normalizeReelCount(it.reel_count) : it.reel_count,
+  }))
   activeTab.value = 'new'
 }
 
@@ -971,7 +987,7 @@ onMounted(() => {
                 </tr>
                 <tr v-for="(item, idx) in form.items.filter(i => i.is_kraft_reel)" :key="`reel-${idx}-${item.name}`" class="bg-amber-50/50">
                   <td colspan="9" class="px-3 py-3">
-                    <div class="grid grid-cols-2 md:grid-cols-6 gap-3">
+                    <div class="grid grid-cols-2 md:grid-cols-7 gap-3">
                       <div>
                         <label class="pp-label">Reel No (optional)</label>
                         <input v-model="item.reel_no" class="pp-input" placeholder="Reel/batch no" />
@@ -999,6 +1015,10 @@ onMounted(() => {
                       <div>
                         <label class="pp-label">Reel Weight KG *</label>
                         <input type="number" v-model.number="item.reel_weight" class="pp-input text-right" placeholder="0" />
+                      </div>
+                      <div>
+                        <label class="pp-label">No. of Reels *</label>
+                        <input type="number" min="1" step="1" v-model.number="item.reel_count" class="pp-input text-right" placeholder="1" />
                       </div>
                     </div>
                   </td>
@@ -1217,7 +1237,7 @@ onMounted(() => {
                   </tr>
                   <tr v-if="item.isKraftReel" class="bg-amber-50/50">
                     <td colspan="7" class="px-3 py-3">
-                      <div class="grid grid-cols-2 md:grid-cols-6 gap-3">
+                      <div class="grid grid-cols-2 md:grid-cols-7 gap-3">
                         <div>
                           <label class="pp-label">Reel No (optional)</label>
                           <input v-model="item.reelNo" class="pp-input" placeholder="Reel/batch no" />
@@ -1245,6 +1265,10 @@ onMounted(() => {
                         <div>
                           <label class="pp-label">Reel Weight KG *</label>
                           <input type="number" v-model.number="item.reelWeight" class="pp-input text-right" placeholder="0" />
+                        </div>
+                        <div>
+                          <label class="pp-label">No. of Reels *</label>
+                          <input type="number" min="1" step="1" v-model.number="item.reelCount" class="pp-input text-right" placeholder="1" />
                         </div>
                       </div>
                     </td>
