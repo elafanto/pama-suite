@@ -29,6 +29,13 @@ const bulkScanStatus = ref('')
 const bulkScanLoading = ref(false)
 const bulkScanFileName = ref('')
 const bulkScanFileStatuses = ref<BulkScanFileStatus[]>([])
+const selectedPurchaseIds = ref<string[]>([])
+const correctionTargetFirmId = ref('')
+const correctionConfirmText = ref('')
+const correctionNote = ref('')
+const correctionBusy = ref(false)
+const correctionStatus = ref('')
+const correctionWarnings = ref<string[]>([])
 
 // Payment Modal State
 const showPaymentModal = ref(false)
@@ -179,6 +186,11 @@ function applyScan(result: ScanResult) {
 
 // Watch active firm to reload data
 watch(() => firmStore.activeFirmId, () => {
+  selectedPurchaseIds.value = []
+  correctionTargetFirmId.value = ''
+  correctionConfirmText.value = ''
+  correctionStatus.value = ''
+  correctionWarnings.value = []
   purchaseStore.load()
   partyStore.load()
   itemStore.load()
@@ -810,7 +822,68 @@ const filteredPurchases = computed(() => {
   })
 })
 
+const selectedPurchases = computed(() =>
+  purchaseStore.list.filter((p) => selectedPurchaseIds.value.includes(p.id)),
+)
+
+const availableTargetFirms = computed(() =>
+  firmStore.firms.filter((firm) => !firm.is_deleted && firm.id !== firmStore.activeFirmId),
+)
+
+function selectVisiblePurchases() {
+  selectedPurchaseIds.value = filteredPurchases.value.map((p) => p.id)
+}
+
+function clearCorrectionSelection() {
+  selectedPurchaseIds.value = []
+  correctionConfirmText.value = ''
+  correctionStatus.value = ''
+  correctionWarnings.value = []
+}
+
+async function moveSelectedPurchases() {
+  if (selectedPurchaseIds.value.length === 0) {
+    alert('Move karne ke liye at least one purchase bill select karo.')
+    return
+  }
+  if (!correctionTargetFirmId.value || correctionTargetFirmId.value === firmStore.activeFirmId) {
+    alert('Correct target firm select karo.')
+    return
+  }
+  if (correctionConfirmText.value.trim().toUpperCase() !== 'MOVE') {
+    alert('Confirmation box me MOVE type karo.')
+    return
+  }
+
+  const targetFirm = firmStore.firms.find((f) => f.id === correctionTargetFirmId.value)
+  const ok = confirm(
+    `Move ${selectedPurchaseIds.value.length} purchase bill(s) from ${firmStore.activeFirm?.name || 'current firm'} to ${targetFirm?.name || 'selected firm'}?\n\nThis will retag linked ledger, reel stock, stock movements, item stock movements and activity logs. Parties/items will not be moved automatically.`,
+  )
+  if (!ok) return
+
+  correctionBusy.value = true
+  correctionStatus.value = ''
+  correctionWarnings.value = []
+  try {
+    const result = await purchaseStore.moveToFirm(
+      selectedPurchaseIds.value,
+      correctionTargetFirmId.value,
+      correctionNote.value,
+    )
+    correctionStatus.value = `Moved ${result.purchases} bill(s). Updated ${result.vouchers} voucher(s), ${result.reelStocks} reel(s), ${result.stockMovements} stock movement(s), ${result.itemStockMovements} item movement(s), ${result.activityLogs} activity log(s).`
+    correctionWarnings.value = result.warnings
+    selectedPurchaseIds.value = []
+    correctionConfirmText.value = ''
+    correctionNote.value = ''
+  } catch (err: any) {
+    alert(err?.message || 'Purchase firm correction failed')
+  } finally {
+    correctionBusy.value = false
+  }
+}
+
 onMounted(() => {
+  firmStore.load()
   purchaseStore.load()
   partyStore.load()
   itemStore.load()
@@ -1432,10 +1505,78 @@ onMounted(() => {
         </div>
       </div>
 
+      <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3">
+        <div class="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h3 class="font-semibold text-amber-900">Wrong Firm Correction</h3>
+            <p class="text-xs text-amber-800">
+              Select only the wrongly uploaded purchase bills, choose the correct firm, type MOVE, then confirm.
+              Ledger vouchers, reel stock, stock movements, item stock movements and activity logs will be moved with sync dirty flags.
+            </p>
+            <p class="mt-1 text-xs text-amber-700">
+              Parties/items are not moved automatically. Exact target-firm matches are used when found; otherwise existing references stay unchanged.
+            </p>
+          </div>
+          <div class="flex gap-2">
+            <button @click="selectVisiblePurchases" class="pp-btn pp-btn-ghost px-3 py-1 text-xs" :disabled="filteredPurchases.length === 0 || correctionBusy">
+              Select Visible
+            </button>
+            <button @click="clearCorrectionSelection" class="pp-btn pp-btn-ghost px-3 py-1 text-xs" :disabled="selectedPurchaseIds.length === 0 || correctionBusy">
+              Clear
+            </button>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-4">
+          <div>
+            <label class="pp-label">Selected Bills</label>
+            <div class="rounded-lg border bg-white px-3 py-2 text-sm font-semibold">
+              {{ selectedPurchases.length }} selected
+            </div>
+          </div>
+          <div>
+            <label class="pp-label">Correct Firm *</label>
+            <select v-model="correctionTargetFirmId" class="pp-input" :disabled="correctionBusy">
+              <option value="">Select target firm</option>
+              <option v-for="firm in availableTargetFirms" :key="firm.id" :value="firm.id">{{ firm.name }}</option>
+            </select>
+          </div>
+          <div>
+            <label class="pp-label">Type MOVE *</label>
+            <input v-model="correctionConfirmText" class="pp-input" placeholder="MOVE" :disabled="correctionBusy" />
+          </div>
+          <div class="flex items-end">
+            <button
+              @click="moveSelectedPurchases"
+              class="pp-btn pp-btn-primary w-full"
+              :disabled="correctionBusy || selectedPurchaseIds.length === 0 || !correctionTargetFirmId || correctionConfirmText.trim().toUpperCase() !== 'MOVE'"
+            >
+              {{ correctionBusy ? 'Moving...' : 'Move Selected Bills' }}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <label class="pp-label">Correction Note</label>
+          <input v-model="correctionNote" class="pp-input" placeholder="Optional reason/reference for activity log" :disabled="correctionBusy" />
+        </div>
+
+        <p v-if="correctionStatus" class="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700">
+          {{ correctionStatus }}
+        </p>
+        <div v-if="correctionWarnings.length" class="rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs text-amber-800">
+          <p class="font-semibold">Review warnings:</p>
+          <ul class="mt-1 list-disc pl-5">
+            <li v-for="warning in correctionWarnings" :key="warning">{{ warning }}</li>
+          </ul>
+        </div>
+      </div>
+
       <div class="overflow-x-auto">
         <table class="w-full text-left border-collapse">
           <thead>
             <tr class="border-b text-slate-500 font-semibold text-xs uppercase bg-slate-50">
+              <th class="py-3 px-4 w-12 text-center">Move</th>
               <th class="py-3 px-4">Date</th>
               <th class="py-3 px-4">Bill No</th>
               <th class="py-3 px-4">Supplier Name</th>
@@ -1449,6 +1590,16 @@ onMounted(() => {
           </thead>
           <tbody class="divide-y text-sm">
             <tr v-for="pur in filteredPurchases" :key="pur.id" class="hover:bg-slate-50/50">
+              <td class="py-3 px-4 text-center">
+                <input
+                  v-model="selectedPurchaseIds"
+                  type="checkbox"
+                  :value="pur.id"
+                  class="h-4 w-4 rounded text-accent"
+                  :disabled="correctionBusy"
+                  :aria-label="`Select purchase bill ${pur.bill_no}`"
+                />
+              </td>
               <td class="py-3 px-4 font-medium">{{ pur.date }}</td>
               <td class="py-3 px-4 font-mono">{{ pur.bill_no }}</td>
               <td class="py-3 px-4">{{ pur.supplier_name }}</td>
@@ -1502,7 +1653,7 @@ onMounted(() => {
               </td>
             </tr>
             <tr v-if="filteredPurchases.length === 0">
-              <td colspan="9" class="py-8 text-center text-slate-400">
+              <td colspan="10" class="py-8 text-center text-slate-400">
                 No purchase transactions logged for this firm.
               </td>
             </tr>

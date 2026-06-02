@@ -5,6 +5,7 @@ import { createRepo } from '@/data/repo'
 import { useFirmStore } from './firm'
 import { useAccountingStore } from './accounting'
 import { logActivity } from '@/services/activityLog'
+import { movePurchaseBillsToFirm, type MovePurchaseBillsResult } from '@/services/purchaseCorrection'
 import { createConsumablesFromPurchase, createReelsFromPurchase, reversePurchaseReels } from '@/services/production'
 import type { Purchase } from '@/types/models'
 
@@ -111,5 +112,17 @@ export const usePurchaseStore = defineStore('purchases', () => {
     await load()
   }
 
-  return { list, loaded, load, add, update, remove, restore, recordPayment }
+  async function moveToFirm(purchaseIds: string[], toFirmId: string, note = ''): Promise<MovePurchaseBillsResult> {
+    const firm = useFirmStore()
+    const result = await movePurchaseBillsToFirm({
+      purchaseIds,
+      fromFirmId: firm.activeFirmId,
+      toFirmId,
+      note,
+    })
+    await load()
+    return result
+  }
+
+  return { list, loaded, load, add, update, remove, restore, recordPayment, moveToFirm }
 })
