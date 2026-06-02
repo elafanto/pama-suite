@@ -160,6 +160,20 @@ const selectedDebitOption = computed(() => {
 
 const selectedDebitLabel = computed(() => selectedDebitOption.value?.label || debitFrom.value)
 const enteredPurposeText = computed(() => cleanText(purpose.value) || 'the stated business purpose')
+const beneficiaryPurposeTexts = computed(() => {
+  return beneficiaries.value.map(b => cleanText(b.purpose)).filter(Boolean)
+})
+const draftPurposeText = computed(() => {
+  const purposes = beneficiaryPurposeTexts.value
+  if (purposes.length === 0) return enteredPurposeText.value
+
+  const uniquePurposes = purposes.filter((p, idx, list) => {
+    return list.findIndex(x => x.toLocaleLowerCase() === p.toLocaleLowerCase()) === idx
+  })
+
+  if (uniquePurposes.length === 1) return uniquePurposes[0]
+  return 'the purposes detailed below'
+})
 const isTermLoanDebit = computed(() => debitFrom.value.startsWith('Term Loan'))
 
 const branchEmailAddress = computed(() => {
@@ -275,26 +289,22 @@ const totalDisbursement = computed(() => {
 function buildDraft() {
   if (beneficiaries.value.length === 0) return null
 
-  let beneLines = ''
-  let idx = 1
-
-  beneficiaries.value.forEach(b => {
+  const beneficiaryLines = beneficiaries.value.map((b, idx) => {
     const amtFmt = n2(b.amount)
     const amtWords = numberToWords(b.amount)
+    const rowPurpose = cleanText(b.purpose) || enteredPurposeText.value
 
-    beneLines += `
-${idx}. ${b.name}
-   Purpose     : ${b.purpose}
-   Bank        : ${b.bank}
-   A/c Name    : ${b.acname || b.name}
-   A/c No.     : ${b.acno}
-   IFSC        : ${b.ifsc}
-   Amount      : ₹${amtFmt}
-   In Words    : ${amtWords}
-   Mode        : ${b.mode}
-`
-    idx++
-  })
+    return `${idx + 1}. Beneficiary Details
+   Name         : ${b.name}
+   Bank         : ${b.bank}
+   Account Name : ${b.acname || b.name}
+   Account No.  : ${b.acno}
+   IFSC         : ${b.ifsc}
+   Amount       : Rs. ${amtFmt}
+   Amount Words : ${amtWords}
+   Purpose      : ${rowPurpose}
+   Payment Mode : ${b.mode}`
+  }).join('\n\n')
 
   const totalFmt = n2(totalDisbursement.value)
   const totalWords = numberToWords(totalDisbursement.value)
@@ -303,9 +313,8 @@ ${idx}. ${b.name}
   if (isTermLoanDebit.value) subjectType = 'Term Loan Disbursement'
   else if (debitFrom.value.startsWith('CC')) subjectType = 'CC Account Disbursement'
 
-  const enteredPurpose = enteredPurposeText.value
+  const enteredPurpose = draftPurposeText.value
   const selectedDebitAccount = cleanText(debitFrom.value || selectedDebitLabel.value)
-  const selectedDebitDisplay = cleanText(selectedDebitLabel.value || selectedDebitAccount)
   let sourceAccountName = 'selected debit account'
   if (isTermLoanDebit.value) {
     sourceAccountName = 'Term Loan Account'
@@ -315,19 +324,21 @@ ${idx}. ${b.name}
     sourceAccountName = 'Current Account'
   }
   const transferAction = debitFrom.value.startsWith('Current') ? 'transfer funds' : 'disburse funds'
-  const openingLine = `We, M/s Pama Packaging, respectfully request you to kindly ${transferAction} from our ${sourceAccountName} (${selectedDebitDisplay}) towards ${enteredPurpose}.`
+  const openingLine = `We, M/s Pama Packaging, respectfully request you to kindly ${transferAction} from our ${sourceAccountName} (${selectedDebitAccount}) towards ${enteredPurpose}.`
   const sanctionConfirmation = isTermLoanDebit.value
-    ? `\nWe confirm that the funds shall be utilised for ${enteredPurpose} and in accordance with the terms and conditions of the loan sanction.\n`
+    ? `\nTerm Loan Declaration:\nWe confirm that the funds shall be utilised for ${enteredPurpose} and in accordance with the terms and conditions of the loan sanction.\n`
     : ''
 
-  let acBlock = ''
-  if (loanAc.value) acBlock += `  Term Loan A/c No.       : ${loanAc.value}\n`
-  if (currentAc.value) acBlock += `  Current A/c No.          : ${currentAc.value}\n`
-  if (ccAc.value) acBlock += `  CC (Cash Credit) A/c No. : ${ccAc.value}\n`
-  acBlock += `  (Account Name            : Pama Packaging)`
+  const acBlock = [
+    'Account Name : Pama Packaging',
+    `Debit Account: ${selectedDebitAccount}`,
+    loanAc.value ? `Term Loan A/c No.       : ${loanAc.value}` : '',
+    currentAc.value ? `Current A/c No.          : ${currentAc.value}` : '',
+    ccAc.value ? `CC (Cash Credit) A/c No. : ${ccAc.value}` : '',
+  ].filter(Boolean).join('\n')
 
-  const multiSubject = beneficiaries.value.length > 1 ? 'Multiple Beneficiaries — ' : ''
-  const subject = `Request for ${subjectType} via RTGS/NEFT — ${multiSubject}Pama Packaging (Debit: ${debitFrom.value})`
+  const multiSubject = beneficiaries.value.length > 1 ? 'Multiple Beneficiaries - ' : ''
+  const subject = `Request for ${subjectType} via RTGS/NEFT - ${multiSubject}Pama Packaging (Debit: ${selectedDebitAccount})`
 
   const body = `Date: ${displayDate.value}
 
@@ -336,27 +347,30 @@ The Branch Manager
 Union Bank of India
 Jaspur Branch
 
+Subject: ${subject}
+
 Dear Sir / Madam,
 
 ${openingLine}
 
-Our account details are as follows:
+DEBIT ACCOUNT
 
 ${acBlock}
 
-I kindly request that you debit our selected account (${selectedDebitAccount}) and remit the payments to the following beneficiaries via RTGS/NEFT. The details of the parties and amounts are listed below:
-${beneLines}
-──────────────────────────────────────────
-Total Amount  : ₹${totalFmt}
-(In Words     : ${totalWords})
-──────────────────────────────────────────
+TRANSFER PURPOSE
+${enteredPurpose}
 
-Reference: Pama Packaging debit account: ${selectedDebitAccount}
+BENEFICIARY DETAILS
+${beneficiaryLines}
 
-Kindly process these payments as soon as possible and confirm the transaction.
-${sanctionConfirmation}
+AMOUNT SUMMARY
+Total Amount : Rs. ${totalFmt}
+Amount Words : ${totalWords}
 
-We request that you kindly process the above disbursement at the earliest.
+PAYMENT REQUEST
+Please debit the above selected account and remit the payment(s) to the beneficiary account(s) mentioned above through RTGS/NEFT.
+
+${sanctionConfirmation}Kindly process the above payment(s) at the earliest and confirm the transaction.
 
 Thanking you.
 
@@ -756,7 +770,7 @@ onMounted(() => {
 
           <p class="mb-4">
             We respectfully request you to kindly disburse/transfer funds from our selected debit account
-            (<u>{{ selectedDebitLabel }}</u>) towards <u>{{ enteredPurposeText }}</u>.
+            (<u>{{ selectedDebitLabel }}</u>) towards <u>{{ draftPurposeText }}</u>.
           </p>
 
           <div class="mb-4 bg-slate-50/80 p-3 border rounded text-xs leading-5">
@@ -809,7 +823,7 @@ onMounted(() => {
           </div>
 
           <p v-if="isTermLoanDebit" class="mb-6 text-xs text-justify">
-            We confirm that the funds shall be utilised for {{ enteredPurposeText }} and in accordance with the terms and conditions of the loan sanction.
+            We confirm that the funds shall be utilised for {{ draftPurposeText }} and in accordance with the terms and conditions of the loan sanction.
           </p>
 
           <div class="mt-12 flex justify-between">
