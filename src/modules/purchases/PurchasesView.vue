@@ -28,6 +28,7 @@ const editingId = ref<string | null>(null)
 const bulkScanStatus = ref('')
 const bulkScanLoading = ref(false)
 const bulkScanFileName = ref('')
+const bulkScanFileStatuses = ref<BulkScanFileStatus[]>([])
 
 // Payment Modal State
 const showPaymentModal = ref(false)
@@ -70,6 +71,12 @@ interface BulkPurchaseRow {
   is_consumable: boolean
   consumable_type: 'glue' | 'ink' | 'stitching_wire'
   notes: string
+}
+
+interface BulkScanFileStatus {
+  name: string
+  status: 'pending' | 'scanning' | 'done' | 'error'
+  message: string
 }
 
 const bulkRows = ref<BulkPurchaseRow[]>([])
@@ -547,27 +554,70 @@ async function saveBulkPurchases() {
 }
 
 async function scanBulkPurchasePdf(e: Event) {
-  const file = (e.target as HTMLInputElement).files?.[0]
-  if (!file) return
-  if (file.type !== 'application/pdf') {
-    bulkScanStatus.value = 'Please upload one PDF file containing purchase bills.'
+  const input = e.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  if (files.length === 0) return
+
+  const invalidFile = files.find((file) => file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf'))
+  if (invalidFile) {
+    bulkScanStatus.value = `Only PDF files allowed. Remove: ${invalidFile.name}`
+    input.value = ''
     return
   }
-  bulkScanFileName.value = file.name
+
+  bulkScanFileName.value = files.length === 1 ? files[0].name : `${files.length} PDF files selected`
   bulkScanLoading.value = true
-  bulkScanStatus.value = 'Scanning PDF with Gemini...'
+  bulkScanStatus.value = files.length === 1
+    ? 'Scanning PDF with Gemini...'
+    : `Scanning 1 of ${files.length} PDFs with Gemini...`
   scannedBills.value = []
+  bulkScanFileStatuses.value = files.map((file) => ({
+    name: file.name,
+    status: 'pending',
+    message: 'Waiting',
+  }))
+
+  const extractedBills: ScanResult[] = []
   try {
-    const { base64, mime } = await fileToBase64(file)
-    const result = await scanPurchaseBillsPdf(settingsStore.geminiKey, base64, mime)
-    scannedBills.value = (result.bills || []).filter((b) => b.supplierName || b.billNo || b.items?.length)
-    bulkScanStatus.value = scannedBills.value.length
-      ? `Done - ${scannedBills.value.length} bill(s) extracted. Review and save.`
-      : 'No purchase bills found in this PDF.'
-  } catch (err: any) {
-    bulkScanStatus.value = err?.message || 'PDF scan failed'
+    for (const [idx, file] of files.entries()) {
+      bulkScanFileStatuses.value[idx] = {
+        name: file.name,
+        status: 'scanning',
+        message: `Scanning ${idx + 1}/${files.length}`,
+      }
+      bulkScanStatus.value = files.length === 1
+        ? 'Scanning PDF with Gemini...'
+        : `Scanning ${idx + 1} of ${files.length} PDFs with Gemini...`
+
+      try {
+        const { base64, mime } = await fileToBase64(file)
+        const result = await scanPurchaseBillsPdf(settingsStore.geminiKey, base64, mime)
+        const bills = (result.bills || []).filter((b) => b.supplierName || b.billNo || b.items?.length)
+        extractedBills.push(...bills)
+        scannedBills.value = [...extractedBills]
+        bulkScanFileStatuses.value[idx] = {
+          name: file.name,
+          status: 'done',
+          message: bills.length ? `${bills.length} bill(s) extracted` : 'No bills found',
+        }
+      } catch (err: any) {
+        bulkScanFileStatuses.value[idx] = {
+          name: file.name,
+          status: 'error',
+          message: err?.message || 'Scan failed',
+        }
+      }
+    }
+
+    const failedCount = bulkScanFileStatuses.value.filter((file) => file.status === 'error').length
+    bulkScanStatus.value = extractedBills.length
+      ? `Done - ${extractedBills.length} bill(s) extracted from ${files.length - failedCount}/${files.length} PDF(s). Review and save.`
+      : failedCount
+        ? `No bills extracted. ${failedCount} PDF(s) failed.`
+        : `No purchase bills found in ${files.length === 1 ? 'this PDF' : 'selected PDFs'}.`
   } finally {
     bulkScanLoading.value = false
+    input.value = ''
   }
 }
 
@@ -1034,7 +1084,7 @@ onMounted(() => {
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-4">
         <div>
           <h2 class="text-md font-semibold text-slate-800">Multiple Purchase Bills</h2>
-          <p class="text-xs text-slate-500">Ek PDF me multiple supplier bills upload karo, review karo, phir sab ek sath save karo.</p>
+          <p class="text-xs text-slate-500">Ek ya multiple PDF me purchase invoices upload karo, review karo, phir sab ek sath save karo.</p>
         </div>
         <div class="flex gap-2">
           <button @click="addBulkRow()" class="pp-btn pp-btn-ghost">➕ Add Bill Row</button>
@@ -1046,17 +1096,33 @@ onMounted(() => {
         <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div>
             <p class="text-sm font-semibold text-navy">AI Multi-Bill PDF Scan</p>
-            <p class="text-xs text-slate-500">Single PDF upload karo jisme multiple purchase invoices/bills ho sakte hain.</p>
+            <p class="text-xs text-slate-500">Ek popup me multiple PDF select kar sakte ho. Har PDF me ek ya multiple bills ho sakte hain.</p>
           </div>
           <label class="pp-btn pp-btn-primary cursor-pointer inline-block text-center">
-            {{ bulkScanLoading ? 'Scanning PDF...' : 'Upload Multiple Bills PDF' }}
-            <input type="file" accept="application/pdf" class="hidden" :disabled="bulkScanLoading" @change="scanBulkPurchasePdf" />
+            {{ bulkScanLoading ? 'Scanning PDF...' : 'Upload Purchase PDFs' }}
+            <input type="file" accept="application/pdf" multiple class="hidden" :disabled="bulkScanLoading" @change="scanBulkPurchasePdf" />
           </label>
         </div>
         <p v-if="bulkScanFileName" class="text-xs mt-2 text-slate-500">Selected: {{ bulkScanFileName }}</p>
         <p v-if="bulkScanStatus" class="text-xs mt-2" :class="bulkScanStatus.startsWith('Done') || bulkScanStatus.includes('saved') ? 'text-green-600' : 'text-slate-500'">
           {{ bulkScanStatus }}
         </p>
+        <div v-if="bulkScanFileStatuses.length" class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+          <div
+            v-for="file in bulkScanFileStatuses"
+            :key="file.name"
+            class="rounded-lg border bg-white px-3 py-2 text-xs"
+            :class="{
+              'border-green-200 text-green-700': file.status === 'done',
+              'border-rose-200 text-rose-700': file.status === 'error',
+              'border-blue-200 text-blue-700': file.status === 'scanning',
+              'border-slate-200 text-slate-500': file.status === 'pending',
+            }"
+          >
+            <div class="font-semibold truncate">{{ file.name }}</div>
+            <div>{{ file.message }}</div>
+          </div>
+        </div>
       </div>
 
       <div v-if="scannedBills.length" class="space-y-4">
