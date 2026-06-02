@@ -1,23 +1,22 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { useFirmStore } from '@/stores/firm'
 import { usePartyStore, type NewParty } from '@/stores/parties'
 import { useItemStore, type NewItem } from '@/stores/items'
 import { useInvoiceStore } from '@/stores/invoices'
 import { useAccountingStore } from '@/stores/accounting'
+import { usePurchaseStore } from '@/stores/purchases'
 import { getStateName, getStateCode, isGstinValid } from '@/services/gst'
 import { numberToWords } from '@/services/numberToWords'
-import { setPendingRTGS } from '@/services/rtgsBridge'
 import { openStatementPrint } from '@/services/billingStatements'
 import { getEwayEligibility, downloadEwayJson } from '@/services/ewayBill'
 import { downloadInvoicePdf, bulkDownloadInvoicePdf } from '@/services/invoicePdf'
 import { peekBillNo } from '@/services/invoiceNumber'
+import { listItemStockMovements } from '@/services/inventoryLedger'
+import { computeStock, findStockRowForLine } from '@/services/stock'
 import PpModal from '@/components/PpModal.vue'
-import type { Invoice, InvoiceItemLine, PayStatus, GstType } from '@/types/models'
+import type { Invoice, InvoiceItemLine, PayStatus, GstType, ItemStockMovement } from '@/types/models'
 import { uid } from '@/data/util'
-
-const router = useRouter()
 
 // Stores
 const firmStore = useFirmStore()
@@ -25,6 +24,7 @@ const partyStore = usePartyStore()
 const itemStore = useItemStore()
 const invoiceStore = useInvoiceStore()
 const accountingStore = useAccountingStore()
+const purchaseStore = usePurchaseStore()
 
 const showQuickCust = ref(false)
 const showQuickItem = ref(false)
@@ -67,6 +67,7 @@ const savingInvoice = ref(false)
 const templateName = ref('')
 const templateDesc = ref('')
 const showTemplateModal = ref(false)
+const stockMovements = ref<ItemStockMovement[]>([])
 
 // Outstanding Payment Modal State
 const showPaymentModal = ref(false)
@@ -317,6 +318,64 @@ const formEwayEligibility = computed(() => getEwayEligibility({
   is_deleted: false,
 }))
 
+const stockRows = computed(() =>
+  computeStock(itemStore.list, purchaseStore.list, invoiceStore.list, firmStore.activeFirmId, stockMovements.value),
+)
+
+function qtyLabel(qty: number, unit: string) {
+  return `${(qty || 0).toLocaleString('en-IN', { maximumFractionDigits: 3 })} ${unit || ''}`.trim()
+}
+
+const editedInvoice = computed(() => invoiceStore.list.find((inv) => inv.id === editingId.value) || null)
+
+const originalEditQtyByItem = computed(() => {
+  const qty = new Map<string, number>()
+  const inv = editedInvoice.value
+  if (!inv || inv.doc_type !== 'INVOICE') return qty
+  for (const line of inv.items || []) {
+    const stockRow = findStockRowForLine(stockRows.value, line)
+    if (!stockRow) continue
+    qty.set(stockRow.itemId, (qty.get(stockRow.itemId) || 0) + (Number(line.qty) || 0))
+  }
+  return qty
+})
+
+const stockGuardWarnings = computed(() => {
+  if (form.doc_type !== 'INVOICE') return []
+
+  const requested = new Map<string, { row: ReturnType<typeof findStockRowForLine>; qty: number }>()
+  for (const line of form.items) {
+    if (!line.name.trim() || Number(line.qty) <= 0) continue
+    const stockRow = findStockRowForLine(stockRows.value, line)
+    if (!stockRow) continue
+    const current = requested.get(stockRow.itemId)
+    requested.set(stockRow.itemId, { row: stockRow, qty: (current?.qty || 0) + (Number(line.qty) || 0) })
+  }
+
+  return [...requested.entries()]
+    .map(([itemId, entry]) => {
+      const row = entry.row
+      if (!row) return null
+      const available = row.onHand + (originalEditQtyByItem.value.get(itemId) || 0)
+      const shortage = entry.qty - available
+      return shortage > 0.0001
+        ? { itemId, name: row.name, unit: row.unit, requested: entry.qty, available, shortage }
+        : null
+    })
+    .filter(Boolean) as { itemId: string; name: string; unit: string; requested: number; available: number; shortage: number }[]
+})
+
+const stockGuardMessage = computed(() =>
+  stockGuardWarnings.value
+    .map((w) => `${w.name}: billing ${qtyLabel(w.requested, w.unit)}, on-hand ${qtyLabel(w.available, w.unit)}`)
+    .join('\n'),
+)
+
+function rowHasStockWarning(row: InvoiceItemLine) {
+  const stockRow = findStockRowForLine(stockRows.value, row)
+  return !!stockRow && stockGuardWarnings.value.some((w) => w.itemId === stockRow.itemId)
+}
+
 const ewayCandidates = computed(() => {
   let list = invoiceStore.list.filter((b) => {
     if (b.is_deleted || b.firm_id !== firmStore.activeFirmId) return false
@@ -456,25 +515,6 @@ async function bulkDeleteHistory() {
   alert('Selected bills deleted.')
 }
 
-function payViaRtgs(inv: Invoice) {
-  const vendor = partyStore.list.find(p => p.id === inv.party_id)
-  const outstanding = Math.max(0, inv.grand_total - (inv.amt_paid || 0))
-  if (outstanding <= 0) return alert('No outstanding amount on this bill')
-  setPendingRTGS({
-    name: inv.party_name,
-    purpose: `Payment against ${inv.bill_no}`,
-    bank: vendor?.bank || '',
-    acname: vendor?.acname || inv.party_name,
-    acno: vendor?.acno || '',
-    ifsc: vendor?.ifsc || '',
-    amount: outstanding,
-    mode: 'RTGS',
-    partyId: inv.party_id,
-    source: 'billing',
-  })
-  router.push('/banking')
-}
-
 function downloadPDF(inv?: Invoice) {
   const bill = inv || previewInvoice.value
   const firm = firmStore.activeFirm
@@ -568,6 +608,9 @@ async function saveInvoice() {
   
   const validItems = form.items.filter(row => row.name.trim() && row.qty > 0 && row.rate > 0)
   if (validItems.length === 0) return alert('At least one item with valid quantity and rate is required.')
+  if (stockGuardWarnings.value.length) {
+    return alert(`Stock guard: tracked item quantity exceeds on-hand.\n\n${stockGuardMessage.value}`)
+  }
 
   if (isDuplicateBillNo.value && editingId.value) {
     if (!confirm('This invoice number already exists. Continue anyway?')) return
@@ -808,7 +851,13 @@ async function savePayment() {
   if (!payInvoiceId.value) return
   if (payAmount.value <= 0) return alert('Amount must be positive.')
 
-  await invoiceStore.recordPayment(payInvoiceId.value, payAmount.value, payWriteOff.value)
+  await invoiceStore.recordPayment(
+    payInvoiceId.value,
+    payAmount.value,
+    payWriteOff.value,
+    payNote.value,
+    payDate.value,
+  )
   showPaymentModal.value = false
   alert('Payment recorded successfully!')
 }
@@ -926,10 +975,14 @@ function applyBoxCalcPrefill() {
 onMounted(async () => {
   defaultEwayDates()
   await firmStore.load()
-  await invoiceStore.load()
-  partyStore.load()
-  itemStore.load()
-  accountingStore.load()
+  await Promise.all([
+    invoiceStore.load(),
+    partyStore.load(),
+    itemStore.load(),
+    purchaseStore.load(),
+    accountingStore.load(),
+  ])
+  stockMovements.value = await listItemStockMovements(firmStore.activeFirmId, { limit: 1000 })
   if (!applyBoxCalcPrefill()) resetForm()
 
   // Load templates from localStorage
@@ -1105,6 +1158,14 @@ onMounted(async () => {
               <button @click="addRow()" class="pp-btn pp-btn-ghost !px-2.5 !py-1 text-xs">+ Add Row</button>
             </div>
           </div>
+          <div v-if="stockGuardWarnings.length" class="m-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+            <strong>Stock guard:</strong> Cannot save because tracked item quantity exceeds on-hand stock.
+            <ul class="mt-1 list-disc pl-5 text-xs space-y-0.5">
+              <li v-for="w in stockGuardWarnings" :key="w.itemId">
+                {{ w.name }}: billing {{ qtyLabel(w.requested, w.unit) }}, on-hand {{ qtyLabel(w.available, w.unit) }}
+              </li>
+            </ul>
+          </div>
           <div class="overflow-x-auto">
             <table class="w-full text-xs">
               <thead class="bg-slate-100 text-slate-500 uppercase font-semibold">
@@ -1126,7 +1187,7 @@ onMounted(async () => {
               </thead>
               <tbody>
                 <tr v-for="(row, idx) in form.items" :key="idx"
-                  :class="['border-t border-slate-100', isRowIncomplete(row) ? 'bg-amber-50/50' : 'hover:bg-slate-50/30']">
+                  :class="['border-t border-slate-100', rowHasStockWarning(row) ? 'bg-red-50' : isRowIncomplete(row) ? 'bg-amber-50/50' : 'hover:bg-slate-50/30']">
                   <td class="text-center font-bold text-slate-400 py-2">{{ idx + 1 }}</td>
                   <td class="p-1">
                     <input v-model="row.name" list="itemList" @input="handleItemSelect(row)" class="pp-input !py-1 !px-2" placeholder="Product name..." />
@@ -1147,7 +1208,7 @@ onMounted(async () => {
                     <input v-model="row.extra" class="pp-input !py-1 !px-2" placeholder="extra" />
                   </td>
                   <td class="p-1">
-                    <input v-model.number="row.qty" type="number" step="0.001" class="pp-input !py-1 !px-2 text-right" />
+                    <input v-model.number="row.qty" type="number" step="0.001" :class="['pp-input !py-1 !px-2 text-right', rowHasStockWarning(row) ? 'border-red-300 bg-red-50' : '']" />
                   </td>
                   <td class="p-1">
                     <select v-model="row.unit" class="pp-input !py-1 !px-1 text-center">
@@ -1333,12 +1394,6 @@ onMounted(async () => {
                 </span>
               </td>
               <td class="px-4 py-2.5 text-right whitespace-nowrap space-x-1">
-                <button
-                  v-if="inv.pay_status !== 'PAID'"
-                  @click="payViaRtgs(inv)"
-                  class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs"
-                  title="Pay via RTGS"
-                >🏦</button>
                 <button @click="openPaymentModal(inv)" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="Record Payment">💳</button>
                 <button @click="openPrintPreview(inv)" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="Preview">👁️</button>
                 <button @click="downloadPDF(inv)" class="pp-btn pp-btn-primary !px-2 !py-1 text-xs font-semibold" title="Download PDF">PDF</button>

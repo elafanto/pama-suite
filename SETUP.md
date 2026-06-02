@@ -33,6 +33,7 @@ Open the URL shown in the terminal (usually `http://localhost:5173`).
    - `004_inventory_and_firm_sync_fields.sql` — stock fields + firm sync columns
    - `005_production_tracking.sql` — reel stock, production jobs, stages, stock ledger
    - `006_item_stock_movements.sql` — item-level stock adjustment ledger
+   - `007_secure_org_members_insert.sql` — blocks direct client membership inserts
 
 5. Go to **Authentication** → **Providers** → enable **Email** (password sign-in).
 6. Go to **Settings** → **API** and copy:
@@ -129,6 +130,6 @@ npm run preview
 |-------|-----|
 | Sync says "Login required" | Sign in and ensure `.env.local` has valid Supabase keys |
 | Sync says `item_stock_movements` table missing / schema cache error | Supabase SQL Editor me `supabase/migrations/006_item_stock_movements.sql` run karein, phir Sync/Full Push dobara dabayein. Local pending rows dirty rahenge. |
-| RLS / permission errors | Re-run `001_initial_schema.sql`; check user is in `org_members` |
+| RLS / permission errors | Verify migrations `001` through `007` were run in order; org membership should be created by `bootstrap_user_org`, not direct `org_members` inserts |
 | Blank after deploy | Confirm Vercel env vars are set for the **Production** environment |
 | AI scan fails | Save Gemini key in Settings; check browser network to Google API |

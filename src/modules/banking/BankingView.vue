@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { usePartyStore } from '@/stores/parties'
+import { usePurchaseStore } from '@/stores/purchases'
 import { numberToWords } from '@/services/numberToWords'
 import { getPendingRTGS, clearPendingRTGS } from '@/services/rtgsBridge'
 import PpModal from '@/components/PpModal.vue'
@@ -17,6 +18,7 @@ interface SavedBene {
 
 // Stores
 const partyStore = usePartyStore()
+const purchaseStore = usePurchaseStore()
 
 // State
 const loanAc = ref(localStorage.getItem('pama_rtgs_loanAc') || '663206180000008')
@@ -42,6 +44,8 @@ interface BankBeneficiary {
   mode: 'RTGS' | 'NEFT'
   ifscStatus: 'idle' | 'fetching' | 'success' | 'error'
   partyId?: string | null
+  source?: string
+  sourceId?: string
 }
 
 const beneficiaries = ref<BankBeneficiary[]>([])
@@ -110,6 +114,8 @@ function applyPendingRtgs() {
       amount: p.amount,
       mode: p.mode,
       partyId: p.partyId ?? null,
+      source: p.source,
+      sourceId: p.sourceId,
     })
   }
   clearPendingRTGS()
@@ -194,7 +200,9 @@ function addBene(data: Partial<BankBeneficiary> = {}) {
     amount: data.amount || 0,
     mode: data.mode || 'RTGS',
     ifscStatus: 'idle',
-    partyId: data.partyId || null
+    partyId: data.partyId || null,
+    source: data.source,
+    sourceId: data.sourceId
   })
 }
 
@@ -383,7 +391,47 @@ Anju Samant
   return { subject, body }
 }
 
-function generateEmailDraft() {
+async function markLinkedPurchasePaymentsPaid() {
+  const linkedRows = beneficiaries.value.filter(b => b.source === 'purchases' && b.sourceId)
+  if (!linkedRows.length) return
+
+  await purchaseStore.load()
+  const payableRows = linkedRows
+    .map((b) => {
+      const purchase = purchaseStore.list.find(p => p.id === b.sourceId)
+      const outstanding = purchase ? Math.max(0, purchase.grand_total - (purchase.amt_paid || 0)) : 0
+      return { beneficiary: b, purchase, amount: Math.min(b.amount || 0, outstanding), outstanding }
+    })
+    .filter(row => row.purchase && row.amount > 0 && row.outstanding > 0)
+
+  if (!payableRows.length) return
+
+  const total = payableRows.reduce((sum, row) => sum + row.amount, 0)
+  const accountLabel = selectedDebitLabel.value || 'Bank Account (Primary)'
+  const ok = confirm(
+    `Mark ${payableRows.length} linked purchase bill(s) paid by RTGS now?\n\n` +
+    `Amount: Rs. ${n2(total)}\n` +
+    `Debit source: ${accountLabel}\n\n` +
+    'This will post payment voucher(s) against the purchase bill(s).'
+  )
+  if (!ok) return
+
+  const paymentDate = txnDate.value || new Date().toISOString().slice(0, 10)
+  for (const row of payableRows) {
+    await purchaseStore.recordPayment(
+      row.purchase!.id,
+      row.amount,
+      false,
+      `RTGS via ${accountLabel}`,
+      paymentDate,
+      accountLabel
+    )
+  }
+
+  alert('Linked purchase payment voucher(s) posted.')
+}
+
+async function generateEmailDraft() {
   const draft = buildDraft()
   if (!draft) {
     alert('Please add at least one beneficiary first.')
@@ -393,6 +441,8 @@ function generateEmailDraft() {
   generatedBody.value = draft.body
   showOutput.value = true
   isCopied.value = false
+
+  await markLinkedPurchasePaymentsPaid()
 
   if (autoOpenGmail.value) {
     setTimeout(openGmailCompose, 300)
@@ -430,8 +480,8 @@ function printDocument() {
   window.print()
 }
 
-onMounted(() => {
-  partyStore.load()
+onMounted(async () => {
+  await Promise.all([partyStore.load(), purchaseStore.load()])
   loadSavedBenes()
   applyPendingRtgs()
   if (beneficiaries.value.length === 0) {

@@ -122,8 +122,22 @@ const b2bRows = computed(() => gstrB2B(filtered.value))
 const b2cRows = computed(() => gstrB2C(filtered.value))
 const hsnRows = computed(() => gstrHsnSummary(filtered.value))
 const itemRows = computed(() => itemSalesReport(filtered.value))
-const agingRows = computed(() => outstandingAging(invoiceStore.list.filter(i => i.firm_id === firmStore.activeFirmId && !i.is_deleted)))
-const cashRows = computed(() => cashBookFromVouchers(accountingStore.vouchers))
+const receivableDocs = computed(() => invoiceStore.list.filter((i) => {
+  if (i.firm_id !== firmStore.activeFirmId || i.is_deleted) return false
+  if (from.value && i.date < from.value) return false
+  if (to.value && i.date > to.value) return false
+  return true
+}))
+const cashBookAccounts = computed(() => accountingStore.accounts.filter(a =>
+  a.group === 'Current Assets' &&
+  (a.code === '1001' || a.code === '1002' || a.name.toLowerCase().includes('bank') || a.name.toLowerCase().includes('cash'))
+))
+const agingRows = computed(() => outstandingAging(receivableDocs.value))
+const cashRows = computed(() => cashBookFromVouchers(accountingStore.vouchers, {
+  accounts: cashBookAccounts.value,
+  from: from.value || undefined,
+  to: to.value || undefined,
+}))
 const ewayRows = computed(() => ewayInvoices(filtered.value))
 
 function n2(n: number) {

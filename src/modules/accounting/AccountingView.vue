@@ -6,7 +6,7 @@ import { useInvoiceStore } from '@/stores/invoices'
 import { usePartyStore } from '@/stores/parties'
 import { usePurchaseStore } from '@/stores/purchases'
 import { useSettingsStore } from '@/stores/settings'
-import { cashBookFromVouchers } from '@/services/reports'
+import { cashBookFromVouchers, customerReceivableSummary } from '@/services/reports'
 import { buildPartyLedger, partyLedgerOptions, type PartyLedgerMode, type PartyLedgerPartyOption } from '@/services/partyLedger'
 import { scanVoucherImage, fileToBase64, type VoucherScanResult } from '@/services/aiScanner'
 import PpModal from '@/components/PpModal.vue'
@@ -48,6 +48,8 @@ const partyLedgerMinAmount = ref<number | null>(null)
 const partyLedgerMaxAmount = ref<number | null>(null)
 const partyLedgerMinOutstanding = ref<number | null>(null)
 const partyLedgerMaxOutstanding = ref<number | null>(null)
+
+const selectedCashBookAccountId = ref('')
 
 // Voucher list filter state
 const voucherFilterType = ref<Voucher['type'] | 'ALL'>('ALL')
@@ -93,7 +95,11 @@ const cashBankAccounts = computed(() => {
 })
 
 // Helper functions
-const n2 = (val: number) => (val || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const n2 = (val: number | null | undefined) => (val || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+function moneyOrDash(val: number | null) {
+  return val == null ? '—' : `₹${n2(val)}`
+}
 
 function getAccountLabel(accountId: string) {
   const a = accountingStore.accounts.find(x => x.id === accountId)
@@ -408,7 +414,7 @@ function exportPartyLedgerCsv() {
     row.narration,
     n2(row.debit),
     n2(row.credit),
-    n2(row.balance),
+    row.balance == null ? '' : n2(row.balance),
     n2(row.outstanding),
     row.payStatus,
   ])
@@ -440,28 +446,22 @@ function viewVoucherDetail(v: Voucher) {
 
 const customerLedgerRows = computed(() => {
   const firmId = firmStore.activeFirmId
-  const map = new Map<string, { customer: string; billed: number; received: number; outstanding: number; bills: number }>()
-  for (const inv of invoiceStore.list.filter(i => i.firm_id === firmId && !i.is_deleted)) {
-    const key = inv.party_name || 'Unknown'
-    const row = map.get(key) || { customer: key, billed: 0, received: 0, outstanding: 0, bills: 0 }
-    row.billed += inv.grand_total || 0
-    row.received += inv.amt_paid || 0
-    row.outstanding += Math.max(0, (inv.grand_total || 0) - (inv.amt_paid || 0))
-    row.bills += 1
-    map.set(key, row)
-  }
-  return [...map.values()].sort((a, b) => b.outstanding - a.outstanding)
+  return customerReceivableSummary(invoiceStore.list.filter(i => i.firm_id === firmId && !i.is_deleted))
 })
 
-const cashBookRows = computed(() => cashBookFromVouchers(accountingStore.vouchers))
+const cashBookRows = computed(() => cashBookFromVouchers(accountingStore.vouchers, {
+  accounts: cashBankAccounts.value,
+  accountIds: selectedCashBookAccountId.value ? [selectedCashBookAccountId.value] : undefined,
+}))
 
 async function onVoucherScanFile(e: Event) {
-  const file = (e.target as HTMLInputElement).files?.[0]
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
   if (!file) return
   voucherScanLoading.value = true
   voucherScanStatus.value = 'Scanning voucher…'
   try {
-    const { base64, mime } = await fileToBase64(file)
+    const { base64, mime } = await fileToBase64(file, { allowImages: true, allowPdf: false })
     const r = await scanVoucherImage(settingsStore.geminiKey, base64, mime)
     applyVoucherScan(r)
     voucherScanStatus.value = 'Done — fields filled'
@@ -469,6 +469,7 @@ async function onVoucherScanFile(e: Event) {
     voucherScanStatus.value = err instanceof Error ? err.message : 'Scan failed'
   } finally {
     voucherScanLoading.value = false
+    input.value = ''
   }
 }
 
@@ -500,16 +501,17 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="p-6 max-w-7xl mx-auto space-y-6">
+  <div class="max-w-7xl mx-auto space-y-6 p-4 sm:p-6">
     <!-- Header -->
-    <div class="flex items-center justify-between">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div>
         <h1 class="text-2xl font-bold tracking-tight">Accounting Dashboard</h1>
         <p class="text-sm text-slate-500">Double-entry ledger book, manuals, and financial outputs</p>
       </div>
       
       <!-- Nav Tabs -->
-      <div class="flex border rounded-lg bg-slate-100 p-0.5">
+      <div class="w-full overflow-x-auto sm:w-auto">
+        <div class="flex min-w-max gap-1 rounded-lg border bg-slate-100 p-0.5 sm:min-w-0 sm:flex-wrap">
         <button 
           v-for="t in ([
             { id: 'reports', label: '📊 Financials' },
@@ -527,6 +529,7 @@ onMounted(async () => {
         >
           {{ t.label }}
         </button>
+        </div>
       </div>
     </div>
 
@@ -888,7 +891,7 @@ onMounted(async () => {
             </div>
             <div class="rounded-lg bg-slate-50 px-3 py-2">
               <div class="text-slate-500">Balance</div>
-              <div class="font-bold text-slate-800">₹{{ n2(partyLedgerResult.totals.balance) }}</div>
+              <div class="font-bold text-slate-800">{{ moneyOrDash(partyLedgerResult.totals.balance) }}</div>
             </div>
             <div class="rounded-lg bg-rose-50 px-3 py-2">
               <div class="text-slate-500">Outstanding</div>
@@ -925,7 +928,7 @@ onMounted(async () => {
                 <td class="p-3 text-slate-600">{{ row.narration }}</td>
                 <td class="p-3 text-right font-mono text-blue-700">{{ row.debit ? n2(row.debit) : '-' }}</td>
                 <td class="p-3 text-right font-mono text-amber-700">{{ row.credit ? n2(row.credit) : '-' }}</td>
-                <td class="p-3 text-right font-mono font-bold">₹{{ n2(row.balance) }}</td>
+                <td class="p-3 text-right font-mono font-bold">{{ moneyOrDash(row.balance) }}</td>
                 <td class="p-3 text-right font-mono text-rose-700">₹{{ n2(row.outstanding) }}</td>
                 <td class="p-3 text-center">
                   <span class="pp-badge" :class="row.outstanding <= 0.01 ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'">
@@ -944,7 +947,18 @@ onMounted(async () => {
 
     <div v-else-if="activeTab === 'cashbook'" class="space-y-6">
       <div class="pp-card p-6 overflow-x-auto">
-        <h2 class="text-md font-semibold text-slate-800 border-b pb-3 mb-4">Cash / Bank Book</h2>
+        <div class="mb-4 flex flex-col gap-3 border-b pb-3 sm:flex-row sm:items-end sm:justify-between">
+          <h2 class="text-md font-semibold text-slate-800">Cash / Bank Book</h2>
+          <div class="w-full sm:w-72">
+            <label class="pp-label">Cash/Bank Account</label>
+            <select v-model="selectedCashBookAccountId" class="pp-input">
+              <option value="">All cash and bank accounts</option>
+              <option v-for="account in cashBankAccounts" :key="account.id" :value="account.id">
+                {{ account.code }} — {{ account.name }}
+              </option>
+            </select>
+          </div>
+        </div>
         <table class="w-full text-sm">
           <thead>
             <tr class="border-b bg-slate-50 text-xs uppercase text-slate-500">

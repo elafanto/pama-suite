@@ -213,7 +213,7 @@ onMounted(async () => {
       <div class="flex items-center justify-between px-4 py-3 border-b border-slate-100">
         <div>
           <h2 class="font-bold text-navy">Recent Stock Movements</h2>
-          <p class="text-xs text-slate-500">Manual adjustments are included in current stock totals.</p>
+          <p class="text-xs text-slate-500">Purchases and invoices are logged for audit; current stock uses bills plus manual adjustments.</p>
         </div>
         <span class="text-xs text-slate-400">{{ recentMovements.length }} shown</span>
       </div>
@@ -229,7 +229,7 @@ onMounted(async () => {
         </thead>
         <tbody>
           <tr v-if="recentMovements.length === 0">
-            <td colspan="5" class="text-center text-slate-400 py-8">No stock adjustments yet.</td>
+            <td colspan="5" class="text-center text-slate-400 py-8">No stock movements yet.</td>
           </tr>
           <tr v-for="m in recentMovements" :key="m.id" class="border-t border-slate-100">
             <td class="px-4 py-2.5 text-slate-500 whitespace-nowrap">{{ m.date }}</td>

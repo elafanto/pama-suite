@@ -88,7 +88,6 @@ interface BulkScanFileStatus {
 }
 
 const BULK_SCAN_ACCEPT = 'application/pdf,.pdf,image/*'
-const BULK_SCAN_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp']
 const paperTypes: PaperType[] = ['KRAFT', 'DUPLEX']
 
 const bulkRows = ref<BulkPurchaseRow[]>([])
@@ -525,16 +524,20 @@ async function savePurchase() {
     notes: form.notes
   }
 
-  if (editingId.value) {
-    await purchaseStore.update(editingId.value, purchaseData)
-    alert('Purchase bill updated successfully!')
-  } else {
-    await purchaseStore.add(purchaseData)
-    alert('Purchase bill saved successfully!')
-  }
+  try {
+    if (editingId.value) {
+      await purchaseStore.update(editingId.value, purchaseData)
+      alert('Purchase bill updated successfully!')
+    } else {
+      await purchaseStore.add(purchaseData)
+      alert('Purchase bill saved successfully!')
+    }
 
-  resetForm()
-  activeTab.value = 'history'
+    resetForm()
+    activeTab.value = 'history'
+  } catch (err: any) {
+    alert(err?.message || 'Purchase bill save failed')
+  }
 }
 
 async function saveBulkPurchases() {
@@ -620,25 +623,10 @@ async function saveBulkPurchases() {
   activeTab.value = 'history'
 }
 
-function isBulkScanFile(file: File) {
-  const name = file.name.toLowerCase()
-  return file.type === 'application/pdf'
-    || file.type.startsWith('image/')
-    || name.endsWith('.pdf')
-    || BULK_SCAN_IMAGE_EXTENSIONS.some((ext) => name.endsWith(ext))
-}
-
 async function scanBulkPurchaseFiles(e: Event) {
   const input = e.target as HTMLInputElement
   const files = Array.from(input.files || [])
   if (files.length === 0) return
-
-  const invalidFile = files.find((file) => !isBulkScanFile(file))
-  if (invalidFile) {
-    bulkScanStatus.value = `Only PDF or image files allowed. Remove: ${invalidFile.name}`
-    input.value = ''
-    return
-  }
 
   bulkScanFileName.value = files.length === 1 ? files[0].name : `${files.length} bill files selected`
   bulkScanLoading.value = true
@@ -665,7 +653,7 @@ async function scanBulkPurchaseFiles(e: Event) {
         : `Scanning ${idx + 1} of ${files.length} bill files with Gemini...`
 
       try {
-        const { base64, mime } = await fileToBase64(file)
+        const { base64, mime } = await fileToBase64(file, { allowImages: true, allowPdf: true })
         const result = await scanPurchaseBillsPdf(settingsStore.geminiKey, base64, mime)
         const bills = (result.bills || []).filter((b) => b.supplierName || b.billNo || b.items?.length)
         extractedBills.push(...bills)
@@ -767,9 +755,13 @@ function editPurchase(pur: Purchase) {
 
 // Delete purchase bill
 async function deletePurchase(pur: Purchase) {
-  if (confirm(`Are you sure you want to delete purchase bill ${pur.bill_no}? This will also delete its accounting ledger entries.`)) {
-    await purchaseStore.remove(pur.id)
-    alert('Purchase bill deleted.')
+  if (confirm(`Are you sure you want to delete purchase bill ${pur.bill_no}? This will also delete its accounting ledger entries and purchase stock movements.`)) {
+    try {
+      await purchaseStore.remove(pur.id)
+      alert('Purchase bill deleted.')
+    } catch (err: any) {
+      alert(err?.message || 'Purchase bill delete failed')
+    }
   }
 }
 
@@ -816,6 +808,7 @@ function payVendorRtgs(pur: Purchase) {
     mode: 'RTGS',
     partyId: vendor.id,
     source: 'purchases',
+    sourceId: pur.id,
   })
   router.push('/banking')
 }

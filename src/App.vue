@@ -36,6 +36,7 @@ const cloudTarget = computed(() => {
   return '/settings'
 })
 const activeFirmLabel = computed(() => firmStore.activeFirm?.name || 'No firm selected')
+const isAppChromeHidden = computed(() => route.meta?.hideAppChrome === true)
 
 let timer: number
 let stopRealtime: (() => void) | null = null
@@ -128,27 +129,32 @@ onUnmounted(() => {
 
 <template>
   <div class="h-full flex flex-col">
+    <template v-if="isAppChromeHidden">
+      <RouterView />
+    </template>
+
+    <template v-else>
     <!-- Top navbar -->
-    <header class="bg-navy text-white flex items-center px-4 gap-3 shadow-lg z-20 shrink-0" style="height:52px">
+    <header class="bg-navy text-white flex min-h-[52px] items-center gap-2 px-3 py-2 shadow-lg z-20 shrink-0 sm:gap-3 sm:px-4">
       <button class="lg:hidden text-xl px-1" @click="sidebarOpen = !sidebarOpen" aria-label="Menu">☰</button>
-      <RouterLink to="/dashboard" class="flex items-center gap-2.5 no-underline min-w-0">
+      <RouterLink to="/dashboard" class="flex min-w-0 max-w-[42vw] items-center gap-2 no-underline sm:max-w-none sm:gap-2.5">
         <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-teal flex items-center justify-center text-lg shrink-0">🏭</div>
         <div class="leading-tight min-w-0">
           <div class="text-[15px] font-bold text-white truncate">Pama Packaging</div>
-          <div class="text-[10px] text-sky-300 truncate">Business Suite</div>
+          <div class="hidden text-[10px] text-sky-300 truncate sm:block">Business Suite</div>
         </div>
       </RouterLink>
-      <div class="ml-auto flex items-center gap-1.5 sm:gap-3 shrink-0">
+      <div class="ml-auto flex min-w-0 flex-1 items-center justify-end gap-1.5 sm:gap-3">
         <RouterLink
           to="/settings"
-          class="inline-flex max-w-[96px] items-center rounded-lg border border-teal-300/30 bg-teal-400/15 px-2 py-1 text-[10px] font-semibold text-teal-50 no-underline hover:bg-teal-400/25 sm:max-w-[180px] lg:max-w-[260px] sm:text-[11px]"
+          class="hidden max-w-[96px] items-center rounded-lg border border-teal-300/30 bg-teal-400/15 px-2 py-1 text-[10px] font-semibold text-teal-50 no-underline hover:bg-teal-400/25 sm:inline-flex sm:max-w-[180px] sm:text-[11px] lg:max-w-[260px]"
           :title="`Active firm: ${activeFirmLabel}`"
         >
           <span class="truncate">Firm: {{ activeFirmLabel }}</span>
         </RouterLink>
         <button
           type="button"
-          class="pp-btn pp-btn-ghost !py-1 !px-2 text-[10px] sm:text-xs !text-sky-100 !bg-white/10 hover:!bg-white/20 border border-white/20 whitespace-nowrap"
+          class="hidden pp-btn pp-btn-ghost !py-1 !px-2 text-[10px] !text-sky-100 !bg-white/10 hover:!bg-white/20 border border-white/20 whitespace-nowrap sm:inline-flex sm:text-xs"
           :disabled="refreshingApp"
           title="Check for app update and reload"
           @click="refreshApp"
@@ -157,7 +163,7 @@ onUnmounted(() => {
         </button>
         <RouterLink
           :to="cloudTarget"
-          class="inline-flex max-w-[128px] items-center rounded-lg border border-white/15 bg-white/10 px-2 py-1 text-[10px] font-semibold text-sky-50 no-underline hover:bg-white/20 hover:text-white sm:max-w-[220px] sm:text-[11px]"
+          class="inline-flex min-w-0 max-w-[34vw] items-center rounded-lg border border-white/15 bg-white/10 px-2 py-1 text-[10px] font-semibold text-sky-50 no-underline hover:bg-white/20 hover:text-white sm:max-w-[220px] sm:text-[11px]"
           :title="cloudDetail"
         >
           <span class="truncate">☁️ {{ cloudLabel }}</span>
@@ -174,7 +180,7 @@ onUnmounted(() => {
         <RouterLink
           v-else-if="auth.isConfigured && !auth.isLoggedIn"
           to="/login"
-          class="inline-flex items-center rounded-lg border border-sky-300/30 bg-accent px-2 py-1 text-[10px] font-semibold text-white no-underline hover:bg-accent-dk sm:text-xs"
+          class="hidden items-center rounded-lg border border-sky-300/30 bg-accent px-2 py-1 text-[10px] font-semibold text-white no-underline hover:bg-accent-dk sm:inline-flex sm:text-xs"
         >
           Sign in
         </RouterLink>
@@ -220,5 +226,6 @@ onUnmounted(() => {
       </main>
     </div>
     <PwaInstallPrompt />
+    </template>
   </div>
 </template>

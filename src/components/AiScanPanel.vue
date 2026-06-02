@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onBeforeUnmount, ref } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
-import { scanInvoiceImage, fileToBase64, type ScanResult } from '@/services/aiScanner'
+import { scanInvoiceImage, fileToBase64, validateScanFile, type ScanResult } from '@/services/aiScanner'
 
 const emit = defineEmits<{ scanned: [result: ScanResult] }>()
 const settings = useSettingsStore()
@@ -11,15 +11,22 @@ const preview = ref('')
 const selectedFileName = ref('')
 const selectedFileType = ref('')
 
+function clearPreview() {
+  if (preview.value) URL.revokeObjectURL(preview.value)
+  preview.value = ''
+}
+
 async function onFile(e: Event) {
   const file = (e.target as HTMLInputElement).files?.[0]
   if (!file) return
-  selectedFileName.value = file.name
-  selectedFileType.value = file.type
-  preview.value = URL.createObjectURL(file)
+  clearPreview()
   loading.value = true
   status.value = 'Scanning…'
   try {
+    const { mime: validatedMime } = validateScanFile(file, { allowImages: true, allowPdf: true })
+    selectedFileName.value = file.name
+    selectedFileType.value = validatedMime
+    preview.value = URL.createObjectURL(file)
     const { base64, mime } = await fileToBase64(file)
     const result = await scanInvoiceImage(settings.geminiKey, base64, mime)
     status.value = 'Done — form filled'
@@ -30,6 +37,8 @@ async function onFile(e: Event) {
     loading.value = false
   }
 }
+
+onBeforeUnmount(clearPreview)
 </script>
 
 <template>

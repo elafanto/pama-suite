@@ -1,23 +1,29 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useInvoiceStore } from '@/stores/invoices'
 import { usePurchaseStore } from '@/stores/purchases'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useFirmStore } from '@/stores/firm'
+import { useProductionStore } from '@/stores/production'
 import { outstandingAging } from '@/services/reports'
+import { listItemStockMovements } from '@/services/inventoryLedger'
 import { computeStock, stockSummary } from '@/services/stock'
-import type { Invoice } from '@/types/models'
+import type { Invoice, ItemStockMovement } from '@/types/models'
 
 const invoiceStore = useInvoiceStore()
 const purchaseStore = usePurchaseStore()
 const partiesStore = usePartyStore()
 const itemsStore = useItemStore()
 const firmStore = useFirmStore()
+const productionStore = useProductionStore()
+const movements = ref<ItemStockMovement[]>([])
+const LOW_REEL_KG = 50
 
 onMounted(async () => {
-  await Promise.all([invoiceStore.load(), purchaseStore.load(), partiesStore.load(), itemsStore.load()])
+  await Promise.all([invoiceStore.load(), purchaseStore.load(), partiesStore.load(), itemsStore.load(), productionStore.load()])
+  movements.value = await listItemStockMovements(firmStore.activeFirmId)
 })
 
 const today = new Date().toISOString().slice(0, 10)
@@ -26,6 +32,27 @@ const prevMonthPrefix = (() => {
   const d = new Date(); d.setMonth(d.getMonth() - 1)
   return d.toISOString().slice(0, 7)
 })()
+
+const stockRows = computed(() => {
+  const firmId = firmStore.activeFirmId
+  const bills = invoiceStore.list.filter(b => b.firm_id === firmId && !b.is_deleted)
+  const purchases = purchaseStore.list.filter(p => p.firm_id === firmId && !p.is_deleted)
+  return computeStock(itemsStore.list, purchases, bills, firmId, movements.value)
+})
+
+const lowItemAlerts = computed(() =>
+  stockRows.value
+    .filter((r) => r.status !== 'ok')
+    .sort((a, b) => a.onHand - b.onHand)
+    .slice(0, 5),
+)
+
+const lowReelAlerts = computed(() =>
+  productionStore.reels
+    .filter((r) => r.firm_id === firmStore.activeFirmId && !r.is_deleted && r.status === 'active' && Number(r.current_weight) > 0 && Number(r.current_weight) <= LOW_REEL_KG)
+    .sort((a, b) => Number(a.current_weight) - Number(b.current_weight))
+    .slice(0, 5),
+)
 
 const stats = computed(() => {
   const firmId = firmStore.activeFirmId
@@ -40,7 +67,7 @@ const stats = computed(() => {
   const salesPrevMonth = bills.filter(b => b.date.startsWith(prevMonthPrefix)).reduce((s, b) => s + b.grand_total, 0)
   const purchasesToday = purchases.filter(p => p.date === today).reduce((s, p) => s + p.grand_total, 0)
   const purchasesMonth = purchases.filter(p => p.date.startsWith(monthPrefix)).reduce((s, p) => s + p.grand_total, 0)
-  const stock = stockSummary(computeStock(itemsStore.list, purchases, bills, firmId))
+  const stock = stockSummary(stockRows.value)
   const momPct = salesPrevMonth > 0 ? Math.round(((salesMonth - salesPrevMonth) / salesPrevMonth) * 100) : null
   return {
     bills: bills.length,
@@ -57,6 +84,7 @@ const stats = computed(() => {
     purchasesMonth,
     netMonth: salesMonth - purchasesMonth,
     lowStock: stock.lowStock + stock.outOfStock,
+    lowReels: productionStore.reels.filter((r) => r.firm_id === firmId && !r.is_deleted && r.status === 'active' && Number(r.current_weight) > 0 && Number(r.current_weight) <= LOW_REEL_KG).length,
     stockValue: stock.totalValue,
   }
 })
@@ -123,6 +151,39 @@ function n2(n: number) {
         <RouterLink to="/inventory" class="text-[11px] text-accent hover:underline mt-0.5 inline-block">
           {{ stats.lowStock }} items low/out of stock →
         </RouterLink>
+        <RouterLink v-if="stats.lowReels" to="/production" class="text-[11px] text-amber-600 hover:underline mt-0.5 block">
+          {{ stats.lowReels }} reels under {{ LOW_REEL_KG }} KG →
+        </RouterLink>
+      </div>
+    </div>
+
+    <div v-if="lowItemAlerts.length || lowReelAlerts.length" class="pp-card p-4 border border-amber-200 bg-amber-50 mb-6">
+      <div class="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <h2 class="font-bold text-amber-900">Stock Alerts</h2>
+          <p class="text-xs text-amber-800">Tracked items at reorder/out-of-stock and active reels at or below {{ LOW_REEL_KG }} KG.</p>
+        </div>
+        <RouterLink to="/inventory" class="text-xs font-semibold text-amber-700 hover:underline">Review inventory →</RouterLink>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+        <div>
+          <h3 class="text-xs font-bold uppercase text-amber-700 mb-2">Items</h3>
+          <div v-if="!lowItemAlerts.length" class="text-xs text-amber-700/80">No tracked item alerts.</div>
+          <div v-for="item in lowItemAlerts" :key="item.itemId" class="flex justify-between gap-3 border-t border-amber-200/70 py-1.5">
+            <span class="font-semibold text-navy">{{ item.name }}</span>
+            <span :class="item.status === 'out' ? 'text-red-700 font-bold' : 'text-amber-800'">
+              {{ item.status === 'out' ? 'Out' : 'Low' }} · {{ n2(item.onHand) }} {{ item.unit }}
+            </span>
+          </div>
+        </div>
+        <div>
+          <h3 class="text-xs font-bold uppercase text-amber-700 mb-2">Paper Reels</h3>
+          <div v-if="!lowReelAlerts.length" class="text-xs text-amber-700/80">No low reel alerts.</div>
+          <div v-for="reel in lowReelAlerts" :key="reel.id" class="flex justify-between gap-3 border-t border-amber-200/70 py-1.5">
+            <span class="font-semibold text-navy">{{ reel.reel_no }} <span class="font-normal text-slate-500">{{ reel.deckle_size }} / {{ reel.gsm }} GSM</span></span>
+            <span class="text-amber-800">{{ n2(reel.current_weight) }} KG</span>
+          </div>
+        </div>
       </div>
     </div>
 

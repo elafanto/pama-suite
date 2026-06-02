@@ -22,7 +22,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/recycle-bin', name: 'recycle-bin', component: () => import('@/modules/recyclebin/RecycleBinView.vue'), meta: { title: 'Recycle Bin', icon: '♻️', group: 'System' } },
   { path: '/settings',  name: 'settings',  component: () => import('@/modules/settings/SettingsView.vue'),   meta: { title: 'Settings', icon: '⚙️', group: 'System' } },
 
-  { path: '/login',     name: 'login',     component: () => import('@/modules/auth/LoginView.vue'),       meta: { title: 'Login', hidden: true } },
+  { path: '/login',     name: 'login',     component: () => import('@/modules/auth/LoginView.vue'),       meta: { title: 'Login', hidden: true, hideAppChrome: true } },
 ]
 
 export const router = createRouter({

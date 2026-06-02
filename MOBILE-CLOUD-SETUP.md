@@ -24,8 +24,9 @@ In files ko order me paste karke **Run** karo:
 4. `supabase/migrations/004_inventory_and_firm_sync_fields.sql`
 5. `supabase/migrations/005_production_tracking.sql`
 6. `supabase/migrations/006_item_stock_movements.sql`
+7. `supabase/migrations/007_secure_org_members_insert.sql`
 
-Ye migrations login org setup, realtime sync, inventory, production, paper reels aur item stock movement tables ko cloud me ready karte hain.
+Ye migrations login org setup, realtime sync, inventory, production, paper reels, item stock movement tables, aur secure org membership policies ko cloud me ready karte hain.
 
 ### Step 3 — Email login
 
@@ -131,8 +132,8 @@ Play Store ke liye signed release bundle banani hogi (Android Studio → Generat
 | Problem | Solution |
 |---------|----------|
 | `Local only` header | `.env.local` keys check karo, dev server restart |
-| Sign up fail / RLS error | migrations `001` se `006` order me dubara verify/run karo |
-| Organization setup pending | `003_bootstrap_user_org.sql` run karo, phir Settings → Setup Organization |
+| Sign up fail / RLS error | migrations `001` se `007` order me dubara verify/run karo |
+| Organization setup pending | migrations `003` se `007` order me run karo, phir Settings → Setup Organization |
 | `item_stock_movements` / schema cache sync error | Supabase SQL Editor me `supabase/migrations/006_item_stock_movements.sql` run karo, phir Sync/Full Push dabao. Local pending rows dirty rahenge. |
 | Sync 0 records | Pehle local data ho (Import JSON), phir Full Push |
 | Phone par data kam dikhe | PC par Full Push, phone par Full Pull, phir Sync Status check karo |

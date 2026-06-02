@@ -6,7 +6,7 @@ import { useFirmStore, type NewFirm } from '@/stores/firm'
 import { useAuthStore } from '@/stores/auth'
 import { getSupabaseConfig } from '@/services/supabase'
 import { useSettingsStore } from '@/stores/settings'
-import { exportAll, downloadBackup, importBackup } from '@/services/backup'
+import { exportAll, downloadBackup, importBackup, previewImport, type ImportPreview, type ImportResult } from '@/services/backup'
 import { getSyncDiagnostics, runSync, runFullPullFromCloud, runFullPushToCloud } from '@/services/sync'
 import { usePwaInstall } from '@/composables/usePwaInstall'
 import type { Firm } from '@/types/models'
@@ -66,15 +66,55 @@ async function onImport(e: Event) {
   if (!file) return
   try {
     const data = JSON.parse(await file.text())
-    const mode = confirm('Replace ALL data? Cancel = merge with existing') ? 'replace' : 'merge'
-    const { counts } = await importBackup(data, mode)
-    importMsg.value = 'Imported: ' + Object.entries(counts).map(([k, v]) => `${k}:${v}`).join(', ')
+    const preview = await previewImport(data)
+    if (!preview.supported) throw new Error(preview.warnings[0] || 'Unknown backup format')
+    if (!confirm(`${formatImportPreview(preview)}\n\nContinue with import?`)) return
+
+    const mode = confirm('Choose import mode:\n\nOK = Replace ALL local data with this backup.\nCancel = Merge newer records only.') ? 'replace' : 'merge'
+    if (mode === 'replace' && !confirm('Final confirm: replace will clear local app data before restoring this backup. Continue?')) return
+
+    const allowSensitiveSettings = preview.hasSensitiveSettings
+      ? confirm('This backup contains saved Gemini/Supabase keys. Overwrite saved keys on this device?\n\nCancel keeps current keys and imports the rest.')
+      : false
+
+    const result = await importBackup(data, mode, { allowSensitiveSettings })
+    importMsg.value = formatImportResult(result)
     await firmStore.load()
     location.reload()
   } catch (err: any) {
     importMsg.value = 'Import failed: ' + err.message
+  } finally {
+    ;(e.target as HTMLInputElement).value = ''
   }
-  ;(e.target as HTMLInputElement).value = ''
+}
+
+function formatImportPreview(preview: ImportPreview) {
+  const lines = [
+    `Backup format: ${preview.format}`,
+    preview.version ? `Version: ${preview.version}` : '',
+    preview.exportedAt ? `Exported: ${fmtSyncTime(preview.exportedAt)}` : '',
+    `Records: ${formatCounts(preview.counts) || 'none'}`,
+  ].filter(Boolean)
+
+  if (preview.warnings.length) {
+    lines.push('', 'Warnings:', ...preview.warnings.map((w) => `- ${w}`))
+  }
+  return lines.join('\n')
+}
+
+function formatImportResult(result: ImportResult) {
+  const parts = [`Imported: ${formatCounts(result.counts) || 'none'}`]
+  const skipped = formatCounts(result.skipped || {})
+  if (skipped) parts.push(`Skipped older/equal: ${skipped}`)
+  if (result.skippedSensitiveSettings) parts.push('API keys were not overwritten.')
+  return parts.join(' | ')
+}
+
+function formatCounts(counts: Record<string, number>) {
+  return Object.entries(counts)
+    .filter(([, value]) => value > 0)
+    .map(([key, value]) => `${key}:${value}`)
+    .join(', ')
 }
 
 async function doSync() {
@@ -139,8 +179,8 @@ function refreshSyncDiag() {
   syncDiag.value = getSyncDiagnostics()
 }
 
-function isMigration006SyncIssue(value: string) {
-  return /item_stock_movements|006_item_stock_movements/i.test(value)
+function isOptionalMigrationSyncIssue(value: string) {
+  return /reel_stocks|production_jobs|production_stages|stock_movements|005_production_tracking|item_stock_movements|006_item_stock_movements/i.test(value)
 }
 
 function fmtSyncTime(value: string) {
@@ -316,8 +356,8 @@ onMounted(() => {
           <div class="sm:col-span-2"><span class="font-semibold text-slate-500">Result:</span> {{ syncDiag.lastSyncResult || 'No sync run on this device yet' }}</div>
           <div v-if="syncDiag.lastSyncError" class="sm:col-span-2 rounded border border-red-200 bg-white px-2 py-1 text-red-700">
             <span class="font-semibold">Last error:</span> {{ syncDiag.lastSyncError }}
-            <p v-if="isMigration006SyncIssue(syncDiag.lastSyncError)" class="mt-1 text-xs text-red-600">
-              Fix: Supabase SQL Editor me <code>supabase/migrations/006_item_stock_movements.sql</code> run karein. Local item stock movement rows dirty rahenge; migration ke baad Sync/Full Push dabayein.
+            <p v-if="isOptionalMigrationSyncIssue(syncDiag.lastSyncError)" class="mt-1 text-xs text-red-600">
+              Fix: Supabase SQL Editor me missing <code>supabase/migrations/005_production_tracking.sql</code> ya <code>supabase/migrations/006_item_stock_movements.sql</code> run karein. Local pending rows dirty rahenge; migration ke baad Sync/Full Push dabayein.
             </p>
           </div>
         </div>

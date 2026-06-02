@@ -868,29 +868,153 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-else class="pp-card p-6">
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-4 mb-4">
-        <h2 class="font-semibold">Production Stock Balance</h2>
-        <div class="flex flex-col sm:flex-row gap-2 sm:items-center">
-          <select v-model="selectedJobId" class="pp-input sm:w-80">
-            <option value="">All jobs</option>
-            <option v-for="job in production.jobs" :key="job.id" :value="job.id">{{ job.job_no }} - {{ job.customer_name }}</option>
-          </select>
-          <button class="pp-btn pp-btn-primary !py-2 !text-xs" @click="exportProductionBalance">📥 Export CSV</button>
+    <div v-else class="space-y-6">
+      <div class="pp-card p-6">
+        <div class="flex flex-col gap-4 border-b pb-4 mb-4 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <h2 class="font-semibold">Production / Paper Reel Reports</h2>
+            <p class="text-xs text-slate-500">Basic balances, consumption and waste percentage from saved entries.</p>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-4 gap-2">
+            <div>
+              <label class="pp-label">From</label>
+              <input v-model="reportFilters.from" type="date" class="pp-input" />
+            </div>
+            <div>
+              <label class="pp-label">To</label>
+              <input v-model="reportFilters.to" type="date" class="pp-input" />
+            </div>
+            <div>
+              <label class="pp-label">Job</label>
+              <select v-model="reportFilters.job_id" class="pp-input sm:w-72">
+                <option value="">All jobs</option>
+                <option v-for="job in production.jobs" :key="job.id" :value="job.id">{{ job.job_no }} - {{ job.customer_name }}</option>
+              </select>
+            </div>
+            <div>
+              <label class="pp-label">Stock Balance</label>
+              <select v-model="selectedJobId" class="pp-input sm:w-72">
+                <option value="">All jobs</option>
+                <option v-for="job in production.jobs" :key="job.id" :value="job.id">{{ job.job_no }} - {{ job.customer_name }}</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="flex justify-end mb-4">
+          <button class="pp-btn pp-btn-primary !py-2 !text-xs" @click="exportProductionBalance">📥 Export Stock CSV</button>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+          <div v-for="row in balanceRows" :key="row.type" class="border rounded-xl p-4 bg-white">
+            <div class="font-semibold">{{ row.label }}</div>
+            <div class="mt-3 grid grid-cols-2 gap-2 text-sm">
+              <div class="text-slate-500">Qty</div>
+              <div class="font-mono text-right">{{ n2(row.qty) }}</div>
+              <div class="text-slate-500">Weight</div>
+              <div class="font-mono text-right">{{ n2(row.weight) }} KG</div>
+              <div class="text-rose-500">Waste Qty</div>
+              <div class="font-mono text-right text-rose-600">{{ n2(row.wasteQty) }}</div>
+              <div class="text-rose-500">Waste KG</div>
+              <div class="font-mono text-right text-rose-600">{{ n2(row.wasteWeight) }}</div>
+            </div>
+          </div>
         </div>
       </div>
-      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        <div v-for="row in balanceRows" :key="row.type" class="border rounded-xl p-4 bg-white">
-          <div class="font-semibold">{{ row.label }}</div>
-          <div class="mt-3 grid grid-cols-2 gap-2 text-sm">
-            <div class="text-slate-500">Qty</div>
-            <div class="font-mono text-right">{{ n2(row.qty) }}</div>
-            <div class="text-slate-500">Weight</div>
-            <div class="font-mono text-right">{{ n2(row.weight) }} KG</div>
-            <div class="text-rose-500">Waste Qty</div>
-            <div class="font-mono text-right text-rose-600">{{ n2(row.wasteQty) }}</div>
-            <div class="text-rose-500">Waste KG</div>
-            <div class="font-mono text-right text-rose-600">{{ n2(row.wasteWeight) }}</div>
+
+      <div class="pp-card p-6">
+        <h2 class="font-semibold border-b pb-2 mb-4">Reel Balance by Type / GSM / BF / Deckle / Color</h2>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm min-w-[920px]">
+            <thead class="text-xs uppercase text-slate-500 bg-slate-50">
+              <tr>
+                <th class="p-3 text-left">Type</th>
+                <th class="p-3 text-left">GSM</th>
+                <th class="p-3 text-left">BF</th>
+                <th class="p-3 text-left">Deckle</th>
+                <th class="p-3 text-left">Color</th>
+                <th class="p-3 text-right">Reels</th>
+                <th class="p-3 text-right">Active</th>
+                <th class="p-3 text-right">Opening KG</th>
+                <th class="p-3 text-right">Current KG</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y">
+              <tr v-for="row in reelBalanceReportRows" :key="row.key">
+                <td class="p-3">{{ row.paper_type }}</td>
+                <td class="p-3">{{ row.gsm }}</td>
+                <td class="p-3">{{ row.bf }}</td>
+                <td class="p-3">{{ row.deckle }}</td>
+                <td class="p-3">{{ row.color }}</td>
+                <td class="p-3 text-right font-mono">{{ row.reels }}</td>
+                <td class="p-3 text-right font-mono">{{ row.activeReels }}</td>
+                <td class="p-3 text-right font-mono">{{ n2(row.openingWeight) }}</td>
+                <td class="p-3 text-right font-mono">{{ n2(row.currentWeight) }}</td>
+              </tr>
+              <tr v-if="reelBalanceReportRows.length === 0">
+                <td colspan="9" class="p-8 text-center text-slate-400">No paper reel stock yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <div class="pp-card p-6">
+          <h2 class="font-semibold border-b pb-2 mb-4">Reel Consumption by Date / Job</h2>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm min-w-[620px]">
+              <thead class="text-xs uppercase text-slate-500 bg-slate-50">
+                <tr>
+                  <th class="p-3 text-left">Date</th>
+                  <th class="p-3 text-left">Job</th>
+                  <th class="p-3 text-right">Entries</th>
+                  <th class="p-3 text-right">Reels</th>
+                  <th class="p-3 text-right">Used KG</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y">
+                <tr v-for="row in reelConsumptionReportRows" :key="row.key">
+                  <td class="p-3">{{ row.date }}</td>
+                  <td class="p-3">{{ row.job }}</td>
+                  <td class="p-3 text-right font-mono">{{ row.entries }}</td>
+                  <td class="p-3 text-right font-mono">{{ row.reelCount }}</td>
+                  <td class="p-3 text-right font-mono">{{ n2(row.usedWeight) }}</td>
+                </tr>
+                <tr v-if="reelConsumptionReportRows.length === 0">
+                  <td colspan="5" class="p-8 text-center text-slate-400">No reel consumption in this range.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="pp-card p-6">
+          <h2 class="font-semibold border-b pb-2 mb-4">Waste % by Date / Job</h2>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm min-w-[720px]">
+              <thead class="text-xs uppercase text-slate-500 bg-slate-50">
+                <tr>
+                  <th class="p-3 text-left">Date</th>
+                  <th class="p-3 text-left">Job</th>
+                  <th class="p-3 text-right">Input KG</th>
+                  <th class="p-3 text-right">Output KG</th>
+                  <th class="p-3 text-right">Waste KG</th>
+                  <th class="p-3 text-right">Waste %</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y">
+                <tr v-for="row in wasteReportRows" :key="row.key">
+                  <td class="p-3">{{ row.date }}</td>
+                  <td class="p-3">{{ row.job }}</td>
+                  <td class="p-3 text-right font-mono">{{ n2(row.inputWeight) }}</td>
+                  <td class="p-3 text-right font-mono">{{ n2(row.outputWeight) }}</td>
+                  <td class="p-3 text-right font-mono text-rose-600">{{ n2(row.wasteWeight) }}</td>
+                  <td class="p-3 text-right font-mono font-semibold">{{ n2(row.wastePercent) }}%</td>
+                </tr>
+                <tr v-if="wasteReportRows.length === 0">
+                  <td colspan="6" class="p-8 text-center text-slate-400">No production entries in this range.</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
