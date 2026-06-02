@@ -12,14 +12,16 @@ const partyStore = usePartyStore()
 const itemStore = useItemStore()
 const production = useProductionStore()
 
-const activeTab = ref<'jobs' | 'reels' | 'daily' | 'reports'>('daily')
+const activeTab = ref<'jobs' | 'reels' | 'daily' | 'consumables' | 'reports'>('daily')
 const selectedJobId = ref('')
 const tabItems: { id: typeof activeTab.value; label: string }[] = [
   { id: 'daily', label: 'Daily Entry' },
   { id: 'jobs', label: 'Jobs' },
   { id: 'reels', label: 'Reel Stock' },
+  { id: 'consumables', label: 'Consumables' },
   { id: 'reports', label: 'Reports' },
 ]
+const consumableTypes: ProductionStockType[] = ['glue', 'ink', 'stitching_wire']
 
 const jobForm = reactive({
   date: new Date().toISOString().slice(0, 10),
@@ -49,6 +51,15 @@ const stageForm = reactive({
   notes: '',
 })
 
+const consumableForm = reactive({
+  date: new Date().toISOString().slice(0, 10),
+  stock_type: 'glue' as ProductionStockType,
+  mode: 'add' as 'add' | 'consume',
+  qty: 0,
+  weight: 0,
+  notes: '',
+})
+
 const stagePairs: Record<ProductionStage, { input: ProductionStockType; output: ProductionStockType }> = {
   corrugation: { input: 'raw_reel', output: '2ply' },
   paper_cutting: { input: '2ply', output: 'cut_sheet' },
@@ -67,6 +78,15 @@ const activeReels = computed(() => production.reels.filter((r) => r.status === '
 const balanceRows = computed(() => {
   const bal = productionBalance(production.movements, firmStore.activeFirmId, selectedJobId.value || undefined)
   return stockTypes.map((type) => ({ type, label: STOCK_LABELS[type], ...bal[type] }))
+})
+const consumableRows = computed(() => {
+  const bal = productionBalance(production.movements, firmStore.activeFirmId)
+  return consumableTypes.map((type) => ({ type, label: STOCK_LABELS[type], ...bal[type] }))
+})
+const recentConsumableMoves = computed(() => {
+  return production.movements
+    .filter((m) => consumableTypes.includes(m.stock_type))
+    .slice(0, 12)
 })
 
 watch(() => firmStore.activeFirmId, () => {
@@ -147,6 +167,20 @@ async function saveStage() {
     output_weight: 0,
     waste_qty: 0,
     waste_weight: 0,
+    notes: '',
+  })
+}
+
+async function saveConsumableAdjustment() {
+  if (!consumableTypes.includes(consumableForm.stock_type)) return alert('Consumable type select karo')
+  if (consumableForm.qty <= 0 && consumableForm.weight <= 0) return alert('Quantity ya weight enter karo')
+  await production.addStockAdjustment({ ...consumableForm })
+  Object.assign(consumableForm, {
+    date: new Date().toISOString().slice(0, 10),
+    stock_type: consumableForm.stock_type,
+    mode: consumableForm.mode,
+    qty: 0,
+    weight: 0,
     notes: '',
   })
 }
@@ -392,6 +426,94 @@ onMounted(async () => {
             </tr>
           </tbody>
         </table>
+      </div>
+    </div>
+
+    <div v-else-if="activeTab === 'consumables'" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div class="pp-card p-6 space-y-4">
+        <h2 class="font-semibold border-b pb-2">Glue / Ink / Stitching Wire</h2>
+        <div>
+          <label class="pp-label">Date</label>
+          <input v-model="consumableForm.date" type="date" class="pp-input" />
+        </div>
+        <div>
+          <label class="pp-label">Consumable</label>
+          <select v-model="consumableForm.stock_type" class="pp-input">
+            <option v-for="type in consumableTypes" :key="type" :value="type">{{ STOCK_LABELS[type] }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="pp-label">Entry Type</label>
+          <select v-model="consumableForm.mode" class="pp-input">
+            <option value="add">Manual Feed / Add Stock</option>
+            <option value="consume">Consumption / Use Stock</option>
+          </select>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="pp-label">Qty</label>
+            <input v-model.number="consumableForm.qty" type="number" class="pp-input text-right" placeholder="0" />
+          </div>
+          <div>
+            <label class="pp-label">Weight KG</label>
+            <input v-model.number="consumableForm.weight" type="number" class="pp-input text-right" placeholder="0" />
+          </div>
+        </div>
+        <div>
+          <label class="pp-label">Notes</label>
+          <textarea v-model="consumableForm.notes" class="pp-input min-h-[80px]" placeholder="Purchase without bill, daily consumption, adjustment..."></textarea>
+        </div>
+        <button @click="saveConsumableAdjustment" class="pp-btn pp-btn-primary w-full">
+          Save Consumable Entry
+        </button>
+        <p class="text-xs text-slate-500">
+          Purchase bill me line item ko Consumable mark karne par stock automatically add hoga.
+        </p>
+      </div>
+
+      <div class="lg:col-span-2 space-y-6">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div v-for="row in consumableRows" :key="row.type" class="pp-card p-4">
+            <div class="text-sm font-semibold">{{ row.label }}</div>
+            <div class="mt-3 grid grid-cols-2 gap-2 text-sm">
+              <span class="text-slate-500">Qty</span>
+              <span class="font-mono text-right">{{ n2(row.qty) }}</span>
+              <span class="text-slate-500">Weight</span>
+              <span class="font-mono text-right">{{ n2(row.weight) }} KG</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="pp-card p-6">
+          <h2 class="font-semibold border-b pb-2 mb-4">Recent Consumable Entries</h2>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="text-xs uppercase text-slate-500 bg-slate-50">
+                <tr>
+                  <th class="p-3 text-left">Date</th>
+                  <th class="p-3 text-left">Item</th>
+                  <th class="p-3 text-left">Source</th>
+                  <th class="p-3 text-right">In</th>
+                  <th class="p-3 text-right">Out</th>
+                  <th class="p-3 text-left">Notes</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y">
+                <tr v-for="move in recentConsumableMoves" :key="move.id">
+                  <td class="p-3">{{ move.date }}</td>
+                  <td class="p-3">{{ STOCK_LABELS[move.stock_type] }}</td>
+                  <td class="p-3">{{ move.source }}</td>
+                  <td class="p-3 text-right font-mono">{{ n2(move.qty_in || move.weight_in) }}</td>
+                  <td class="p-3 text-right font-mono">{{ n2(move.qty_out || move.weight_out) }}</td>
+                  <td class="p-3 text-slate-500">{{ move.notes }}</td>
+                </tr>
+                <tr v-if="recentConsumableMoves.length === 0">
+                  <td colspan="6" class="p-8 text-center text-slate-400">No consumable entries yet.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
 

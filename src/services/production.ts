@@ -29,6 +29,9 @@ export const STOCK_LABELS: Record<ProductionStockType, string> = {
   trimmed_sheet: 'Trimmed Sheet',
   printed_sheet: 'Printed / Slotted Sheet',
   finished_box: 'Finished Box',
+  glue: 'Glue',
+  ink: 'Ink',
+  stitching_wire: 'Stitching Wire',
   waste: 'Waste',
 }
 
@@ -84,6 +87,31 @@ export async function createReelsFromPurchase(purchase: Purchase) {
       waste_qty: 0,
       waste_weight: 0,
       notes: `Reel ${reelNo} from purchase ${purchase.bill_no}`,
+    }))
+    count++
+  }
+  return count
+}
+
+export async function createConsumablesFromPurchase(purchase: Purchase) {
+  let count = 0
+  for (const row of purchase.items) {
+    if (!row.is_consumable || !row.consumable_type) continue
+    const qty = Number(row.qty) || 0
+    const weight = row.unit?.toUpperCase() === 'KG' ? qty : 0
+    await db.stock_movements.add(newStockMovement({
+      firm_id: purchase.firm_id,
+      date: purchase.received_date || purchase.date,
+      source: 'purchase',
+      ref_id: purchase.id,
+      stock_type: row.consumable_type,
+      qty_in: qty,
+      qty_out: 0,
+      weight_in: weight,
+      weight_out: 0,
+      waste_qty: 0,
+      waste_weight: 0,
+      notes: `${STOCK_LABELS[row.consumable_type]} from purchase ${purchase.bill_no}`,
     }))
     count++
   }
@@ -161,6 +189,35 @@ export async function saveProductionStage(entry: Omit<ProductionStageEntry, 'id'
   return rec
 }
 
+export async function saveStockAdjustment(data: {
+  firm_id: string
+  date: string
+  stock_type: ProductionStockType
+  mode: 'add' | 'consume'
+  qty: number
+  weight: number
+  notes?: string
+}) {
+  const qty = Number(data.qty) || 0
+  const weight = Number(data.weight) || 0
+  const rec = newStockMovement({
+    firm_id: data.firm_id,
+    date: data.date,
+    source: 'adjustment',
+    ref_id: uid(),
+    stock_type: data.stock_type,
+    qty_in: data.mode === 'add' ? qty : 0,
+    qty_out: data.mode === 'consume' ? qty : 0,
+    weight_in: data.mode === 'add' ? weight : 0,
+    weight_out: data.mode === 'consume' ? weight : 0,
+    waste_qty: 0,
+    waste_weight: 0,
+    notes: data.notes || `${STOCK_LABELS[data.stock_type]} ${data.mode}`,
+  })
+  await db.stock_movements.add(rec)
+  return rec
+}
+
 export function productionBalance(movements: StockMovement[], firmId: string, jobId?: string) {
   const rows = movements.filter((m) => !m.is_deleted && m.firm_id === firmId && (!jobId || m.job_id === jobId))
   const out: Record<ProductionStockType, { qty: number; weight: number; wasteQty: number; wasteWeight: number }> = {
@@ -171,6 +228,9 @@ export function productionBalance(movements: StockMovement[], firmId: string, jo
     trimmed_sheet: { qty: 0, weight: 0, wasteQty: 0, wasteWeight: 0 },
     printed_sheet: { qty: 0, weight: 0, wasteQty: 0, wasteWeight: 0 },
     finished_box: { qty: 0, weight: 0, wasteQty: 0, wasteWeight: 0 },
+    glue: { qty: 0, weight: 0, wasteQty: 0, wasteWeight: 0 },
+    ink: { qty: 0, weight: 0, wasteQty: 0, wasteWeight: 0 },
+    stitching_wire: { qty: 0, weight: 0, wasteQty: 0, wasteWeight: 0 },
     waste: { qty: 0, weight: 0, wasteQty: 0, wasteWeight: 0 },
   }
   for (const m of rows) {

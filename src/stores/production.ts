@@ -4,8 +4,8 @@ import { db } from '@/data/db'
 import { uid, nowISO } from '@/data/util'
 import { useFirmStore } from './firm'
 import { logActivity } from '@/services/activityLog'
-import { saveProductionStage } from '@/services/production'
-import type { ProductionJob, ProductionStageEntry, ReelStock, StockMovement } from '@/types/models'
+import { saveProductionStage, saveStockAdjustment } from '@/services/production'
+import type { ProductionJob, ProductionStageEntry, ProductionStockType, ReelStock, StockMovement } from '@/types/models'
 
 const plain = <X>(o: X): X => JSON.parse(JSON.stringify(o))
 
@@ -65,5 +65,20 @@ export const useProductionStore = defineStore('production', () => {
     await load()
   }
 
-  return { jobs, stages, reels, movements, loaded, load, addJob, addStage, closeJob }
+  async function addStockAdjustment(data: {
+    date: string
+    stock_type: ProductionStockType
+    mode: 'add' | 'consume'
+    qty: number
+    weight: number
+    notes?: string
+  }) {
+    const firm = useFirmStore()
+    const rec = await saveStockAdjustment({ ...data, firm_id: firm.activeFirmId })
+    await logActivity(rec.firm_id, 'create', 'stock_movement', rec.id, rec.notes || `${rec.stock_type} adjustment`)
+    await load()
+    return rec
+  }
+
+  return { jobs, stages, reels, movements, loaded, load, addJob, addStage, closeJob, addStockAdjustment }
 })

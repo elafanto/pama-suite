@@ -164,6 +164,8 @@ export interface PurchaseItemLine {
   bf?: string
   color?: 'GY' | 'NATURAL_BROWN' | string
   reel_weight?: number
+  is_consumable?: boolean
+  consumable_type?: 'glue' | 'ink' | 'stitching_wire'
 }
 
 export interface Purchase extends BaseRecord {
@@ -269,6 +271,9 @@ export type ProductionStockType =
   | 'trimmed_sheet'
   | 'printed_sheet'
   | 'finished_box'
+  | 'glue'
+  | 'ink'
+  | 'stitching_wire'
   | 'waste'
 
 export interface ProductionStageEntry extends BaseRecord {

@@ -73,6 +73,8 @@ function addRow(data: Partial<PurchaseItemLine> = {}) {
     bf: data.bf || '',
     color: data.color || 'NATURAL_BROWN',
     reel_weight: data.reel_weight || data.qty || 0,
+    is_consumable: data.is_consumable || false,
+    consumable_type: data.consumable_type || 'glue',
   })
 }
 
@@ -153,6 +155,16 @@ function toggleKraftReel(idx: number) {
     row.unit = 'KG'
     row.reel_weight = row.reel_weight || row.qty || 0
     row.hsn = row.hsn || '48043100'
+    row.is_consumable = false
+  }
+}
+
+function toggleConsumable(idx: number) {
+  const row = form.items[idx]
+  if (row.is_consumable) {
+    row.unit = row.unit || 'KG'
+    row.consumable_type = row.consumable_type || 'glue'
+    row.is_kraft_reel = false
   }
 }
 
@@ -206,6 +218,11 @@ async function savePurchase() {
   const badReel = validItems.find(it => it.is_kraft_reel && (!it.reel_no?.trim() || !it.deckle_size?.trim() || !it.gsm?.trim() || !it.bf?.trim() || !(it.reel_weight || it.qty)))
   if (badReel) {
     alert('Kraft reel line me Reel No, Deckle, GSM, BF aur Reel Weight required hai.')
+    return
+  }
+  const badConsumable = validItems.find(it => it.is_consumable && !it.consumable_type)
+  if (badConsumable) {
+    alert('Consumable stock line me Glue, Ink ya Stitching Wire type select karo.')
     return
   }
 
@@ -453,7 +470,7 @@ onMounted(() => {
           <h2 class="text-md font-semibold text-slate-800 border-b pb-2 mb-4">Item Breakdown</h2>
           
           <div class="overflow-x-auto">
-            <table class="w-full text-left border-collapse min-w-[980px]">
+            <table class="w-full text-left border-collapse min-w-[1080px]">
               <thead>
                 <tr class="border-b text-slate-500 font-semibold text-xs uppercase bg-slate-50">
                   <th class="py-2 px-3">Item Description</th>
@@ -462,7 +479,7 @@ onMounted(() => {
                   <th class="py-2 px-3 w-24">Unit</th>
                   <th class="py-2 px-3 w-24">Rate (₹)</th>
                   <th class="py-2 px-3 w-20">GST %</th>
-                  <th class="py-2 px-3 w-28">Kraft Reel</th>
+                  <th class="py-2 px-3 w-44">Stock Tracking</th>
                   <th class="py-2 px-3 text-right w-28">Total Amount</th>
                   <th class="py-2 px-3 w-10"></th>
                 </tr>
@@ -510,6 +527,15 @@ onMounted(() => {
                       <input type="checkbox" v-model="item.is_kraft_reel" @change="toggleKraftReel(idx)" />
                       Reel Stock
                     </label>
+                    <label class="mt-2 flex items-center gap-2 text-xs font-semibold">
+                      <input type="checkbox" v-model="item.is_consumable" @change="toggleConsumable(idx)" />
+                      Consumable
+                    </label>
+                    <select v-if="item.is_consumable" v-model="item.consumable_type" class="pp-input mt-2 text-xs">
+                      <option value="glue">Glue</option>
+                      <option value="ink">Ink</option>
+                      <option value="stitching_wire">Stitching Wire</option>
+                    </select>
                   </td>
                   <td class="py-2 px-3 text-right font-mono font-medium">
                     ₹ {{ n2(item.qty * item.rate) }}
