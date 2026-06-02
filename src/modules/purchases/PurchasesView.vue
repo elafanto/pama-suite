@@ -1524,41 +1524,55 @@ onMounted(() => {
     </div>
 
     <!-- Active Tab: Purchase Logs / History -->
-    <div v-else class="pp-card p-6 space-y-4">
-      <div class="flex flex-col gap-4 border-b pb-4 lg:flex-row lg:items-center lg:justify-between">
+    <div v-else class="pp-card p-4 sm:p-6 space-y-4">
+      <div class="border-b pb-4">
         <div>
-          <h2 class="text-md font-semibold text-slate-800">Purchase Transaction Registers</h2>
-          <p class="text-xs text-slate-500">Bill Logs me wrong-firm purchase bills ko safely correct kar sakte ho.</p>
+          <h2 class="text-md font-semibold text-slate-800">Bill Logs / Purchase Logs</h2>
+          <p class="text-xs text-slate-500">Purchases &gt; Bill Logs me wrong-firm purchase bills ko safely correct kar sakte ho.</p>
         </div>
-        
-        <div class="flex w-full flex-col gap-2 sm:flex-row lg:w-auto">
-          <input 
-            v-model="search"
-            class="pp-input sm:w-64"
-            placeholder="Search Supplier or Bill No..."
-          />
-          <select v-model="statusFilter" class="pp-input w-36">
-            <option value="all">All Status</option>
-            <option value="PAID">PAID</option>
-            <option value="PARTIAL">PARTIAL</option>
-            <option value="UNPAID">UNPAID</option>
-          </select>
+      </div>
+
+      <div class="rounded-xl border border-blue-200 bg-blue-50 p-4 shadow-sm">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div class="space-y-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <h3 class="font-semibold text-blue-950">Move Bills to Another Firm</h3>
+              <span class="pp-badge bg-white text-blue-700">{{ selectedPurchaseIds.length }} selected</span>
+            </div>
+            <p class="text-xs text-blue-800">
+              Wrong firm me saved bills ko select karke correct firm me move karo. Move mode start hote hi table me checkboxes dikhengi.
+            </p>
+          </div>
           <button
             v-if="!correctionMode"
             @click="openCorrectionMode"
-            class="pp-btn pp-btn-primary whitespace-nowrap"
+            class="pp-btn pp-btn-primary w-full whitespace-nowrap sm:w-auto"
           >
             Move Bills to Another Firm
           </button>
           <button
             v-else
             @click="closeCorrectionMode"
-            class="pp-btn pp-btn-ghost whitespace-nowrap"
+            class="pp-btn pp-btn-ghost w-full whitespace-nowrap sm:w-auto"
             :disabled="correctionBusy"
           >
             Cancel Move Mode
           </button>
         </div>
+      </div>
+
+      <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <input
+          v-model="search"
+          class="pp-input sm:w-64"
+          placeholder="Search Supplier or Bill No..."
+        />
+        <select v-model="statusFilter" class="pp-input w-full sm:w-36">
+          <option value="all">All Status</option>
+          <option value="PAID">PAID</option>
+          <option value="PARTIAL">PARTIAL</option>
+          <option value="UNPAID">UNPAID</option>
+        </select>
       </div>
 
       <p v-if="!correctionMode && correctionStatus" class="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700">
@@ -1606,6 +1620,7 @@ onMounted(() => {
               <option value="">Select target firm</option>
               <option v-for="firm in availableTargetFirms" :key="firm.id" :value="firm.id">{{ firm.name }}</option>
             </select>
+            <p v-if="availableTargetFirms.length === 0" class="mt-1 text-xs text-amber-700">Move ke liye Settings me dusri firm add karo.</p>
           </div>
           <div>
             <label class="pp-label">Type MOVE *</label>
@@ -1639,7 +1654,7 @@ onMounted(() => {
       </div>
 
       <div class="overflow-x-auto">
-        <table class="w-full text-left border-collapse">
+        <table class="w-full min-w-[980px] text-left border-collapse">
           <thead>
             <tr class="border-b text-slate-500 font-semibold text-xs uppercase bg-slate-50">
               <th v-if="correctionMode" class="py-3 px-4 w-12 text-center">Move</th>
