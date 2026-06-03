@@ -16,6 +16,25 @@ export function normalizePaperType(value: unknown): PaperType {
   return String(value || '').trim().toUpperCase() === 'DUPLEX' ? 'DUPLEX' : 'KRAFT'
 }
 
+/** Canonical reel colour. NS (Natural Shade) and the legacy NATURAL_BROWN are
+ *  the same physical shade, so both — plus any natural/neutral/brown wording or
+ *  a blank colour — collapse to 'NS'. Golden Yellow variants collapse to 'GY'.
+ *  Used for grouping/filtering so the same shade never splits into two rows. */
+export function normalizeReelColor(value: unknown): string {
+  const key = String(value || '').trim().toUpperCase().replace(/[\s-]+/g, '_')
+  if (!key) return 'NS'
+  if (key === 'GY' || (key.includes('GOLDEN') && key.includes('YELLOW'))) return 'GY'
+  if (key === 'NS' || key.includes('NATURAL') || key.includes('NEUTRAL') || key.includes('BROWN')) return 'NS'
+  return key
+}
+
+export function reelColorLabel(value: unknown): string {
+  const code = normalizeReelColor(value)
+  if (code === 'NS') return 'NS — Natural Shade / Brown'
+  if (code === 'GY') return 'Golden Yellow'
+  return code
+}
+
 export const STAGE_LABELS: Record<ProductionStageEntry['stage'], string> = {
   corrugation: 'Corrugation',
   paper_cutting: 'Paper Cutting',
@@ -94,7 +113,7 @@ function purchaseReelSpecs(purchase: Purchase): PurchaseReelSpec[] {
         deckle_size: row.deckle_size || '',
         gsm: row.gsm || '',
         bf: row.bf || '',
-        color: row.color || 'NS',
+        color: normalizeReelColor(row.color),
         opening_weight: perReelWeight,
         rate: Number(row.rate) || 0,
         note: `${paperType} reel ${reelNo} from purchase ${purchase.bill_no}${reelCount > 1 ? ` (${reelIdx + 1}/${reelCount}, split from ${totalWeight} KG line weight)` : ''}`,
@@ -640,7 +659,7 @@ export function reelInventorySummary(reels: ReelStock[], movements: StockMovemen
       gsm: reel.gsm || '-',
       bf: reel.bf || '-',
       deckle: reel.deckle_size || '-',
-      color: reel.color || '-',
+      color: normalizeReelColor(reel.color),
     }
     const key = [dims.paper_type, dims.gsm, dims.bf, dims.deckle, dims.color].join('|')
     if (!breakdownMap.has(key)) {

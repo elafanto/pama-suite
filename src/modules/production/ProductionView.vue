@@ -5,7 +5,7 @@ import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useProductionStore } from '@/stores/production'
-import { normalizePaperType, productionBalance, REEL_LOW_STOCK_KG, reelInventorySummary, STAGE_LABELS, STOCK_LABELS } from '@/services/production'
+import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelInventorySummary, STAGE_LABELS, STOCK_LABELS } from '@/services/production'
 import type { PaperType, ProductionStage, ProductionStockType, ReelStock } from '@/types/models'
 
 const firmStore = useFirmStore()
@@ -111,7 +111,7 @@ const reelFilterOptions = computed(() => {
     gsm: uniq(production.reels.map((r) => r.gsm)),
     bf: uniq(production.reels.map((r) => r.bf)),
     deckle: uniq(production.reels.map((r) => r.deckle_size)),
-    color: uniq(production.reels.map((r) => r.color)),
+    color: uniq(production.reels.map((r) => normalizeReelColor(r.color))),
   }
 })
 const filteredReels = computed(() => production.reels.filter((reel) =>
@@ -119,7 +119,7 @@ const filteredReels = computed(() => production.reels.filter((reel) =>
   (!reelFilters.gsm || reel.gsm === reelFilters.gsm) &&
   (!reelFilters.bf || reel.bf === reelFilters.bf) &&
   (!reelFilters.deckle || reel.deckle_size === reelFilters.deckle) &&
-  (!reelFilters.color || reel.color === reelFilters.color) &&
+  (!reelFilters.color || normalizeReelColor(reel.color) === reelFilters.color) &&
   (reelFilters.status === 'all' || reel.status === reelFilters.status),
 ))
 const balanceRows = computed(() => {
@@ -791,7 +791,7 @@ onMounted(async () => {
               <td class="p-3">{{ reel.supplier_name }}</td>
               <td class="p-3">{{ reel.deckle_size }}</td>
               <td class="p-3">{{ reel.gsm }} / {{ reel.bf }}</td>
-              <td class="p-3">{{ reel.color }}</td>
+              <td class="p-3">{{ normalizeReelColor(reel.color) }}</td>
               <td class="p-3 text-right font-mono">{{ n2(reel.opening_weight) }}</td>
               <td class="p-3 text-right font-mono">{{ n2(reel.current_weight) }}</td>
               <td class="p-3 text-center"><span class="pp-badge" :class="reel.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-slate-100'">{{ reel.status }}</span></td>

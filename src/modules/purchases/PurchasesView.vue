@@ -1118,7 +1118,6 @@ onMounted(() => {
                         <select v-model="item.color" class="pp-input">
                           <option value="NS">NS - Natural Shade / Brown</option>
                           <option value="GY">GY - Golden Yellow</option>
-                          <option value="NATURAL_BROWN">Natural Brown (old)</option>
                         </select>
                       </div>
                       <div>
@@ -1375,7 +1374,6 @@ onMounted(() => {
                           <select v-model="item.color" class="pp-input">
                             <option value="NS">NS - Natural Shade / Brown</option>
                             <option value="GY">GY - Golden Yellow</option>
-                            <option value="NATURAL_BROWN">Natural Brown (old)</option>
                           </select>
                         </div>
                         <div>
