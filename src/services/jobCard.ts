@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * Hindi Job Card Generator — printable 4-page HTML (10 stage cards)
+ * Hindi Job Card Generator — printable A4 pages (2 stage cards per sheet, 50% height each)
  */
 
 export interface JobCardData {
@@ -63,53 +63,49 @@ const JobCardGenerator = (function () {
   }
 
   // ============ CSS STYLES ============
+  // Layout: 2 job cards per A4 sheet — top half + bottom half (50% height each)
   const styles = `
     @page {
-      size: A4;
-      margin: 8mm 6mm;
+      size: A4 portrait;
+      margin: 0;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: 'Noto Sans Devanagari', 'Inter', system-ui, sans-serif;
-      font-size: 9pt;
-      line-height: 1.3;
+      font-size: 8.5pt;
+      line-height: 1.25;
       color: #1e293b;
       background: white;
     }
     .page {
-      width: 198mm;
+      width: 210mm;
+      height: 297mm;
+      display: flex;
+      flex-direction: column;
       page-break-after: always;
       page-break-inside: avoid;
+      overflow: hidden;
     }
     .page:last-child { page-break-after: auto; }
 
-    .card {
-      border: 1.5px solid #000;
-      padding: 6mm;
-      margin-bottom: 4mm;
-      page-break-inside: avoid;
+    .card-half {
+      flex: 0 0 50%;
+      height: 50%;
+      min-height: 0;
+      padding: 3mm 4mm;
+      display: flex;
+      flex-direction: column;
     }
-    .card.compact { padding: 4mm; font-size: 8.5pt; }
 
-    /* Cut line */
-    .cut-line {
-      border-top: 1px dashed #9ca3af;
-      text-align: center;
-      margin: 3mm 0;
-      position: relative;
-      height: 4mm;
-    }
-    .cut-line::before {
-      content: "✂ — — — — — — — — — — — — — — — — — — — — — — — — — —";
-      position: absolute;
-      top: -7px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: white;
-      padding: 0 6px;
-      color: #94a3b8;
-      font-size: 8pt;
-      letter-spacing: 2px;
+    .card-half > .card {
+      flex: 1;
+      min-height: 0;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      font-size: 7.5pt;
+      padding: 2.5mm 3mm;
     }
 
     .card-header {
@@ -117,27 +113,52 @@ const JobCardGenerator = (function () {
       justify-content: space-between;
       align-items: center;
       border-bottom: 2px solid #1e40af;
-      padding-bottom: 2mm;
-      margin-bottom: 3mm;
+      padding-bottom: 1.5mm;
+      margin-bottom: 2mm;
+      flex-shrink: 0;
     }
     .card-title {
-      font-size: 12pt;
+      font-size: 10pt;
       font-weight: 700;
       color: #1e40af;
     }
     .card-job {
-      font-size: 9pt;
+      font-size: 8pt;
       color: #475569;
       font-weight: 600;
     }
 
-    .row { display: flex; gap: 4mm; margin-bottom: 1.5mm; }
+    .row { display: flex; gap: 3mm; margin-bottom: 1mm; }
+    .cut-line {
+      flex: 0 0 0;
+      border-top: 1px dashed #64748b;
+      position: relative;
+      margin: 0 4mm;
+    }
+    .cut-line::before {
+      content: "✂ CUT — — — — — — — — — — — — — — — — — — — — — — — — — — — —";
+      position: absolute;
+      top: -6px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: white;
+      padding: 0 4px;
+      color: #94a3b8;
+      font-size: 7pt;
+      letter-spacing: 1px;
+      white-space: nowrap;
+    }
+
+    .card {
+      border: 1.5px solid #000;
+    }
+
     .col { flex: 1; }
     .label { color: #64748b; font-size: 8pt; }
     .value { font-weight: 600; }
 
-    table { width: 100%; border-collapse: collapse; font-size: 8.5pt; margin: 2mm 0; }
-    table th, table td { border: 1px solid #cbd5e1; padding: 2mm 1mm; text-align: left; }
+    table { width: 100%; border-collapse: collapse; font-size: 7.5pt; margin: 1.5mm 0; }
+    table th, table td { border: 1px solid #cbd5e1; padding: 1mm 0.8mm; text-align: left; }
     table th { background: #f1f5f9; font-weight: 600; }
     table td.num, table th.num { text-align: right; font-family: 'JetBrains Mono', monospace; }
     table td.center, table th.center { text-align: center; }
@@ -145,27 +166,27 @@ const JobCardGenerator = (function () {
     .info-box {
       background: #f1f5f9;
       border-left: 3px solid #2563eb;
-      padding: 2mm 3mm;
-      margin: 2mm 0;
-      font-size: 8.5pt;
+      padding: 1.5mm 2mm;
+      margin: 1mm 0;
+      font-size: 7.5pt;
     }
     .warn-box {
       background: #fef3c7;
       border-left: 3px solid #d97706;
-      padding: 2mm 3mm;
-      margin: 2mm 0;
-      font-size: 8.5pt;
+      padding: 1.5mm 2mm;
+      margin: 1mm 0;
+      font-size: 7.5pt;
     }
     .success-box {
       background: #dcfce7;
       border-left: 3px solid #16a34a;
-      padding: 2mm 3mm;
-      margin: 2mm 0;
-      font-size: 8.5pt;
+      padding: 1.5mm 2mm;
+      margin: 1mm 0;
+      font-size: 7.5pt;
     }
 
-    .checklist { margin: 2mm 0; }
-    .checklist label { display: block; margin: 0.8mm 0; font-size: 8.5pt; }
+    .checklist { margin: 1mm 0; }
+    .checklist label { display: block; margin: 0.5mm 0; font-size: 7.5pt; }
     .checklist input[type="checkbox"] {
       display: inline-block;
       width: 3mm; height: 3mm;
@@ -184,11 +205,12 @@ const JobCardGenerator = (function () {
 
     .signature-row {
       display: flex;
-      gap: 6mm;
-      margin-top: 3mm;
-      padding-top: 2mm;
+      gap: 4mm;
+      margin-top: 1.5mm;
+      padding-top: 1.5mm;
       border-top: 1px dotted #94a3b8;
-      font-size: 8.5pt;
+      font-size: 7.5pt;
+      flex-shrink: 0;
     }
     .signature-row > div { flex: 1; }
 
@@ -220,10 +242,10 @@ const JobCardGenerator = (function () {
     }
 
     h3.section-title {
-      font-size: 9.5pt;
+      font-size: 8.5pt;
       color: #1e40af;
-      margin: 2mm 0 1mm 0;
-      padding: 1mm 0;
+      margin: 1.5mm 0 0.8mm 0;
+      padding: 0.5mm 0;
       border-bottom: 1px dotted #cbd5e1;
     }
 
@@ -242,11 +264,8 @@ const JobCardGenerator = (function () {
       body { background: #f1f5f9; padding: 10mm; }
       .page {
         background: white;
-        padding: 8mm 6mm;
         margin: 0 auto 8mm auto;
         box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        width: 210mm;
-        min-height: 297mm;
       }
       .print-btn {
         position: fixed;
@@ -268,9 +287,23 @@ const JobCardGenerator = (function () {
     @media print {
       .print-btn { display: none; }
       body { background: white; padding: 0; }
-      .page { box-shadow: none; margin: 0; padding: 0; width: auto; min-height: auto; }
+      .page { box-shadow: none; margin: 0; width: 210mm; height: 297mm; }
     }
   `;
+
+  /** Wrap a stage card in a half-page slot (50% A4 height) */
+  function cardHalf(cardHtml) {
+    return `<div class="card-half">${cardHtml}</div>`;
+  }
+
+  /** One A4 page with exactly 2 job cards — top half + bottom half */
+  function pagePair(topCardFn, bottomCardFn, data) {
+    return `<div class="page">
+      ${cardHalf(topCardFn(data))}
+      <div class="cut-line"></div>
+      ${cardHalf(bottomCardFn(data))}
+    </div>`;
+  }
 
   // ============ CARD 1: MASTER (COVER) ============
   function masterCard(data) {
@@ -966,39 +999,14 @@ const JobCardGenerator = (function () {
 
   // ============ MAIN GENERATOR ============
   function generate(data) {
-    // Page assignments
-    // Page 1: Master + Paper Issue + Corrugator (3 cards)
-    // Page 2: Slitter Scorer + Printer Slotter (2 detailed cards)
-    // Page 3: Sheet Cutter + Sheet Pasting + Stitching (3 cards)
-    // Page 4: Bundling + Dispatch (2 cards)
-
-    const page1 = `<div class="page">
-      ${masterCard(data)}
-      <div class="cut-line"></div>
-      ${paperIssueCard(data)}
-      <div class="cut-line"></div>
-      ${corrugatorCard(data)}
-    </div>`;
-
-    const page2 = `<div class="page">
-      ${slitterScorerCard(data)}
-      <div class="cut-line"></div>
-      ${printerSlotterCard(data)}
-    </div>`;
-
-    const page3 = `<div class="page">
-      ${sheetCutterCard(data)}
-      <div class="cut-line"></div>
-      ${pastingCard(data)}
-      <div class="cut-line"></div>
-      ${stitchingCard(data)}
-    </div>`;
-
-    const page4 = `<div class="page">
-      ${bundlingCard(data)}
-      <div class="cut-line"></div>
-      ${dispatchCard(data)}
-    </div>`;
+    // 2 job cards per A4 sheet (top half + bottom half) — 5 pages for 10 stage cards
+    const pages = [
+      pagePair(masterCard, paperIssueCard, data),
+      pagePair(corrugatorCard, sheetCutterCard, data),
+      pagePair(pastingCard, slitterScorerCard, data),
+      pagePair(printerSlotterCard, stitchingCard, data),
+      pagePair(bundlingCard, dispatchCard, data),
+    ].join('\n');
 
     return `<!DOCTYPE html>
 <html lang="hi">
@@ -1012,10 +1020,7 @@ const JobCardGenerator = (function () {
 </head>
 <body>
   <button class="print-btn" onclick="window.print()">🖨️ Print Job Card</button>
-  ${page1}
-  ${page2}
-  ${page3}
-  ${page4}
+  ${pages}
 </body>
 </html>`;
   }

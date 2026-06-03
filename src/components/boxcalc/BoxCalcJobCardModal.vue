@@ -304,7 +304,7 @@ function patchMaterialLoss(key: string, value: number | string) {
         </details>
 
         <div class="bg-blue-50 border border-blue-300 rounded-lg p-3 text-xs text-blue-900">
-          Job Card prints as 4 A4 pages (10 production stage cards).
+          Job Card prints as 5 A4 pages — 2 production stage cards per page (top/bottom halves).
         </div>
       </div>
 
