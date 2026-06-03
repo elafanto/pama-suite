@@ -482,8 +482,11 @@ onMounted(async () => {
     <!-- CALCULATOR -->
     <div v-if="activeTab === 'calculator'">
       <!-- Party & Box -->
-      <div class="pp-card p-4 mb-4 bg-gradient-to-r from-indigo-50 to-blue-50 border-indigo-200">
-        <h2 class="font-bold text-indigo-900 mb-3">Party & Box Info</h2>
+      <div class="pp-card p-4 mb-4 bg-gradient-to-r from-indigo-50 to-blue-50 border-indigo-200 border-l-4 border-l-indigo-500">
+        <h2 class="font-bold text-indigo-900 mb-3 flex items-center gap-2">
+          <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white text-[10px] font-bold shrink-0">1</span>
+          Party & Box Info
+        </h2>
         <div class="grid md:grid-cols-2 gap-3">
           <div>
             <label class="pp-label">Party Name *</label>
@@ -517,8 +520,11 @@ onMounted(async () => {
         <!-- LEFT -->
         <div class="space-y-4">
           <!-- Dimensions -->
-          <div class="pp-card p-4">
-            <h2 class="font-bold text-navy mb-3">Box Dimensions</h2>
+          <div class="pp-card p-4 border-l-4 border-l-blue-400">
+            <h2 class="font-bold text-navy mb-3 flex items-center gap-2">
+              <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-500 text-white text-[10px] font-bold shrink-0">2</span>
+              Box Dimensions
+            </h2>
             <div class="space-y-3">
               <div>
                 <label class="pp-label">Input Unit</label>
@@ -547,8 +553,11 @@ onMounted(async () => {
           </div>
 
           <!-- Construction -->
-          <div class="pp-card p-4">
-            <h2 class="font-bold text-navy mb-3">Construction</h2>
+          <div class="pp-card p-4 border-l-4 border-l-blue-400">
+            <h2 class="font-bold text-navy mb-3 flex items-center gap-2">
+              <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-500 text-white text-[10px] font-bold shrink-0">3</span>
+              Construction
+            </h2>
             <div class="grid grid-cols-2 gap-3">
               <div>
                 <label class="pp-label">Ply</label>
@@ -573,8 +582,11 @@ onMounted(async () => {
           </div>
 
           <!-- Layers -->
-          <div class="pp-card p-4">
-            <h2 class="font-bold text-navy mb-3">Paper Layers</h2>
+          <div class="pp-card p-4 border-l-4 border-l-teal-400">
+            <h2 class="font-bold text-navy mb-3 flex items-center gap-2">
+              <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-teal-500 text-white text-[10px] font-bold shrink-0">4</span>
+              Paper Layers
+            </h2>
             <div v-for="(layer, idx) in form.layers" :key="idx" class="border border-slate-200 rounded-lg p-3 mb-3 bg-slate-50">
               <div class="font-medium text-sm mb-2">{{ layer.name }}</div>
               <select v-model="layer.paperType" class="pp-input !py-1 text-xs mb-2" @change="onPaperTypeChange(idx)">
@@ -617,8 +629,11 @@ onMounted(async () => {
         <!-- RIGHT -->
         <div class="space-y-4">
           <!-- Glue & Joining -->
-          <div class="pp-card p-4">
-            <h2 class="font-bold text-navy mb-3">Glue & Joining</h2>
+          <div class="pp-card p-4 border-l-4 border-l-amber-400">
+            <h2 class="font-bold text-navy mb-3 flex items-center gap-2">
+              <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-500 text-white text-[10px] font-bold shrink-0">5</span>
+              Glue & Joining
+            </h2>
             <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
               <div class="text-xs font-bold text-amber-900 mb-2">Starch Glue</div>
               <div class="grid grid-cols-2 gap-2">
@@ -660,8 +675,11 @@ onMounted(async () => {
           </div>
 
           <!-- Costs -->
-          <div class="pp-card p-4">
-            <h2 class="font-bold text-navy mb-3">Costs & Pricing</h2>
+          <div class="pp-card p-4 border-l-4 border-l-emerald-400">
+            <h2 class="font-bold text-navy mb-3 flex items-center gap-2">
+              <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-emerald-500 text-white text-[10px] font-bold shrink-0">6</span>
+              Costs & Pricing
+            </h2>
             <div class="grid grid-cols-2 gap-2 mb-3">
               <div><label class="pp-label">Quantity</label><input v-model.number="form.quantity" type="number" class="pp-input" /></div>
               <div><label class="pp-label">Margin %</label><input v-model.number="form.marginPercent" type="number" :disabled="form.priceMode === 'custom'" class="pp-input" /></div>
@@ -699,9 +717,12 @@ onMounted(async () => {
           </div>
 
           <!-- Stacking -->
-          <div class="pp-card p-4">
+          <div class="pp-card p-4 border-l-4 border-l-purple-400">
             <div class="flex items-center justify-between mb-3">
-              <h2 class="font-bold text-navy">Stacking Check</h2>
+              <h2 class="font-bold text-navy flex items-center gap-2">
+                <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-purple-500 text-white text-[10px] font-bold shrink-0">7</span>
+                Stacking Check
+              </h2>
               <input v-model="form.stackCheck.enabled" type="checkbox" class="rounded" />
             </div>
             <div v-if="form.stackCheck.enabled" class="space-y-2">

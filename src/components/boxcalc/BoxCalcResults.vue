@@ -33,6 +33,14 @@ const costPerKgDivisor = computed(
   () => props.results?.cost?.shippingPaperWeightKg ?? (props.results?.weight?.paperTotal || 0) / 1000,
 )
 
+const bigSheetWeightGm = computed(() => {
+  const boardGSM = props.results?.weight?.boardGSM ?? 0
+  const L = props.results?.sheet?.length ?? 0
+  const W = props.results?.reel?.reelWidthMM ?? 0
+  if (!boardGSM || !L || !W) return 0
+  return boardGSM * (L * W) / 1_000_000
+})
+
 function perKgFromBoxWeight(perBox: number) {
   return boxWeightKg.value > 0 ? perBox / boxWeightKg.value : 0
 }
@@ -52,7 +60,7 @@ const showJoining = computed(() =>
   props.form.joining.method === 'fevicol' || props.form.joining.method === 'both',
 )
 
-type DualRow = { label: string; perBox: number; perKg?: number; bold?: boolean; highlight?: string; negative?: boolean }
+type DualRow = { label: string; perBox: number; perKg?: number; bold?: boolean; highlight?: string; negative?: boolean; weightPercent?: number | null; pricePercent?: number | null }
 
 const weightRows = computed((): DualRow[] => {
   const w = props.results?.weight
@@ -75,18 +83,25 @@ type CostDualRow = DualRow & { shippingStyle?: boolean; marginNegative?: boolean
 
 const materialCostRows = computed((): CostDualRow[] => {
   const c = props.results?.cost
+  const w = props.results?.weight
   if (!c) return []
-  const rows: CostDualRow[] = (c.layers ?? []).map((layer: { name: string; cost: number }) => ({
+  const materialSubtotal = c.materialSubtotal ?? 0
+  const paperTotal = w?.paperTotal ?? 0
+  const pct = (v: number, total: number) => total > 0 ? (v / total) * 100 : null
+  const layers = c.layers ?? []
+  const rows: CostDualRow[] = layers.map((layer: { name: string; cost: number }, idx: number) => ({
     label: layer.name,
     perBox: layer.cost ?? 0,
+    weightPercent: pct(w?.layers?.[idx]?.weightGm ?? 0, paperTotal),
+    pricePercent: pct(layer.cost ?? 0, materialSubtotal),
   }))
-  rows.push({ label: 'Starch', perBox: c.starch ?? 0 })
-  if (showPin.value) rows.push({ label: 'Pin', perBox: c.pin ?? 0 })
+  rows.push({ label: 'Starch', perBox: c.starch ?? 0, weightPercent: null, pricePercent: pct(c.starch ?? 0, materialSubtotal) })
+  if (showPin.value) rows.push({ label: 'Pin', perBox: c.pin ?? 0, weightPercent: null, pricePercent: pct(c.pin ?? 0, materialSubtotal) })
   if (showJoining.value) {
-    rows.push({ label: c.joiningLabel || 'Fevicol', perBox: c.joining ?? 0 })
+    rows.push({ label: c.joiningLabel || 'Fevicol', perBox: c.joining ?? 0, weightPercent: null, pricePercent: pct(c.joining ?? 0, materialSubtotal) })
   }
-  if (c.wastage) rows.push({ label: 'Wastage', perBox: c.wastage, highlight: 'orange' })
-  rows.push({ label: 'Material Subtotal', perBox: c.materialSubtotal ?? 0, bold: true })
+  if (c.wastage) rows.push({ label: 'Wastage', perBox: c.wastage, highlight: 'orange', weightPercent: null, pricePercent: pct(c.wastage, materialSubtotal) })
+  rows.push({ label: 'Material Subtotal', perBox: materialSubtotal, bold: true, weightPercent: null, pricePercent: null })
   return rows.map((row) => ({ ...row, perKg: perKgFromCost(row.perBox) }))
 })
 
@@ -119,48 +134,48 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
       <div class="bg-gradient-to-br from-indigo-500 to-indigo-600 text-white rounded-xl p-4 shadow">
         <div class="text-xs opacity-90">Board GSM</div>
         <div class="text-xl font-bold mt-1">{{ fmtInt(results?.weight?.boardGSM) }}</div>
-        <div class="text-xs opacity-75 mt-1">combined sheet</div>
+        <div class="text-xs opacity-90 mt-1">combined sheet</div>
       </div>
       <div class="bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-xl p-4 shadow">
         <div class="text-xs opacity-90">Selling Price</div>
         <div class="text-xl font-bold mt-1">{{ fmtMoney(results?.cost?.sellingPrice) }}</div>
-        <div class="text-xs opacity-75 mt-1">per box</div>
+        <div class="text-xs opacity-90 mt-1">per box</div>
       </div>
       <div class="bg-gradient-to-br from-teal-500 to-teal-600 text-white rounded-xl p-4 shadow">
         <div class="text-xs opacity-90">Sheet Weight</div>
         <div class="text-xl font-bold mt-1">{{ fmt(results?.weight?.sheetWeight, 1) }} gm</div>
-        <div class="text-xs opacity-75 mt-1">with trim share</div>
+        <div class="text-xs opacity-90 mt-1">with trim share</div>
       </div>
       <div class="bg-gradient-to-br from-red-500 to-orange-500 text-white rounded-xl p-4 shadow">
         <div class="text-xs opacity-90">Trim Waste</div>
         <div class="text-xl font-bold mt-1">{{ fmt(results?.weight?.trimPercent, 2) }}%</div>
-        <div class="text-xs opacity-75 mt-1">{{ fmt(results?.weight?.trimPerBox, 2) }} gm/box</div>
+        <div class="text-xs opacity-90 mt-1">{{ fmt(results?.weight?.trimPerBox, 2) }} gm/box</div>
       </div>
       <div class="bg-gradient-to-br from-green-500 to-green-600 text-white rounded-xl p-4 shadow">
         <div class="text-xs opacity-90">Box Weight</div>
         <div class="text-xl font-bold mt-1">{{ fmt(results?.weight?.boxTotal, 1) }} gm</div>
-        <div class="text-xs opacity-75 mt-1">{{ fmt((results?.weight?.boxTotal || 0) / 1000, 3) }} kg</div>
+        <div class="text-xs opacity-90 mt-1">{{ fmt((results?.weight?.boxTotal || 0) / 1000, 3) }} kg</div>
       </div>
       <div class="bg-gradient-to-br from-amber-500 to-amber-600 text-white rounded-xl p-4 shadow">
         <div class="text-xs opacity-90">Sheet Size</div>
         <div class="text-sm font-bold mt-1">{{ fmtInt(results?.sheet?.length) }} × {{ fmtInt(results?.sheet?.width) }} indiv</div>
         <div class="text-sm font-bold">{{ fmtInt(results?.sheet?.length) }} × {{ fmtInt(results?.reel?.reelWidthMM) }} big</div>
-        <div class="text-[10px] opacity-75 mt-1">{{ results?.weight?.sheetsPerBigSheet }} box/big sheet</div>
+        <div class="text-[10px] opacity-90 mt-1">{{ results?.weight?.sheetsPerBigSheet }} box/big | {{ fmt(bigSheetWeightGm, 0) }} gm</div>
       </div>
       <div class="bg-gradient-to-br from-purple-500 to-purple-600 text-white rounded-xl p-4 shadow">
         <div class="text-xs opacity-90">Order Value</div>
         <div class="text-lg font-bold mt-1">{{ fmtMoney(results?.order?.totalValue) }}</div>
-        <div class="text-xs opacity-75 mt-1">{{ results?.order?.quantity }} boxes</div>
+        <div class="text-xs opacity-90 mt-1">{{ results?.order?.quantity }} boxes</div>
       </div>
       <div class="bg-gradient-to-br from-cyan-500 to-cyan-600 text-white rounded-xl p-4 shadow">
         <div class="text-xs opacity-90">Sheet ₹/kg</div>
         <div class="text-xl font-bold mt-1">{{ fmtMoney(results?.cost?.sheetRatePerKg) }}</div>
-        <div class="text-xs opacity-75 mt-1">paper cost basis</div>
+        <div class="text-xs opacity-90 mt-1">paper cost basis</div>
       </div>
       <div class="bg-gradient-to-br from-violet-500 to-violet-600 text-white rounded-xl p-4 shadow">
         <div class="text-xs opacity-90">Box ₹/kg</div>
         <div class="text-xl font-bold mt-1">{{ fmtMoney(results?.cost?.boxRatePerKg) }}</div>
-        <div class="text-xs opacity-75 mt-1">selling price basis</div>
+        <div class="text-xs opacity-90 mt-1">selling price basis</div>
       </div>
     </div>
 
@@ -216,11 +231,12 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
           </div>
         </div>
         <div class="bg-amber-50 border border-amber-200 p-3 rounded-lg">
-          <div class="text-xs text-amber-700 font-medium">BIG SHEET</div>
-          <div class="font-mono mt-1">
-            L: {{ fmtInt(results?.sheet?.length) }}<br>
+          <div class="text-xs text-amber-900 font-bold">BIG SHEET</div>
+          <div class="font-mono mt-1 text-sm">
+            L: {{ fmtInt(results?.sheet?.length) }} mm<br>
             W: {{ fmtInt(results?.reel?.reelWidthMM) }} mm<br>
-            Trim: {{ fmtInt(results?.reel?.totalTrimMM) }} mm ({{ fmt(results?.weight?.trimPercent, 1) }}%)
+            Trim: {{ fmtInt(results?.reel?.totalTrimMM) }} mm ({{ fmt(results?.weight?.trimPercent, 1) }}%)<br>
+            <span class="font-bold text-amber-900">Wt: {{ fmt(bigSheetWeightGm, 0) }} gm</span>
           </div>
         </div>
       </div>
@@ -337,20 +353,20 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
     <div class="pp-card p-4 print-section">
       <h3 class="font-bold text-navy mb-3">Strength Analysis</h3>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
-        <div class="bg-blue-50 p-3 rounded">
-          <div class="text-xs text-blue-700">ECT</div>
+        <div class="bg-blue-50 border border-blue-200 p-3 rounded">
+          <div class="text-xs text-blue-800 font-medium">ECT</div>
           <div class="font-bold text-blue-900">{{ fmt(results?.strength?.ect, 2) }} kN/m</div>
         </div>
-        <div class="bg-indigo-50 p-3 rounded">
-          <div class="text-xs text-indigo-700">BCT</div>
+        <div class="bg-indigo-50 border border-indigo-200 p-3 rounded">
+          <div class="text-xs text-indigo-800 font-medium">BCT</div>
           <div class="font-bold text-indigo-900">{{ fmt(results?.strength?.bct?.bctKg, 1) }} kg</div>
         </div>
-        <div class="bg-purple-50 p-3 rounded">
-          <div class="text-xs text-purple-700">Safe Load</div>
+        <div class="bg-purple-50 border border-purple-200 p-3 rounded">
+          <div class="text-xs text-purple-800 font-medium">Safe Load</div>
           <div class="font-bold text-purple-900">{{ fmt(results?.strength?.safeStack?.safeLoadKg, 1) }} kg</div>
         </div>
-        <div class="bg-pink-50 p-3 rounded">
-          <div class="text-xs text-pink-700">Eff. SF</div>
+        <div class="bg-pink-50 border border-pink-200 p-3 rounded">
+          <div class="text-xs text-pink-800 font-medium">Eff. SF</div>
           <div class="font-bold text-pink-900">{{ fmt(results?.strength?.safeStack?.effectiveSF, 2) }}</div>
         </div>
       </div>
@@ -467,17 +483,20 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
     <div class="pp-card p-4 print-section">
       <h3 class="font-bold text-navy mb-3">Cost Breakdown</h3>
 
+      <div class="overflow-x-auto">
       <table class="w-full text-sm">
         <thead>
-          <tr class="text-slate-500 border-b-2 border-slate-200">
+          <tr class="text-slate-600 border-b-2 border-slate-200">
             <th class="text-left py-1.5 font-medium">Line</th>
             <th class="text-right py-1.5 font-medium">Per Box (₹)</th>
             <th class="text-right py-1.5 font-medium">Per KG (₹)</th>
+            <th class="text-right py-1.5 font-medium hidden sm:table-cell text-[11px]">Wt %</th>
+            <th class="text-right py-1.5 font-medium hidden sm:table-cell text-[11px]">₹ %</th>
           </tr>
         </thead>
         <tbody>
-          <tr class="bg-slate-50">
-            <td colspan="3" class="py-1.5 pl-2 text-xs font-bold uppercase text-slate-500">Material</td>
+          <tr class="bg-slate-100">
+            <td colspan="5" class="py-1.5 pl-2 text-xs font-bold uppercase text-slate-700">Material</td>
           </tr>
           <tr
             v-for="row in materialCostRows"
@@ -488,9 +507,16 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
               row.highlight === 'orange' ? 'text-orange-700' : '',
             ]"
           >
-            <td class="py-1.5 pl-2" :class="row.bold ? 'font-semibold' : 'text-slate-600'">{{ row.label }}</td>
+            <td class="py-1.5 pl-2" :class="row.bold ? 'font-semibold' : 'text-slate-700'">{{ row.label }}</td>
             <td class="py-1.5 text-right font-mono" :class="row.bold ? 'font-semibold' : ''">{{ fmtMoney(row.perBox) }}</td>
-            <td class="py-1.5 text-right font-mono text-slate-500" :class="row.bold ? 'font-semibold text-slate-600' : ''">{{ fmtMoney(row.perKg) }}</td>
+            <td class="py-1.5 text-right font-mono text-slate-600" :class="row.bold ? 'font-semibold' : ''">{{ fmtMoney(row.perKg) }}</td>
+            <td class="py-1.5 text-right font-mono text-slate-500 hidden sm:table-cell text-[11px]">
+              {{ row.weightPercent != null ? fmt(row.weightPercent, 1) + '%' : '—' }}
+            </td>
+            <td class="py-1.5 text-right font-mono hidden sm:table-cell text-[11px]"
+              :class="row.bold ? 'font-semibold text-slate-600' : 'text-slate-500'">
+              {{ row.pricePercent != null ? fmt(row.pricePercent, 1) + '%' : (row.bold ? '100%' : '—') }}
+            </td>
           </tr>
           <tr
             v-for="row in costRowsAfterMaterial"
@@ -512,7 +538,7 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
               }"
             >
               {{ row.label }}
-              <span v-if="row.label.startsWith('Conversion')" class="text-xs text-slate-400 ml-1">{{ results?.cost?.conversionSlabLabel }}</span>
+              <span v-if="row.label.startsWith('Conversion')" class="text-xs text-slate-500 ml-1">{{ results?.cost?.conversionSlabLabel }}</span>
             </td>
             <td
               class="py-2 text-right"
@@ -531,12 +557,12 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
               </template>
             </td>
             <td
-              class="py-2 text-right font-mono text-slate-500"
+              class="py-2 text-right font-mono text-slate-600"
               :class="{
-                'font-semibold text-slate-600': row.bold && row.highlight !== 'sell',
+                'font-semibold': row.bold && row.highlight !== 'sell',
                 'text-red-600': row.marginNegative,
                 'text-green-600': row.label.startsWith('Margin') && !row.marginNegative,
-                'font-bold text-slate-600': row.highlight === 'sell',
+                'font-bold text-slate-700': row.highlight === 'sell',
               }"
             >
               <template v-if="row.shippingStyle">
@@ -546,9 +572,12 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
                 {{ fmtMoney(row.perKg) }}
               </template>
             </td>
+            <td class="hidden sm:table-cell" />
+            <td class="hidden sm:table-cell" />
           </tr>
         </tbody>
       </table>
+      </div>
     </div>
 
     <!-- Order total -->
@@ -556,19 +585,19 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
       <h3 class="font-bold text-lg mb-3">Order Total</h3>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div>
-          <div class="text-xs opacity-75">Quantity</div>
+          <div class="text-xs opacity-90">Quantity</div>
           <div class="text-2xl font-bold">{{ results?.order?.quantity }}</div>
         </div>
         <div>
-          <div class="text-xs opacity-75">Total Weight</div>
+          <div class="text-xs opacity-90">Total Weight</div>
           <div class="text-2xl font-bold">{{ fmt(results?.order?.totalWeightKg, 1) }} kg</div>
         </div>
         <div>
-          <div class="text-xs opacity-75">Total Cost</div>
+          <div class="text-xs opacity-90">Total Cost</div>
           <div class="text-2xl font-bold">{{ fmtMoney(results?.order?.totalCost) }}</div>
         </div>
         <div>
-          <div class="text-xs opacity-75">Total Value</div>
+          <div class="text-xs opacity-90">Total Value</div>
           <div class="text-2xl font-bold text-yellow-200">{{ fmtMoney(results?.order?.totalValue) }}</div>
         </div>
       </div>

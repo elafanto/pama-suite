@@ -5,6 +5,7 @@ import { normalizeGstType } from '@/services/gst'
 import type {
   Party, Firm, Item, Invoice, Purchase, Recipe, Account, Voucher, ActivityLog,
   ReelStock, ProductionJob, ProductionStageEntry, StockMovement, ItemStockMovement,
+  DashboardTodo,
 } from '@/types/models'
 
 export const BACKUP_FORMAT = 'pama_suite_backup'
@@ -53,6 +54,7 @@ export interface SuiteBackup {
   production_stages?: ProductionStageEntry[]
   stock_movements?: StockMovement[]
   item_stock_movements?: ItemStockMovement[]
+  dashboard_todos?: DashboardTodo[]
   settings?: {
     geminiKey?: string
     supabaseUrl?: string
@@ -71,6 +73,7 @@ export async function exportAll(options: ExportOptions = {}): Promise<SuiteBacku
   const [
     firms, parties, items, invoices, purchases, recipes, accounts, vouchers, activity_log,
     reel_stocks, production_jobs, production_stages, stock_movements, item_stock_movements,
+    dashboard_todos,
   ] = await Promise.all([
     db.firms.toArray(),
     db.parties.toArray(),
@@ -86,6 +89,7 @@ export async function exportAll(options: ExportOptions = {}): Promise<SuiteBacku
     db.production_stages.toArray(),
     db.stock_movements.toArray(),
     db.item_stock_movements.toArray(),
+    db.dashboard_todos.toArray(),
   ])
 
   let templates: unknown[] = []
@@ -113,6 +117,7 @@ export async function exportAll(options: ExportOptions = {}): Promise<SuiteBacku
     exportedAt: new Date().toISOString(),
     firms, parties, items, invoices, purchases, recipes, accounts, vouchers, activity_log,
     reel_stocks, production_jobs, production_stages, stock_movements, item_stock_movements,
+    dashboard_todos,
     settings,
   }
 }
@@ -233,6 +238,7 @@ async function importSuiteBackup(data: any, mode: ImportMode, options: ImportOpt
     await upsertAll(db.production_stages, data.production_stages || [], 'production_stages')
     await upsertAll(db.stock_movements, data.stock_movements || [], 'stock_movements')
     await upsertAll(db.item_stock_movements, data.item_stock_movements || [], 'item_stock_movements')
+    await upsertAll(db.dashboard_todos, data.dashboard_todos || [], 'dashboard_todos')
 
     await repairImportedInvoiceNumbers()
   })
@@ -574,6 +580,7 @@ function suiteImportTables(data: any) {
     { key: 'production_stages', table: db.production_stages, rows: asArray<ImportableRecord>(data.production_stages) },
     { key: 'stock_movements', table: db.stock_movements, rows: asArray<ImportableRecord>(data.stock_movements) },
     { key: 'item_stock_movements', table: db.item_stock_movements, rows: asArray<ImportableRecord>(data.item_stock_movements) },
+    { key: 'dashboard_todos', table: db.dashboard_todos, rows: asArray<ImportableRecord>(data.dashboard_todos) },
   ]
 }
 
