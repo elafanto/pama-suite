@@ -854,11 +854,11 @@ onMounted(async () => {
                 <td class="border border-black p-2 text-center">{{ idx + 1 }}</td>
                 <td class="border border-black p-2">
                   <div class="font-bold">{{ b.name }}</div>
-                  <div class="text-[10px] text-slate-600">{{ b.bank }}</div>
-                  <div class="text-[9px] text-slate-500">Ac Name: {{ b.acname || b.name }}</div>
+                  <div class="text-xs font-bold text-slate-700">{{ b.bank }}</div>
+                  <div class="text-[10px] font-semibold text-slate-600">Ac Name: {{ b.acname || b.name }}</div>
                 </td>
-                <td class="border border-black p-2 font-mono text-sm font-bold">{{ b.acno }}</td>
-                <td class="border border-black p-2 font-mono text-sm font-bold">{{ b.ifsc }}</td>
+                <td class="border border-black p-2 font-mono text-base font-bold">{{ b.acno }}</td>
+                <td class="border border-black p-2 font-mono text-base font-bold">{{ b.ifsc }}</td>
                 <td class="border border-black p-2 text-center">{{ b.mode }}</td>
                 <td class="border border-black p-2 text-right font-mono">₹{{ n2(b.amount) }}</td>
               </tr>
