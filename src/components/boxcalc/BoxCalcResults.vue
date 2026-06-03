@@ -34,7 +34,12 @@ function stackRatingClass(passes: boolean) {
 <template>
   <div id="results-section" class="mt-6 space-y-4 print-section">
     <!-- Summary cards -->
-    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8 gap-3">
+      <div class="bg-gradient-to-br from-indigo-500 to-indigo-600 text-white rounded-xl p-4 shadow">
+        <div class="text-xs opacity-90">Board GSM</div>
+        <div class="text-xl font-bold mt-1">{{ fmtInt(results?.weight?.boardGSM) }}</div>
+        <div class="text-xs opacity-75 mt-1">combined sheet</div>
+      </div>
       <div class="bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-xl p-4 shadow">
         <div class="text-xs opacity-90">Selling Price</div>
         <div class="text-xl font-bold mt-1">{{ fmtMoney(results?.cost?.sellingPrice) }}</div>
@@ -65,6 +70,16 @@ function stackRatingClass(passes: boolean) {
         <div class="text-xs opacity-90">Order Value</div>
         <div class="text-lg font-bold mt-1">{{ fmtMoney(results?.order?.totalValue) }}</div>
         <div class="text-xs opacity-75 mt-1">{{ results?.order?.quantity }} boxes</div>
+      </div>
+      <div class="bg-gradient-to-br from-cyan-500 to-cyan-600 text-white rounded-xl p-4 shadow">
+        <div class="text-xs opacity-90">Sheet ₹/kg</div>
+        <div class="text-xl font-bold mt-1">{{ fmtMoney(results?.cost?.sheetRatePerKg) }}</div>
+        <div class="text-xs opacity-75 mt-1">paper cost basis</div>
+      </div>
+      <div class="bg-gradient-to-br from-violet-500 to-violet-600 text-white rounded-xl p-4 shadow">
+        <div class="text-xs opacity-90">Box ₹/kg</div>
+        <div class="text-xl font-bold mt-1">{{ fmtMoney(results?.cost?.boxRatePerKg) }}</div>
+        <div class="text-xs opacity-75 mt-1">selling price basis</div>
       </div>
     </div>
 

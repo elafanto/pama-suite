@@ -1,5 +1,6 @@
 import {
   PAPER_LIBRARY,
+  calculate as runCalculator,
   getCaliper,
   getPapersForRole,
 } from '@/services/calculator'
@@ -178,6 +179,70 @@ export function getPresetsForLayer(layerIdx: number, layers: BoxCalcLayer[]) {
   if (!layer) return []
   const paperData = PAPER_LIBRARY[layer.paperType as keyof typeof PAPER_LIBRARY]
   return paperData?.presets ?? []
+}
+
+export function formToMM(form: Pick<BoxCalcForm, 'dimensionUnit' | 'length' | 'width' | 'height'>) {
+  const mult = form.dimensionUnit === 'inch' ? 25.4 : 1
+  return {
+    length: parseFloat(String(form.length)) * mult,
+    width: parseFloat(String(form.width)) * mult,
+    height: parseFloat(String(form.height)) * mult,
+  }
+}
+
+export function buildCalcInputs(form: BoxCalcForm) {
+  const dimsMM = formToMM(form)
+  return {
+    length: dimsMM.length,
+    width: dimsMM.width,
+    height: dimsMM.height,
+    dimType: form.dimType,
+    ply: form.ply,
+    flute: form.flute,
+    caliperOverride: form.caliperOverride,
+    glueFlap: form.glueFlap,
+    layers: form.layers.map((l) => ({
+      name: l.name,
+      gsm: parseFloat(String(l.gsm)),
+      bf: parseFloat(String(l.bf)),
+      rate: parseFloat(String(l.rate)),
+      takeUp: parseFloat(String(l.takeUp)),
+      reelLength: l.reelLength ? parseFloat(String(l.reelLength)) : null,
+      rctOverride: l.rctOverride ? parseFloat(String(l.rctOverride)) : null,
+    })),
+    starchGSM: parseFloat(String(form.starchGSM)),
+    starchRate: parseFloat(String(form.starchRate)),
+    joining: form.joining,
+    quantity: parseInt(String(form.quantity)),
+    productionWastePercent: parseFloat(String(form.productionWastePercent)),
+    marginPercent: parseFloat(String(form.marginPercent)),
+    priceMode: form.priceMode,
+    customSellingPrice: form.customSellingPrice,
+    printingCost: parseFloat(String(form.printingCost)),
+    shippingCostPerKg: parseFloat(String(form.shippingCostPerKg ?? (form as { shippingCost?: number }).shippingCost)),
+    conversionCostPerKg: parseFloat(String(form.conversionCostPerKg ?? (form as { conversionCost?: number }).conversionCost)),
+    scrapRate: parseFloat(String(form.scrapRate)),
+    stackCheck: form.stackCheck.enabled ? {
+      enabled: true,
+      stackCount: parseInt(String(form.stackCheck.stackCount)),
+      contentWeight: parseFloat(String(form.stackCheck.contentWeight)),
+    } : null,
+    stackingConditions: form.stackingConditions,
+  }
+}
+
+export function computeBoxCalcResults(form: BoxCalcForm) {
+  if (!form.layers.length) return null
+  const dimsMM = formToMM(form)
+  if (!dimsMM.length || !dimsMM.width || !dimsMM.height) return null
+  const res = runCalculator(buildCalcInputs(form))
+  if (res.error) return { error: res.error } as const
+  return res
+}
+
+export function paperTypeLabel(paperType: string): string {
+  const paper = PAPER_LIBRARY[paperType as keyof typeof PAPER_LIBRARY]
+  return paper?.name ?? paperType
 }
 
 export function getCurrentCaliper(form: Pick<BoxCalcForm, 'caliperOverride' | 'ply' | 'flute'>): number {

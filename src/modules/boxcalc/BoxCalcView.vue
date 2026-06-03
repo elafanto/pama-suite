@@ -6,7 +6,6 @@ import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useFirmStore } from '@/stores/firm'
 import {
-  calculate as runCalculator,
   PAPER_LIBRARY,
   getTakeUp,
   COMMON_PAPER_COLORS,
@@ -28,6 +27,7 @@ import {
   saveBoxName,
   setDimensionUnit,
   unitLabel,
+  computeBoxCalcResults,
   type BoxCalcForm,
   type BoxCalcJobCard,
   type VendorPhone,
@@ -36,6 +36,7 @@ import { openJobCardPrintWindow } from '@/services/jobCard'
 import { exportAll, downloadBackup } from '@/services/backup'
 import PpModal from '@/components/PpModal.vue'
 import BoxCalcResults from '@/components/boxcalc/BoxCalcResults.vue'
+import BoxCalcLivePanel from '@/components/boxcalc/BoxCalcLivePanel.vue'
 import BoxCalcJobCardModal from '@/components/boxcalc/BoxCalcJobCardModal.vue'
 import BoxCalcWhatsAppModal from '@/components/boxcalc/BoxCalcWhatsAppModal.vue'
 import type { Recipe } from '@/types/models'
@@ -104,6 +105,17 @@ const jobCard = computed({
 })
 const results = ref<any>(null)
 const errors = ref<string[]>([])
+
+const liveCalc = computed(() => computeBoxCalcResults(form))
+const liveResults = computed(() => {
+  const res = liveCalc.value
+  if (!res || 'error' in res) return null
+  return res
+})
+const liveError = computed(() => {
+  const res = liveCalc.value
+  return res && 'error' in res ? res.error : null
+})
 
 function getFluteOptions() {
   const flutes: Record<string, string[]> = {
@@ -201,15 +213,6 @@ function toggleLayerAdvanced(idx: number) {
   form.layers[idx].showAdvanced = !form.layers[idx].showAdvanced
 }
 
-function formToMM() {
-  const mult = form.dimensionUnit === 'inch' ? 25.4 : 1
-  return {
-    length: parseFloat(String(form.length)) * mult,
-    width: parseFloat(String(form.width)) * mult,
-    height: parseFloat(String(form.height)) * mult,
-  }
-}
-
 function canCalculate() {
   return form.customerName.trim() && form.boxName.trim()
 }
@@ -220,57 +223,19 @@ function runCostCalculation() {
     return
   }
   errors.value = []
-  results.value = null
-  const dimsMM = formToMM()
-  const calcInputs = {
-    length: dimsMM.length,
-    width: dimsMM.width,
-    height: dimsMM.height,
-    dimType: form.dimType,
-    ply: form.ply,
-    flute: form.flute,
-    caliperOverride: form.caliperOverride,
-    glueFlap: form.glueFlap,
-    layers: form.layers.map((l) => ({
-      name: l.name,
-      gsm: parseFloat(String(l.gsm)),
-      bf: parseFloat(String(l.bf)),
-      rate: parseFloat(String(l.rate)),
-      takeUp: parseFloat(String(l.takeUp)),
-      reelLength: l.reelLength ? parseFloat(String(l.reelLength)) : null,
-      rctOverride: l.rctOverride ? parseFloat(String(l.rctOverride)) : null,
-    })),
-    starchGSM: parseFloat(String(form.starchGSM)),
-    starchRate: parseFloat(String(form.starchRate)),
-    joining: form.joining,
-    quantity: parseInt(String(form.quantity)),
-    productionWastePercent: parseFloat(String(form.productionWastePercent)),
-    marginPercent: parseFloat(String(form.marginPercent)),
-    priceMode: form.priceMode,
-    customSellingPrice: form.customSellingPrice,
-    printingCost: parseFloat(String(form.printingCost)),
-    shippingCostPerKg: parseFloat(String(form.shippingCostPerKg ?? (form as { shippingCost?: number }).shippingCost)),
-    conversionCostPerKg: parseFloat(String(form.conversionCostPerKg ?? (form as { conversionCost?: number }).conversionCost)),
-    scrapRate: parseFloat(String(form.scrapRate)),
-    stackCheck: form.stackCheck.enabled ? {
-      enabled: true,
-      stackCount: parseInt(String(form.stackCheck.stackCount)),
-      contentWeight: parseFloat(String(form.stackCheck.contentWeight)),
-    } : null,
-    stackingConditions: form.stackingConditions,
-  }
-  const res = runCalculator(calcInputs)
-  if (res.error) {
-    errors.value = [res.error]
+  const res = liveResults.value
+  if (!res) {
+    errors.value = [liveError.value || 'Unable to calculate with current inputs.']
     showResults.value = false
-  } else {
-    results.value = res
-    showResults.value = true
-    localStorage.setItem('boxapp_lastform', JSON.stringify(form))
-    nextTick(() => {
-      document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' })
-    })
+    results.value = null
+    return
   }
+  results.value = res
+  showResults.value = true
+  localStorage.setItem('boxapp_lastform', JSON.stringify(form))
+  nextTick(() => {
+    document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' })
+  })
 }
 
 function generateSaveName() {
@@ -483,7 +448,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="p-4 sm:p-6 max-w-7xl mx-auto pb-24 md:pb-8 hide-on-print">
+  <div class="p-4 sm:p-6 max-w-[90rem] mx-auto pb-24 md:pb-8 hide-on-print">
     <header class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
       <div>
         <h1 class="text-2xl font-bold text-navy">BoxCalc Pro</h1>
@@ -536,6 +501,9 @@ onMounted(async () => {
         <p v-for="err in errors" :key="err" class="text-sm font-semibold">{{ err }}</p>
       </div>
 
+      <div class="xl:grid xl:grid-cols-[minmax(0,1fr)_20rem] xl:gap-5 xl:items-start">
+        <!-- Form column -->
+        <div>
       <!-- 2-column form -->
       <div class="grid md:grid-cols-2 gap-4">
         <!-- LEFT -->
@@ -668,7 +636,7 @@ onMounted(async () => {
               <div class="grid grid-cols-2 gap-2">
                 <div class="bg-white border rounded p-2 text-xs">
                   <div class="text-slate-500">Pins (calc)</div>
-                  <div class="font-bold">{{ results?.pinInfo?.pins ?? '—' }} pins</div>
+                  <div class="font-bold">{{ liveResults?.pinInfo?.pins ?? '—' }} pins</div>
                 </div>
                 <div><label class="pp-label">Wire ₹/kg</label><input v-model.number="form.joining.wireRate" type="number" class="pp-input !py-1.5" /></div>
               </div>
@@ -739,6 +707,17 @@ onMounted(async () => {
 
       <div class="mt-6 hidden md:block">
         <button type="button" class="pp-btn pp-btn-primary w-full py-3 text-lg" @click="runCostCalculation">Calculate Box Specifications</button>
+      </div>
+        </div>
+
+        <!-- Sticky live results (xl+) -->
+        <aside class="hidden xl:block xl:sticky xl:top-4">
+          <BoxCalcLivePanel :form="form" :results="liveResults" :error="liveError" />
+        </aside>
+      </div>
+
+      <div class="xl:hidden mt-4">
+        <BoxCalcLivePanel :form="form" :results="liveResults" :error="liveError" />
       </div>
 
       <BoxCalcResults

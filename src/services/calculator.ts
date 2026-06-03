@@ -707,6 +707,8 @@ export function calculate(input: any) {
     weight: {
       layers: layerWeights,
       paperTotal: paperWeightTotal,
+      boardGSM: combinedGsmPerArea,
+      sheetGsmTotal,
       starch: starchGm,
       joining: joiningWeightGm,
       slotWaste: slotWasteGm,
