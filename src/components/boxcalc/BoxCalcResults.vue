@@ -68,10 +68,11 @@ type CostDualRow = DualRow & { shippingStyle?: boolean; marginNegative?: boolean
 const materialCostRows = computed((): CostDualRow[] => {
   const c = props.results?.cost
   if (!c) return []
-  const rows: CostDualRow[] = [
-    { label: 'Paper', perBox: c.paperTotal ?? 0 },
-    { label: 'Starch', perBox: c.starch ?? 0 },
-  ]
+  const rows: CostDualRow[] = (c.layers ?? []).map((layer: { name: string; cost: number }) => ({
+    label: layer.name,
+    perBox: layer.cost ?? 0,
+  }))
+  rows.push({ label: 'Starch', perBox: c.starch ?? 0 })
   if (showPin.value) rows.push({ label: 'Pin', perBox: c.pin ?? 0 })
   if (showJoining.value) {
     rows.push({ label: c.joiningLabel || 'Fevicol', perBox: c.joining ?? 0 })
@@ -458,63 +459,31 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
     <div class="pp-card p-4 print-section">
       <h3 class="font-bold text-navy mb-3">Cost Breakdown</h3>
 
-      <details class="mb-3 text-sm">
-        <summary class="cursor-pointer text-slate-600 text-xs font-medium">Paper layer costs (click to expand)</summary>
-        <table class="w-full text-xs mt-2">
-          <thead>
-            <tr class="text-slate-500 border-b border-slate-200">
-              <th class="text-left py-1 pl-2 font-medium">Layer</th>
-              <th class="text-right py-1 font-medium">Per Box</th>
-              <th class="text-right py-1 pr-2 font-medium">Per KG</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(layer, idx) in results?.cost?.layers" :key="idx" class="border-b border-slate-100">
-              <td class="py-1.5 pl-2 text-slate-600">{{ layer.name }}</td>
-              <td class="py-1.5 text-right font-mono">{{ fmtMoney(layer.cost) }}</td>
-              <td class="py-1.5 pr-2 text-right font-mono text-slate-500">{{ fmtMoney(perKgFromBox(layer.cost)) }}/kg</td>
-            </tr>
-          </tbody>
-        </table>
-      </details>
-
-      <div class="mb-3">
-        <div class="text-xs font-bold uppercase text-slate-500 mb-2">Material</div>
-        <table class="w-full text-sm">
-          <thead>
-            <tr class="text-slate-500 border-b border-slate-200">
-              <th class="text-left py-1.5 font-medium">Line</th>
-              <th class="text-right py-1.5 font-medium">Per Box</th>
-              <th class="text-right py-1.5 font-medium">Per KG</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in materialCostRows"
-              :key="row.label"
-              :class="[
-                'border-b border-slate-100',
-                row.bold ? 'bg-slate-50' : '',
-                row.highlight === 'orange' ? 'text-orange-700' : '',
-              ]"
-            >
-              <td class="py-1.5 pl-2" :class="row.bold ? 'font-semibold' : 'text-slate-600'">{{ row.label }}</td>
-              <td class="py-1.5 text-right font-mono" :class="row.bold ? 'font-semibold' : ''">{{ fmtMoney(row.perBox) }}</td>
-              <td class="py-1.5 text-right font-mono text-slate-500" :class="row.bold ? 'font-semibold text-slate-600' : ''">{{ fmtMoney(row.perKg) }}/kg</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
       <table class="w-full text-sm">
         <thead>
-          <tr class="text-slate-500 border-b border-slate-200">
+          <tr class="text-slate-500 border-b-2 border-slate-200">
             <th class="text-left py-1.5 font-medium">Line</th>
-            <th class="text-right py-1.5 font-medium">Per Box</th>
-            <th class="text-right py-1.5 font-medium">Per KG</th>
+            <th class="text-right py-1.5 font-medium">Per Box (₹)</th>
+            <th class="text-right py-1.5 font-medium">Per KG (₹)</th>
           </tr>
         </thead>
         <tbody>
+          <tr class="bg-slate-50">
+            <td colspan="3" class="py-1.5 pl-2 text-xs font-bold uppercase text-slate-500">Material</td>
+          </tr>
+          <tr
+            v-for="row in materialCostRows"
+            :key="'mat-' + row.label"
+            :class="[
+              'border-b border-slate-100',
+              row.bold ? 'bg-slate-50' : '',
+              row.highlight === 'orange' ? 'text-orange-700' : '',
+            ]"
+          >
+            <td class="py-1.5 pl-2" :class="row.bold ? 'font-semibold' : 'text-slate-600'">{{ row.label }}</td>
+            <td class="py-1.5 text-right font-mono" :class="row.bold ? 'font-semibold' : ''">{{ fmtMoney(row.perBox) }}</td>
+            <td class="py-1.5 text-right font-mono text-slate-500" :class="row.bold ? 'font-semibold text-slate-600' : ''">{{ fmtMoney(row.perKg) }}</td>
+          </tr>
           <tr
             v-for="row in costRowsAfterMaterial"
             :key="row.label"
@@ -563,10 +532,10 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
               }"
             >
               <template v-if="row.shippingStyle">
-                <span class="text-[10px]">{{ fmtMoney(row.perKg) }}/kg</span>
+                <span class="text-[10px]">{{ fmtMoney(row.perKg) }}</span>
               </template>
               <template v-else>
-                {{ fmtMoney(row.perKg) }}/kg
+                {{ fmtMoney(row.perKg) }}
               </template>
             </td>
           </tr>
