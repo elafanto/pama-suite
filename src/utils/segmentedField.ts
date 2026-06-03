@@ -1,4 +1,4 @@
-/** Segmented GSTIN (2+5+5+3) and Indian mobile (5+5) field helpers. */
+/** Segmented GSTIN (2+5+5+3) and Indian mobile (4+3+3) field helpers. */
 
 export type SegmentKind = 'digits' | 'alnum'
 
@@ -8,7 +8,7 @@ export type SegmentedFieldConfig = {
 }
 
 export const GSTIN_SEGMENT_LENGTHS = [2, 5, 5, 3] as const
-export const MOBILE_SEGMENT_LENGTHS = [5, 5] as const
+export const MOBILE_SEGMENT_LENGTHS = [4, 3, 3] as const
 
 export const GSTIN_SEGMENT_CONFIG: SegmentedFieldConfig = {
   lengths: GSTIN_SEGMENT_LENGTHS,
@@ -17,7 +17,7 @@ export const GSTIN_SEGMENT_CONFIG: SegmentedFieldConfig = {
 
 export const MOBILE_SEGMENT_CONFIG: SegmentedFieldConfig = {
   lengths: MOBILE_SEGMENT_LENGTHS,
-  kinds: ['digits', 'digits'],
+  kinds: ['digits', 'digits', 'digits'],
 }
 
 const DIGIT_RE = /[0-9]/
