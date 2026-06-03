@@ -197,6 +197,7 @@ function applyPreset(layerIdx: number, preset: { gsm: number; bf: number; rate: 
   const layer = form.layers[layerIdx]
   layer.gsm = preset.gsm
   layer.bf = preset.bf
+  layer.rate = preset.rate
 }
 
 function onPaperTypeChange(layerIdx: number) {
@@ -288,19 +289,20 @@ async function confirmSaveRecipe() {
 }
 
 function migrateCostFields(target: BoxCalcForm & { conversionCost?: number; shippingCost?: number; conversionCostPerKg?: number }) {
-  if (target.conversionCost != null && !target.conversionSlabs?.length) {
-    delete target.conversionCost
-  }
-  if (target.conversionCostPerKg != null && !target.conversionSlabs?.length) {
-    delete target.conversionCostPerKg
-  }
-  if (target.shippingCost != null && target.shippingCostPerKg == null) {
-    target.shippingCostPerKg = target.shippingCost
-    delete target.shippingCost
-  }
   if (!target.conversionSlabs?.length) {
     target.conversionSlabs = defaultConversionSlabs()
   }
+  const legacyPerKg = target.conversionCostPerKg ?? target.conversionCost
+  if (legacyPerKg != null && Number.isFinite(Number(legacyPerKg))) {
+    const rate = Number(legacyPerKg)
+    target.conversionSlabs = target.conversionSlabs.map((s) => ({ ...s, ratePerKg: rate }))
+  }
+  if (target.shippingCost != null && target.shippingCostPerKg == null) {
+    target.shippingCostPerKg = Number(target.shippingCost)
+  }
+  delete target.conversionCost
+  delete target.conversionCostPerKg
+  delete (target as { shippingCost?: number }).shippingCost
 }
 
 function loadRecipe(rec: Recipe) {
@@ -683,7 +685,7 @@ onMounted(async () => {
               <div><label class="pp-label">Scrap ₹/kg</label><input v-model.number="form.scrapRate" type="number" class="pp-input" /></div>
             </div>
             <div class="mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3">
-              <div class="text-xs font-bold text-amber-900 mb-2">Conversion Slabs (₹/kg × paper weight)</div>
+              <div class="text-xs font-bold text-amber-900 mb-2">Conversion Slabs (₹/kg × finished box weight)</div>
               <div class="space-y-1.5">
                 <div v-for="(slab, idx) in form.conversionSlabs" :key="idx" class="grid grid-cols-[1fr_5rem] gap-2 items-center text-xs">
                   <span class="text-amber-800 font-medium">{{ slab.label }}</span>

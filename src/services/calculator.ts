@@ -251,9 +251,10 @@ export interface ConversionSlab {
   ratePerKg: number
 }
 
+// Boundaries: [min, max) in grams — e.g. 2000 g stays in 1–2 kg, 2001 g+ is > 2 kg
 export const DEFAULT_CONVERSION_SLABS: ConversionSlab[] = [
-  { label: '> 2 kg', minWeightGm: 2000, maxWeightGm: null, ratePerKg: 4 },
-  { label: '1–2 kg', minWeightGm: 1000, maxWeightGm: 2000, ratePerKg: 5 },
+  { label: '> 2 kg', minWeightGm: 2001, maxWeightGm: null, ratePerKg: 4 },
+  { label: '1–2 kg', minWeightGm: 1000, maxWeightGm: 2001, ratePerKg: 5 },
   { label: '500g–1 kg', minWeightGm: 500, maxWeightGm: 1000, ratePerKg: 6 },
   { label: '< 500 g', minWeightGm: 0, maxWeightGm: 500, ratePerKg: 7 },
 ]
@@ -626,9 +627,11 @@ export function calculate(input: any) {
   const shippingPaperWeightKg = paperWeightTotal / 1000
   const shippingCost = shippingPerKg * shippingPaperWeightKg
 
-  const conversionSlab = resolveConversionSlab(paperWeightTotal, input.conversionSlabs)
+  // Conversion slab & charge use finished box weight (net sheet − slot + joining)
+  const conversionWeightKg = boxWeightGm / 1000
+  const conversionSlab = resolveConversionSlab(boxWeightGm, input.conversionSlabs)
   const conversionPerKg = conversionSlab.ratePerKg
-  const conversionCost = conversionPerKg * shippingPaperWeightKg
+  const conversionCost = conversionPerKg * conversionWeightKg
 
   const wastagePercent = (parseFloat(input.productionWastePercent) || 3) / 100
   const wastageCost = (paperCostTotal + starchCost + pinCost + joiningCost) * wastagePercent
@@ -639,7 +642,7 @@ export function calculate(input: any) {
 
   const joiningLabel =
     joiningMethod.method === 'fevicol' ? 'Fevicol'
-    : joiningMethod.method === 'both' ? 'Fevicol'
+    : joiningMethod.method === 'both' ? 'Staple + Fevicol'
     : 'Staple'
 
   // Margin applies to Material + Conversion + Shipping only
@@ -729,7 +732,7 @@ export function calculate(input: any) {
     conversion: {
       ratePerKg: conversionPerKg,
       slabLabel: conversionSlab.label,
-      paperWeightKg: shippingPaperWeightKg,
+      paperWeightKg: conversionWeightKg,
       total: conversionCost,
     },
     shipping: {
@@ -853,7 +856,7 @@ export function calculate(input: any) {
       conversion: conversionCost,
       conversionPerKg,
       conversionSlabLabel: conversionSlab.label,
-      conversionPaperWeightKg: shippingPaperWeightKg,
+      conversionPaperWeightKg: conversionWeightKg,
       conversionBoxWeightKg: boxWeightKg,
       wastage: wastageCost,
       materialSubtotal,

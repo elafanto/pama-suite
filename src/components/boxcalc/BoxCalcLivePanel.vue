@@ -28,15 +28,27 @@ type PricingRow = { label: string; perKg: number; perBox: number; bold?: boolean
 
 const mainRows = computed((): PricingRow[] => {
   const p = pricing.value
+  const c = cost.value
   if (!p) return []
-  return [
+  const rows: PricingRow[] = [
     { label: 'Material', perKg: p.perKg.material, perBox: p.perBox.material },
     { label: 'Conversion', perKg: p.perKg.conversion, perBox: p.perBox.conversion },
     { label: 'Shipping', perKg: p.perKg.shipping, perBox: p.perBox.shipping, bold: true },
-    { label: 'Subtotal', perKg: p.perKg.subtotal, perBox: p.perBox.subtotal },
-    { label: `Margin (${fmt(cost.value?.marginPercent, 1)}%)`, perKg: p.perKg.margin, perBox: p.perBox.margin },
-    { label: 'Grand Total', perKg: p.perKg.grandTotal, perBox: p.perBox.grandTotal, bold: true },
+    { label: 'Subtotal (M+C+S)', perKg: p.perKg.subtotal, perBox: p.perBox.subtotal },
   ]
+  const paperKg = c?.shippingPaperWeightKg ?? 0
+  if (c?.printing) {
+    rows.push({
+      label: 'Printing',
+      perKg: paperKg > 0 ? c.printing / paperKg : 0,
+      perBox: c.printing,
+    })
+  }
+  rows.push(
+    { label: `Margin (${fmt(c?.marginPercent, 1)}%)`, perKg: p.perKg.margin, perBox: p.perBox.margin },
+    { label: 'Grand Total', perKg: p.perKg.grandTotal, perBox: p.perBox.grandTotal, bold: true },
+  )
+  return rows
 })
 
 const sheetRows = computed((): PricingRow[] => {
@@ -100,10 +112,6 @@ const sheetRows = computed((): PricingRow[] => {
             <span>{{ pricing?.material.joiningLabel }}</span>
             <span class="font-mono">{{ fmtMoney(pricing?.material.joining) }}</span>
           </div>
-          <div v-else-if="form.joining.method === 'stitching'" class="flex justify-between text-slate-600">
-            <span>Staple</span>
-            <span class="font-mono text-slate-400">—</span>
-          </div>
           <div v-if="pricing?.material.wastage" class="flex justify-between text-orange-600">
             <span>Wastage</span>
             <span class="font-mono">{{ fmtMoney(pricing?.material.wastage) }}</span>
@@ -118,7 +126,7 @@ const sheetRows = computed((): PricingRow[] => {
       <!-- Conversion -->
       <div class="mb-2 text-[11px]">
         <div class="flex justify-between text-slate-600">
-          <span>Conversion ({{ fmt(cost?.conversionPerKg, 0) }}/kg × {{ fmt(cost?.conversionPaperWeightKg, 3) }} kg)</span>
+          <span>Conversion ({{ fmt(cost?.conversionPerKg, 0) }}/kg × {{ fmt(cost?.conversionPaperWeightKg, 3) }} kg box)</span>
           <span class="font-mono">{{ fmtMoney(pricing?.conversion.total) }}</span>
         </div>
       </div>

@@ -28,9 +28,17 @@ defineEmits<{
 const diagramSvg = computed(() => getSheetDiagramSVG(props.results))
 
 const boxWeightKg = computed(() => (props.results?.weight?.boxTotal || 0) / 1000)
+/** Per-kg cost divisor matches calculator (layer paper weight, not finished box). */
+const costPerKgDivisor = computed(
+  () => props.results?.cost?.shippingPaperWeightKg ?? (props.results?.weight?.paperTotal || 0) / 1000,
+)
 
-function perKgFromBox(perBox: number) {
+function perKgFromBoxWeight(perBox: number) {
   return boxWeightKg.value > 0 ? perBox / boxWeightKg.value : 0
+}
+
+function perKgFromCost(perBox: number) {
+  return costPerKgDivisor.value > 0 ? perBox / costPerKgDivisor.value : 0
 }
 
 function stackRatingClass(passes: boolean) {
@@ -60,7 +68,7 @@ const weightRows = computed((): DualRow[] => {
       highlight: 'blue',
     },
     { label: 'BOX WEIGHT (Final)', perBox: w.boxTotal, bold: true, highlight: 'green' },
-  ].map((row) => ({ ...row, perKg: perKgFromBox(row.perBox) }))
+  ].map((row) => ({ ...row, perKg: perKgFromBoxWeight(row.perBox) }))
 })
 
 type CostDualRow = DualRow & { shippingStyle?: boolean; marginNegative?: boolean }
@@ -79,7 +87,7 @@ const materialCostRows = computed((): CostDualRow[] => {
   }
   if (c.wastage) rows.push({ label: 'Wastage', perBox: c.wastage, highlight: 'orange' })
   rows.push({ label: 'Material Subtotal', perBox: c.materialSubtotal ?? 0, bold: true })
-  return rows.map((row) => ({ ...row, perKg: perKgFromBox(row.perBox) }))
+  return rows.map((row) => ({ ...row, perKg: perKgFromCost(row.perBox) }))
 })
 
 const costRowsAfterMaterial = computed((): CostDualRow[] => {
@@ -87,7 +95,7 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
   if (!c) return []
   const rows: CostDualRow[] = [
     {
-      label: `Conversion (${fmt(c.conversionPerKg, 0)}/kg × ${fmt(c.conversionPaperWeightKg, 3)} kg)`,
+      label: `Conversion (${fmt(c.conversionPerKg, 0)}/kg × ${fmt(c.conversionPaperWeightKg ?? c.conversionBoxWeightKg, 3)} kg box)`,
       perBox: c.conversion ?? 0,
     },
     { label: 'Shipping', perBox: c.shipping ?? 0, shippingStyle: true },
@@ -100,7 +108,7 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
     marginNegative: (c.margin ?? 0) < 0,
   })
   rows.push({ label: 'SELLING PRICE', perBox: c.sellingPrice ?? 0, bold: true, highlight: 'sell' })
-  return rows.map((row) => ({ ...row, perKg: perKgFromBox(row.perBox) }))
+  return rows.map((row) => ({ ...row, perKg: perKgFromCost(row.perBox) }))
 })
 </script>
 
@@ -381,12 +389,12 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
             <tr v-for="(layer, idx) in results?.weight?.layers" :key="idx" class="border-b border-slate-100">
               <td class="py-1.5 pl-2">{{ layer.name }}</td>
               <td class="py-1.5 text-right font-mono">{{ fmt(layer.weightGm, 2) }} gm</td>
-              <td class="py-1.5 pr-2 text-right font-mono text-slate-500">{{ fmt(perKgFromBox(layer.weightGm), 1) }} gm/kg</td>
+              <td class="py-1.5 pr-2 text-right font-mono text-slate-500">{{ fmt(perKgFromBoxWeight(layer.weightGm), 1) }} gm/kg</td>
             </tr>
             <tr class="bg-slate-50">
               <td class="py-1.5 pl-2 font-semibold">Paper Subtotal</td>
               <td class="py-1.5 text-right font-mono font-semibold">{{ fmt(results?.weight?.paperTotal, 2) }} gm</td>
-              <td class="py-1.5 pr-2 text-right font-mono font-semibold text-slate-600">{{ fmt(perKgFromBox(results?.weight?.paperTotal || 0), 1) }} gm/kg</td>
+              <td class="py-1.5 pr-2 text-right font-mono font-semibold text-slate-600">{{ fmt(perKgFromBoxWeight(results?.weight?.paperTotal || 0), 1) }} gm/kg</td>
             </tr>
           </tbody>
         </table>
