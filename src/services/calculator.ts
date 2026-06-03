@@ -383,17 +383,17 @@ export function calculate(input: CalcInput) {
     outerH = innerH + 2.7 * t
   }
 
-  // Blank & machine setup always work from OUTER dimensions, so a box entered
-  // by its inner dims and the same box entered by its outer dims produce an
-  // identical sheet. The outer-spec blank is the physically correct one (board
-  // thickness is absorbed into the slightly smaller inside). Previously inner
-  // mode added an extra per-panel caliper + fold clearance, so the two entry
-  // modes disagreed for the same box — outer mode output is unchanged here.
-  const wrapL = outerL
-  const wrapW = outerW
-  const wrapH = outerH
-  const effectiveT = 0
-  const effectiveClearance = 0
+  // Blank & machine setup always work from INNER dimensions plus the standard
+  // RSC scoring allowances — roughly one caliper of board take-up per fold
+  // (Fibre Box Handbook convention) plus a fold clearance. Outer-entered boxes
+  // are converted back to inner above, so a box entered by its inner dims and
+  // the same box entered by its outer dims produce an identical, standards-
+  // correct sheet, slots and creases.
+  const wrapL = innerL
+  const wrapW = innerW
+  const wrapH = innerH
+  const effectiveT = caliper
+  const effectiveClearance = MACHINE_LIMITS.clearanceMM
 
   // Sheet Size Sizing
   const sheetLength = 2 * (wrapL + effectiveT) + 2 * (wrapW + effectiveT) + glueFlap
@@ -869,7 +869,8 @@ export function calculate(input: CalcInput) {
       length: sheetLength,
       width: sheetWidth,
       areaM2: sheetAreaM2,
-      areaMM2: sheetLength * sheetWidth
+      areaMM2: sheetLength * sheetWidth,
+      clearanceMM: effectiveClearance
     },
     construction: {
       pieces,

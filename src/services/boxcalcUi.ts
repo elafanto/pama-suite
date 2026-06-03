@@ -549,6 +549,7 @@ export function getSheetDiagramSVG(results: any): string {
 
   const sheetL = r.sheet.length
   const sheetW = r.sheet.width
+  const clearance = r.sheet?.clearanceMM ?? 6
   const W1 = r.machineSetup.creases.topCrease
   const W2 = r.machineSetup.creases.bottomCrease
   const slots = r.machineSetup.slots.slots || []
@@ -595,7 +596,7 @@ export function getSheetDiagramSVG(results: any): string {
   inner += `<text x="${drawX - 8}" y="${w1Y + 4}" font-size="10" fill="#1d4ed8" text-anchor="end" font-weight="bold" font-family="monospace">W1: ${Math.round(W1)}</text>`
   inner += `<text x="${drawX - 8}" y="${w2Y + 4}" font-size="10" fill="#1d4ed8" text-anchor="end" font-weight="bold" font-family="monospace">W2: ${Math.round(W2)}</text>`
   inner += `<text x="${drawX + drawW + 8}" y="${drawY + (W1 * scaleY) / 2 + 4}" font-size="9" fill="#92400e" text-anchor="start" font-family="monospace">Top Flap ${Math.round(W1)}</text>`
-  inner += `<text x="${drawX + drawW + 8}" y="${w2Y + (drawH - W2 * scaleY) / 2 + 4}" font-size="9" fill="#92400e" text-anchor="start" font-family="monospace">Bot Flap ${Math.round(sheetW - W2 - 6)}</text>`
+  inner += `<text x="${drawX + drawW + 8}" y="${w2Y + (drawH - W2 * scaleY) / 2 + 4}" font-size="9" fill="#92400e" text-anchor="start" font-family="monospace">Bot Flap ${Math.round(sheetW - W2 - clearance)}</text>`
 
   if (lastPanel?.name?.includes('Glue')) {
     const cx = drawX + (lastPanel.start + lastPanel.width / 2) * scaleX

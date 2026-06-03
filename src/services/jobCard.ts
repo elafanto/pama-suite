@@ -659,6 +659,7 @@ const JobCardGenerator = (function () {
     const f = data.form;
     const r = data.results;
     const jc = f.jobCard;
+    const clearance = r.sheet?.clearanceMM ?? 6;
 
     // Slitter blades
     const bladesHTML = r.machineSetup.slitterBlades.map((b: any) =>
@@ -725,8 +726,8 @@ const JobCardGenerator = (function () {
           <tr>
             <td class="center bold" style="background:#fef3c7">टॉप फ्लैप<br>${fmtInt(r.machineSetup.creases.topCrease)} mm</td>
             <td class="center" style="background:#dbeafe">बॉडी<br>${fmtInt(r.machineSetup.creases.bottomCrease - r.machineSetup.creases.topCrease)} mm</td>
-            <td class="center bold" style="background:#fef3c7">बॉटम फ्लैप<br>${fmtInt(r.sheet.width - r.machineSetup.creases.bottomCrease - 6)} mm</td>
-            <td class="center smaller" style="background:#f1f5f9">Clear<br>6 mm</td>
+            <td class="center bold" style="background:#fef3c7">बॉटम फ्लैप<br>${fmtInt(r.sheet.width - r.machineSetup.creases.bottomCrease - clearance)} mm</td>
+            <td class="center smaller" style="background:#f1f5f9">Clear<br>${fmtInt(clearance)} mm</td>
           </tr>
         </table>
 

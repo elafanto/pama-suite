@@ -105,15 +105,12 @@ describe('calculate — 3-ply RSC (inner dims)', () => {
     expect(res.dimensions.outer.H).toBeCloseTo(150 + 2.7 * 3.2, 5)
   })
 
-  it('computes the blank from outer dims (board thickness absorbed inward)', () => {
+  it('computes the blank from inner dims + standard scoring allowances', () => {
     const t = 3.2
-    const outerL = 300 + 1.5 * t
-    const outerW = 200 + 1.5 * t
-    const outerH = 150 + 2.7 * t
-    // sheetLength = 2*outerL + 2*outerW + glueFlap(3-ply=35)
-    expect(res.sheet.length).toBeCloseTo(2 * outerL + 2 * outerW + 35, 4)
-    // sheetWidth = outerW + outerH (body + top/bottom half-flaps)
-    expect(res.sheet.width).toBeCloseTo(outerW + outerH, 4)
+    // each panel + ~1 caliper of fold take-up, + glueFlap(3-ply=35)
+    expect(res.sheet.length).toBeCloseTo(2 * (300 + t) + 2 * (200 + t) + 35, 4)
+    // sheetWidth = innerW + innerH + caliper + fold clearance(6)
+    expect(res.sheet.width).toBeCloseTo(200 + 150 + t + 6, 4)
   })
 
   it('uses 1-piece construction for a small box', () => {
