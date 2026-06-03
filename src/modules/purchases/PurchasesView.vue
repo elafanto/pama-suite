@@ -1304,7 +1304,7 @@ onMounted(() => {
             </div>
             <div>
               <label class="pp-label">GSTIN</label>
-              <input v-model="bill.gstin" class="pp-input" placeholder="GSTIN" />
+              <input v-model="bill.gstin" class="pp-input uppercase" placeholder="GSTIN" />
             </div>
           </div>
           <div class="overflow-x-auto">

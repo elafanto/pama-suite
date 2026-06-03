@@ -5,6 +5,7 @@ import { usePurchaseStore } from '@/stores/purchases'
 import { numberToWords } from '@/services/numberToWords'
 import { getPendingRTGS, clearPendingRTGS } from '@/services/rtgsBridge'
 import PpModal from '@/components/PpModal.vue'
+import { formatGstin } from '@/services/gst'
 
 interface SavedBene {
   name: string
@@ -601,7 +602,7 @@ onMounted(async () => {
                   <select v-model="b.partyId" class="pp-input text-xs" @change="onPartyChange(idx)">
                     <option :value="null">Custom Beneficiary (Not Linked)</option>
                     <option v-for="p in partyStore.list" :key="p.id" :value="p.id">
-                      {{ p.name }} {{ p.gst ? `(GST: ${p.gst})` : '' }}
+                      {{ p.name }} {{ p.gst ? `(GST: ${formatGstin(p.gst)})` : '' }}
                     </option>
                   </select>
                 </div>

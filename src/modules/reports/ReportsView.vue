@@ -12,7 +12,9 @@ import {
   cashBookFromVouchers, ewayInvoices, itemSalesReport, getStateName, getStateCode,
 } from '@/services/reports'
 import { recentActivity } from '@/services/activityLog'
+import { displayGstinForInvoice } from '@/services/invoiceDisplay'
 import type { ActivityLog } from '@/types/models'
+import type { Invoice } from '@/types/models'
 
 const tab = ref<'b2b' | 'b2c' | 'hsn' | 'items' | 'outstanding' | 'cashbook' | 'eway' | 'activity' | 'deleted'>('b2b')
 const from = ref('')
@@ -45,6 +47,11 @@ const pagedActivity = computed(() => {
   return filteredActivity.value.slice(start, start + ACTIVITY_PAGE_SIZE)
 })
 const activityTotalPages = computed(() => Math.max(1, Math.ceil(filteredActivity.value.length / ACTIVITY_PAGE_SIZE)))
+
+function reportInvoiceGst(b: Invoice) {
+  const live = b.party_id ? partyStore.list.find((p) => !p.is_deleted && p.id === b.party_id) : undefined
+  return displayGstinForInvoice(b, live) || '—'
+}
 
 const ACTION_COLOR: Record<string, string> = {
   create: 'bg-emerald-100 text-emerald-700',
@@ -198,7 +205,7 @@ function exportItemSales() {
             <td class="p-2">{{ b.date }}</td>
             <td>{{ b.bill_no }}</td>
             <td>{{ b.party_name }}</td>
-            <td class="font-mono text-xs">{{ b.party_snapshot?.gst || b.ship?.gstin }}</td>
+            <td class="font-mono text-sm font-semibold">{{ reportInvoiceGst(b) }}</td>
             <td>{{ getStateName(getStateCode(b.party_snapshot?.gst || '')) }}</td>
             <td class="text-right">₹{{ n2(b.sub) }}</td>
             <td class="text-right">₹{{ n2(b.total_tax) }}</td>

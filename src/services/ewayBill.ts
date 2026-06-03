@@ -1,4 +1,9 @@
 import { getStateCode, isGstinValid } from '@/services/gst'
+import {
+  resolveLivePartyDetails,
+  resolvePartyById,
+  type PartyLookup,
+} from '@/services/invoiceDisplay'
 import type { Firm, Invoice, Party } from '@/types/models'
 
 const EWAY_THRESHOLD = 50000
@@ -82,11 +87,12 @@ function validPin(pin: unknown) {
   return /^\d{6}$/.test(String(pin || '').trim())
 }
 
-function partyDetails(inv: Invoice): Partial<Party> {
-  return (inv.party_snapshot || {}) as Partial<Party>
+function partyDetails(inv: Invoice, partyLookup?: PartyLookup): Partial<Party> {
+  const live = resolvePartyById(partyLookup, inv.party_id)
+  return resolveLivePartyDetails(inv, live)
 }
 
-export function validateEwayInvoice(inv: Invoice, firm: Firm): string[] {
+export function validateEwayInvoice(inv: Invoice, firm: Firm, partyLookup?: PartyLookup): string[] {
   const errors: string[] = []
   if (!isGstinValid(firm.gst)) errors.push('Firm GSTIN valid nahi hai')
   if (!firm.addr?.trim()) errors.push('Firm address missing hai')
@@ -96,7 +102,7 @@ export function validateEwayInvoice(inv: Invoice, firm: Firm): string[] {
   if (!firmState) errors.push('Firm state code missing hai')
 
   if (!(inv.vehicle || '').trim()) errors.push(`${inv.bill_no}: vehicle number missing hai`)
-  const cust = partyDetails(inv)
+  const cust = partyDetails(inv, partyLookup)
   const hasShip = inv.sameAsBuyer === false && inv.ship && inv.ship.addr
   const addr = cust.addr || (hasShip ? inv.ship?.addr : '')
   const city = cust.city || (hasShip ? inv.ship?.city : '')
@@ -114,13 +120,13 @@ export function validateEwayInvoice(inv: Invoice, firm: Firm): string[] {
 }
 
 /** NIC e-Way bulk JSON (PamaTools / v1.0.0621 compatible). */
-export function buildEwayJson(invoices: Invoice[], firm: Firm) {
+export function buildEwayJson(invoices: Invoice[], firm: Firm, partyLookup?: PartyLookup) {
   const fromSC = parseInt(firm.state, 10) || parseInt(getStateCode(firm.gst) || '0', 10) || 0
   const fromGstn = cleanGstin(firm.gst)
 
   const billLists = invoices.map((b) => {
     const isInter = b.gst_type === 'inter' || b.gst_type === 'IGST'
-    const cust = partyDetails(b)
+    const cust = partyDetails(b, partyLookup)
     const buyerGst = cleanGstin(cust.gst || '')
     const toGstin = buyerGst
     const toSC = toGstin !== 'URP'
@@ -208,13 +214,13 @@ export function buildEwayJson(invoices: Invoice[], firm: Firm) {
   return { version: '1.0.0621', billLists }
 }
 
-export function downloadEwayJson(invoices: Invoice[], firm: Firm) {
+export function downloadEwayJson(invoices: Invoice[], firm: Firm, partyLookup?: PartyLookup) {
   if (!invoices.length) throw new Error('Koi bill select nahi')
   if (!firm) throw new Error('Active firm set karein')
-  const errors = invoices.flatMap((inv) => validateEwayInvoice(inv, firm))
+  const errors = invoices.flatMap((inv) => validateEwayInvoice(inv, firm, partyLookup))
   if (errors.length) throw new Error(errors.slice(0, 8).join('\n'))
 
-  const json = buildEwayJson(invoices, firm)
+  const json = buildEwayJson(invoices, firm, partyLookup)
   if (!json.billLists.length) throw new Error('Valid bills nahi mili')
 
   const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' })

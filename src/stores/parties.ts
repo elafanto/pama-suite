@@ -4,6 +4,7 @@ import { db } from '@/data/db'
 import { createRepo } from '@/data/repo'
 import { useFirmStore } from './firm'
 import { logActivity } from '@/services/activityLog'
+import { formatGstin } from '@/services/gst'
 import type { Party, PartyRole } from '@/types/models'
 
 const repo = createRepo<Party>(db.parties)
@@ -25,14 +26,19 @@ export const usePartyStore = defineStore('parties', () => {
 
   async function add(data: NewParty): Promise<Party> {
     const firm = useFirmStore()
-    const rec = await repo.create({ ...data, firm_id: firm.activeFirmId } as any)
+    const rec = await repo.create({
+      ...data,
+      gst: formatGstin(data.gst),
+      firm_id: firm.activeFirmId,
+    } as any)
     await logActivity(firm.activeFirmId, 'create', 'party', rec.id, `Party ${rec.name} added`)
     await load()
     return rec
   }
 
   async function update(id: string, patch: Partial<Party>) {
-    const rec = await repo.update(id, patch)
+    const normalized = patch.gst !== undefined ? { ...patch, gst: formatGstin(patch.gst) } : patch
+    const rec = await repo.update(id, normalized)
     if (rec) await logActivity(rec.firm_id, 'update', 'party', rec.id, `Party ${rec.name} updated`)
     await load()
   }

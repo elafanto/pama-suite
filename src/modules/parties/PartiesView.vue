@@ -5,7 +5,7 @@ import PpModal from '@/components/PpModal.vue'
 import SegmentedFieldInput from '@/components/SegmentedFieldInput.vue'
 import { usePartyStore, type NewParty } from '@/stores/parties'
 import type { Party, PartyRole } from '@/types/models'
-import { validateGstinForForm } from '@/services/gst'
+import { validateGstinForForm, formatGstin } from '@/services/gst'
 import { fetchIfscDetails, isValidIfsc, toUpperTrim } from '@/services/partyLookup'
 
 const store = usePartyStore()
@@ -132,8 +132,9 @@ async function save() {
   if (!form.name.trim()) return alert('Name required')
   if (form.roles.length === 0) form.roles.push('customer')
   if (form.gst && !form.state) form.state = form.gst.slice(0, 2)
-  if (editingId.value) await store.update(editingId.value, { ...form })
-  else await store.add({ ...form })
+  const payload = { ...form, gst: formatGstin(form.gst) }
+  if (editingId.value) await store.update(editingId.value, payload)
+  else await store.add(payload)
   showModal.value = false
 }
 function openDelete(p: Party) {
@@ -204,7 +205,7 @@ onMounted(store.load)
                 {{ r }}
               </span>
             </td>
-            <td class="px-4 py-2.5 hidden sm:table-cell text-slate-600">{{ p.gst || '—' }}</td>
+            <td class="px-4 py-2.5 hidden sm:table-cell font-mono text-sm font-semibold text-slate-700">{{ formatGstin(p.gst) || '—' }}</td>
             <td class="px-4 py-2.5 hidden md:table-cell text-slate-600">{{ p.phone || '—' }}</td>
             <td class="px-4 py-2.5 hidden lg:table-cell text-slate-600">{{ p.city || '—' }}</td>
             <td class="px-4 py-2.5 text-right whitespace-nowrap">

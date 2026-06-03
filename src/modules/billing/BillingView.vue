@@ -6,11 +6,12 @@ import { useItemStore, type NewItem } from '@/stores/items'
 import { useInvoiceStore } from '@/stores/invoices'
 import { useAccountingStore } from '@/stores/accounting'
 import { usePurchaseStore } from '@/stores/purchases'
-import { getStateName, getStateCode, isGstinValid } from '@/services/gst'
+import { getStateName, getStateCode, isGstinValid, formatGstin } from '@/services/gst'
 import { numberToWords } from '@/services/numberToWords'
 import { openStatementPrint } from '@/services/billingStatements'
 import { getEwayEligibility, downloadEwayJson } from '@/services/ewayBill'
 import { downloadInvoicePdf, bulkDownloadInvoicePdf } from '@/services/invoicePdf'
+import { resolveLivePartyDetails, resolveLiveShipDetails, type PartyLookup } from '@/services/invoiceDisplay'
 import { peekBillNo } from '@/services/invoiceNumber'
 import { listItemStockMovements } from '@/services/inventoryLedger'
 import { computeStock, findStockRowForLine } from '@/services/stock'
@@ -80,6 +81,23 @@ const payWriteOff = ref(false)
 // Print Preview State
 const showPrintPreview = ref(false)
 const previewInvoice = ref<Invoice | null>(null)
+
+const partyLookup: PartyLookup = (partyId) => {
+  if (!partyId) return undefined
+  return partyStore.list.find((p) => !p.is_deleted && p.id === partyId)
+}
+
+const previewBuyerDetails = computed(() => {
+  if (!previewInvoice.value) return {}
+  const live = partyLookup(previewInvoice.value.party_id)
+  return resolveLivePartyDetails(previewInvoice.value, live)
+})
+
+const previewShipDetails = computed(() => {
+  if (!previewInvoice.value) return null
+  const live = partyLookup(previewInvoice.value.party_id)
+  return resolveLiveShipDetails(previewInvoice.value, live)
+})
 
 // Templates State (loaded from localStorage for simplicity and persistence)
 interface Template {
@@ -188,7 +206,7 @@ function tryAutoEwayDownload(invoice: Invoice): string {
     return '\n\nE-Way: vehicle number transport section me bharein, phir History se JSON download karein.'
   }
   try {
-    downloadEwayJson([invoice], firm)
+    downloadEwayJson([invoice], firm, partyLookup)
     return '\n\nE-Way JSON download ho gaya (1 bill). Upload: ewaybillgst.gov.in → Generate Bulk'
   } catch (e: any) {
     return `\n\nE-Way JSON error: ${e?.message || 'failed'}`
@@ -202,7 +220,7 @@ function downloadEwayForHistoryBill(inv: Invoice) {
   if (!el.show) return alert('Is bill par E-Way JSON nahi banta (amount / type check karein).')
   if (!(inv.vehicle || '').trim()) return alert('Is bill me vehicle number nahi — pehle bill edit karke transport bharein.')
   try {
-    downloadEwayJson([inv], firm)
+    downloadEwayJson([inv], firm, partyLookup)
     alert(`E-Way JSON downloaded for ${inv.bill_no}`)
   } catch (e: any) {
     alert(e.message || 'E-Way JSON failed')
@@ -421,7 +439,7 @@ function downloadSelectedEwayJson() {
   const selected = ewayCandidates.value.filter((b) => ewaySelected.value.includes(b.id))
   if (!selected.length) return alert('Kam se kam ek bill select karein')
   try {
-    const n = downloadEwayJson(selected, firm)
+    const n = downloadEwayJson(selected, firm, partyLookup)
     alert(`${n} E-Way bill JSON download ho gaya. Upload: ewaybillgst.gov.in → Generate Bulk`)
   } catch (e: any) {
     alert(e.message || 'E-Way JSON failed')
@@ -520,7 +538,7 @@ function downloadPDF(inv?: Invoice) {
   const firm = firmStore.activeFirm
   if (!bill || !firm) return alert('Bill ya firm nahi mila')
   try {
-    downloadInvoicePdf(bill, firm)
+    downloadInvoicePdf(bill, firm, partyLookup)
   } catch (e: any) {
     alert('PDF generation failed: ' + (e?.message || 'unknown error'))
   }
@@ -533,7 +551,7 @@ async function bulkDownloadPDF() {
   const selected = invoiceStore.list.filter((b) => selectedHistoryIds.value.includes(b.id))
   if (!selected.length) return alert('Selected bills nahi mile')
   try {
-    const n = await bulkDownloadInvoicePdf(selected, firm)
+    const n = await bulkDownloadInvoicePdf(selected, firm, partyLookup)
     alert(`${n} PDF download ho gaye`)
   } catch (e: any) {
     alert('Bulk PDF failed: ' + (e?.message || 'unknown error'))
@@ -545,7 +563,7 @@ async function sharePDFViaWhatsApp() {
   const firm = firmStore.activeFirm
   if (!inv || !firm) return
   try {
-    downloadInvoicePdf(inv, firm)
+    downloadInvoicePdf(inv, firm, partyLookup)
   } catch { /* continue to WhatsApp */ }
   const msg = encodeURIComponent(
     `Invoice ${inv.bill_no} dated ${inv.date}\nAmount: ₹${n2(inv.grand_total)}\n\nPDF download ho gaya — chat me attach karein.`,
@@ -560,7 +578,7 @@ function sharePDFViaEmail() {
   const firm = firmStore.activeFirm
   if (!inv || !firm) return
   try {
-    downloadInvoicePdf(inv, firm)
+    downloadInvoicePdf(inv, firm, partyLookup)
   } catch { /* continue to email */ }
   const subject = encodeURIComponent(`Invoice ${inv.bill_no} — ${firm.name}`)
   const body = encodeURIComponent(
@@ -639,7 +657,7 @@ async function saveInvoice() {
       pin: customerObj.pin,
       email: customerObj.email,
       phone: customerObj.phone,
-      gst: customerObj.gst,
+      gst: formatGstin(customerObj.gst),
       state: customerObj.state,
       is_consumer: customerObj.is_consumer
     } : { name: form.party_name.trim() },
@@ -689,7 +707,7 @@ async function saveInvoice() {
       const firm = firmStore.activeFirm
       if (firm) {
         try {
-          downloadInvoicePdf(savedInvoice, firm)
+          downloadInvoicePdf(savedInvoice, firm, partyLookup)
         } catch (pdfErr: any) {
           console.warn('PDF after save failed', pdfErr)
         }
@@ -1686,8 +1704,8 @@ onMounted(async () => {
             <h1 class="text-lg font-bold uppercase tracking-wider">{{ firmStore.activeFirm?.name || 'PAMA PACKAGING' }}</h1>
             <p>{{ firmStore.activeFirm?.addr || '' }}</p>
             <p>PIN: {{ firmStore.activeFirm?.pin || '-' }} | Mob: {{ firmStore.activeFirm?.phone || '' }} | Email: {{ firmStore.activeFirm?.email || '-' }}</p>
-            <p class="font-bold mt-1">
-              GSTIN: {{ firmStore.activeFirm?.gst || '-' }} | State: {{ getStateName(firmStore.activeFirm?.gst || firmStore.activeFirm?.state) }} (Code: {{ firmStore.activeFirm?.state || '-' }})
+            <p class="text-sm font-semibold mt-1">
+              GSTIN: {{ formatGstin(firmStore.activeFirm?.gst) || '-' }} | State: {{ getStateName(firmStore.activeFirm?.gst || firmStore.activeFirm?.state) }} (Code: {{ firmStore.activeFirm?.state || '-' }})
             </p>
             <div class="text-center uppercase font-bold text-xs bg-black text-white py-1 mt-2 tracking-widest">
               {{ previewInvoice.doc_type === 'CREDIT_NOTE' ? 'CREDIT NOTE' : (previewInvoice.doc_type === 'DEBIT_NOTE' ? 'DEBIT NOTE' : (previewInvoice.doc_type === 'BILL_OF_SUPPLY' ? 'BILL OF SUPPLY' : 'TAX INVOICE')) }}
@@ -1700,22 +1718,22 @@ onMounted(async () => {
               <td class="w-[35%] border border-black p-2 vertical-align-top text-[11px]">
                 <strong class="block mb-1 border-b border-black pb-0.5">Bill To (Buyer):</strong>
                 <strong>{{ previewInvoice.party_name }}</strong><br />
-                {{ previewInvoice.party_snapshot?.addr || '' }}<br />
-                {{ previewInvoice.party_snapshot?.city }} - {{ previewInvoice.party_snapshot?.pin }}<br />
-                GSTIN: {{ previewInvoice.party_snapshot?.gst || 'URD (Consumer)' }}<br />
-                State: {{ getStateName(previewInvoice.party_snapshot?.gst || previewInvoice.party_snapshot?.state) }} (Code: {{ previewInvoice.party_snapshot?.state || '-' }})
+                {{ previewBuyerDetails.addr || '' }}<br />
+                {{ previewBuyerDetails.city }} - {{ previewBuyerDetails.pin }}<br />
+                <span class="text-sm font-semibold font-mono">GSTIN: {{ previewBuyerDetails.gst || 'URD (Consumer)' }}</span><br />
+                State: {{ getStateName(previewBuyerDetails.gst || previewBuyerDetails.state) }} (Code: {{ previewBuyerDetails.state || '-' }})
               </td>
               <td class="w-[35%] border border-black p-2 vertical-align-top text-[11px]">
                 <strong class="block mb-1 border-b border-black pb-0.5">Ship To (Consignee):</strong>
                 <template v-if="previewInvoice.sameAsBuyer !== false">
                   <em>Same as Buyer</em>
                 </template>
-                <template v-else-if="previewInvoice.ship">
-                  <strong>{{ previewInvoice.ship.name }}</strong><br />
-                  {{ previewInvoice.ship.addr }}<br />
-                  {{ previewInvoice.ship.city }} - {{ previewInvoice.ship.pin }}<br />
-                  GSTIN: {{ previewInvoice.ship.gstin || 'URD' }}<br />
-                  State: {{ getStateName(previewInvoice.ship.gstin || previewInvoice.ship.state) }} (Code: {{ previewInvoice.ship.state || '-' }})
+                <template v-else-if="previewShipDetails">
+                  <strong>{{ previewShipDetails.name }}</strong><br />
+                  {{ previewShipDetails.addr }}<br />
+                  {{ previewShipDetails.city }} - {{ previewShipDetails.pin }}<br />
+                  <span class="text-sm font-semibold font-mono">GSTIN: {{ previewShipDetails.gstin || 'URD' }}</span><br />
+                  State: {{ getStateName(previewShipDetails.gstin || previewShipDetails.state) }} (Code: {{ previewShipDetails.state || '-' }})
                 </template>
               </td>
               <td class="w-[30%] border border-black p-2 vertical-align-top text-[11px] space-y-1">
@@ -1857,8 +1875,8 @@ onMounted(async () => {
         <h1 class="text-lg font-bold uppercase tracking-wider">{{ firmStore.activeFirm?.name || 'PAMA PACKAGING' }}</h1>
         <p>{{ firmStore.activeFirm?.addr || '' }}</p>
         <p>PIN: {{ firmStore.activeFirm?.pin || '-' }}<template v-if="firmStore.activeFirm?.phone"> | Mob: {{ firmStore.activeFirm.phone }}</template> | Email: {{ firmStore.activeFirm?.email || '-' }}</p>
-        <p class="font-bold mt-1">
-          GSTIN: {{ firmStore.activeFirm?.gst || '-' }} | State: {{ getStateName(firmStore.activeFirm?.gst || firmStore.activeFirm?.state) }} (Code: {{ firmStore.activeFirm?.state || '-' }})
+        <p class="text-sm font-semibold mt-1">
+          GSTIN: {{ formatGstin(firmStore.activeFirm?.gst) || '-' }} | State: {{ getStateName(firmStore.activeFirm?.gst || firmStore.activeFirm?.state) }} (Code: {{ firmStore.activeFirm?.state || '-' }})
         </p>
         <div class="text-center uppercase font-bold text-xs bg-black text-white py-1 mt-2 tracking-widest">
           {{ previewInvoice.doc_type === 'CREDIT_NOTE' ? 'CREDIT NOTE' : (previewInvoice.doc_type === 'DEBIT_NOTE' ? 'DEBIT NOTE' : (previewInvoice.doc_type === 'BILL_OF_SUPPLY' ? 'BILL OF SUPPLY' : 'TAX INVOICE')) }}
@@ -1871,22 +1889,22 @@ onMounted(async () => {
           <td class="w-[35%] border border-black p-2 vertical-align-top text-[11px]">
             <strong class="block mb-1 border-b border-black pb-0.5">Bill To (Buyer):</strong>
             <strong>{{ previewInvoice.party_name }}</strong><br />
-            {{ previewInvoice.party_snapshot?.addr || '' }}<br />
-            {{ previewInvoice.party_snapshot?.city }} - {{ previewInvoice.party_snapshot?.pin }}<br />
-            GSTIN: {{ previewInvoice.party_snapshot?.gst || 'URD (Consumer)' }}<br />
-            State: {{ getStateName(previewInvoice.party_snapshot?.gst || previewInvoice.party_snapshot?.state) }} (Code: {{ previewInvoice.party_snapshot?.state || '-' }})
+            {{ previewBuyerDetails.addr || '' }}<br />
+            {{ previewBuyerDetails.city }} - {{ previewBuyerDetails.pin }}<br />
+            <span class="text-sm font-semibold font-mono">GSTIN: {{ previewBuyerDetails.gst || 'URD (Consumer)' }}</span><br />
+            State: {{ getStateName(previewBuyerDetails.gst || previewBuyerDetails.state) }} (Code: {{ previewBuyerDetails.state || '-' }})
           </td>
           <td class="w-[35%] border border-black p-2 vertical-align-top text-[11px]">
             <strong class="block mb-1 border-b border-black pb-0.5">Ship To (Consignee):</strong>
             <template v-if="previewInvoice.sameAsBuyer !== false">
               <em>Same as Buyer</em>
             </template>
-            <template v-else-if="previewInvoice.ship">
-              <strong>{{ previewInvoice.ship.name }}</strong><br />
-              {{ previewInvoice.ship.addr }}<br />
-              {{ previewInvoice.ship.city }} - {{ previewInvoice.ship.pin }}<br />
-              GSTIN: {{ previewInvoice.ship.gstin || 'URD' }}<br />
-              State: {{ getStateName(previewInvoice.ship.gstin || previewInvoice.ship.state) }} (Code: {{ previewInvoice.ship.state || '-' }})
+            <template v-else-if="previewShipDetails">
+              <strong>{{ previewShipDetails.name }}</strong><br />
+              {{ previewShipDetails.addr }}<br />
+              {{ previewShipDetails.city }} - {{ previewShipDetails.pin }}<br />
+              <span class="text-sm font-semibold font-mono">GSTIN: {{ previewShipDetails.gstin || 'URD' }}</span><br />
+              State: {{ getStateName(previewShipDetails.gstin || previewShipDetails.state) }} (Code: {{ previewShipDetails.state || '-' }})
             </template>
           </td>
           <td class="w-[30%] border border-black p-2 vertical-align-top text-[11px] space-y-1">

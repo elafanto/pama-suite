@@ -1,7 +1,13 @@
 import { jsPDF } from 'jspdf'
-import { getStateName, getStateCode } from '@/services/gst'
+import { formatGstin, getStateName, getStateCode } from '@/services/gst'
 import { numberToWords } from '@/services/numberToWords'
 import { fmtDate } from '@/services/boxcalcUi'
+import {
+  resolveLivePartyDetails,
+  resolveLiveShipDetails,
+  resolvePartyById,
+  type PartyLookup,
+} from '@/services/invoiceDisplay'
 import type { Firm, Invoice, Party } from '@/types/models'
 
 function n2(n: number) {
@@ -72,7 +78,7 @@ function toPdfFirm(firm: Firm): PdfFirm {
     pin: firm.pin || '',
     phone: firm.phone || '',
     email: firm.email || '',
-    gst: firm.gst || '',
+    gst: formatGstin(firm.gst),
     state: firm.state || '',
     bank: firmBankText(firm),
     decl: firm.decl || 'We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.',
@@ -81,7 +87,10 @@ function toPdfFirm(firm: Firm): PdfFirm {
   }
 }
 
-function toPdfBill(inv: Invoice): PdfBill {
+function toPdfBill(inv: Invoice, partyLookup?: PartyLookup): PdfBill {
+  const liveParty = resolvePartyById(partyLookup, inv.party_id)
+  const custDetails = resolveLivePartyDetails(inv, liveParty)
+  const ship = resolveLiveShipDetails(inv, liveParty)
   const buckets: Record<string, { taxable: number; tax: number }> = {}
   if (inv.taxBuckets) {
     for (const [k, v] of Object.entries(inv.taxBuckets)) {
@@ -97,9 +106,9 @@ function toPdfBill(inv: Invoice): PdfBill {
     payStatus: inv.pay_status,
     amtPaid: inv.amt_paid || 0,
     custName: inv.party_name,
-    custDetails: inv.party_snapshot || {},
+    custDetails,
     sameAsBuyer: inv.sameAsBuyer,
-    ship: inv.ship,
+    ship,
     dispatch: inv.dispatch,
     lr: inv.lr,
     vehicle: inv.vehicle,
@@ -173,7 +182,7 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
   const contactLine = `PIN: ${f.pin || '-'}${f.phone ? ' | Mob: ' + f.phone : ''} | Email: ${f.email || '-'}`
   pdf.text(contactLine, PW / 2, y + 3, { align: 'center' })
   y += 4
-  pdf.setFont('helvetica', 'bold').setFontSize(9)
+  pdf.setFont('helvetica', 'bold').setFontSize(10)
   pdf.text(
     `GSTIN: ${f.gst || '-'}  |  State: ${getStateName(f.gst)} (${getStateCode(f.gst) || f.state || '-'})`,
     PW / 2,
@@ -224,8 +233,10 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
     pdf.setTextColor(0, 0, 0)
     pdf.setFont('helvetica', 'normal').setFontSize(8)
   } else if (buyer.gst) {
+    pdf.setFont('helvetica', 'bold').setFontSize(8.5)
     pdf.text(`GSTIN: ${buyer.gst}`, L + 1, ty)
     ty += 3.2
+    pdf.setFont('helvetica', 'normal').setFontSize(8)
   }
   pdf.text(
     `State: ${getStateName(buyer.gst || buyer.state)} (${getStateCode(buyer.gst) || buyer.state || '-'})`,
@@ -256,8 +267,10 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
       ty += 3.2
     }
     if (ship.gstin) {
+      pdf.setFont('helvetica', 'bold').setFontSize(8.5)
       pdf.text(`GSTIN: ${ship.gstin}`, L + colW + 1, ty)
       ty += 3.2
+      pdf.setFont('helvetica', 'normal').setFontSize(8)
     }
     pdf.text(
       `State: ${getStateName(ship.gstin || ship.state)} (${getStateCode(ship.gstin) || ship.state || '-'})`,
@@ -587,8 +600,8 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
   pdf.text('Authorised Signatory', sigX + footHalf / 2, PH - M - 5, { align: 'center' })
 }
 
-export function generateInvoicePdf(invoice: Invoice, firm: Firm): jsPDF {
-  const b = toPdfBill(invoice)
+export function generateInvoicePdf(invoice: Invoice, firm: Firm, partyLookup?: PartyLookup): jsPDF {
+  const b = toPdfBill(invoice, partyLookup)
   const f = toPdfFirm(firm)
   const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true })
   const copies = [
@@ -603,8 +616,8 @@ export function generateInvoicePdf(invoice: Invoice, firm: Firm): jsPDF {
   return pdf
 }
 
-export function downloadInvoicePdf(invoice: Invoice, firm: Firm): void {
-  const pdf = generateInvoicePdf(invoice, firm)
+export function downloadInvoicePdf(invoice: Invoice, firm: Firm, partyLookup?: PartyLookup): void {
+  const pdf = generateInvoicePdf(invoice, firm, partyLookup)
   const filename = pdfFilename(invoice)
   try {
     pdf.save(filename)
@@ -621,13 +634,17 @@ export function downloadInvoicePdf(invoice: Invoice, firm: Firm): void {
   }
 }
 
-export async function bulkDownloadInvoicePdf(invoices: Invoice[], firm: Firm): Promise<number> {
+export async function bulkDownloadInvoicePdf(
+  invoices: Invoice[],
+  firm: Firm,
+  partyLookup?: PartyLookup,
+): Promise<number> {
   if (!invoices.length) return 0
   const f = toPdfFirm(firm)
   const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true })
   let firstPage = true
   for (const inv of invoices) {
-    const b = toPdfBill(inv)
+    const b = toPdfBill(inv, partyLookup)
     const copies = [
       { label: 'ORIGINAL', sub: 'For Buyer' },
       { label: 'DUPLICATE', sub: 'For Transporter' },

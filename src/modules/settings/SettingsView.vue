@@ -10,6 +10,7 @@ import { exportAll, downloadBackup, importBackup, previewImport, type ImportPrev
 import { getSyncDiagnostics, runSync, runFullPullFromCloud, runFullPushToCloud } from '@/services/sync'
 import { usePwaInstall } from '@/composables/usePwaInstall'
 import type { Firm } from '@/types/models'
+import { formatGstin } from '@/services/gst'
 
 const firmStore = useFirmStore()
 const auth = useAuthStore()
@@ -309,7 +310,7 @@ onMounted(() => {
               <span v-if="f.id === firmStore.activeFirmId" class="pp-badge bg-accent text-white ml-1">Active</span>
             </div>
             <div class="text-xs text-slate-500">
-              {{ f.gst || 'No GST' }} · {{ f.city || '—' }} · Bill: {{ f.prefix || 'INV' }}-xxxx (next {{ f.next_bill_no || 1 }})
+              {{ formatGstin(f.gst) || 'No GST' }} · {{ f.city || '—' }} · Bill: {{ f.prefix || 'INV' }}-xxxx (next {{ f.next_bill_no || 1 }})
               <span v-if="f.signature" class="ml-1 text-green-700">· ✍️ Signature</span>
             </div>
           </div>

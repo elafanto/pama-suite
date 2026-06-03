@@ -37,6 +37,11 @@ export const stateMap: Record<string, string> = {
   '38': 'Ladakh'
 }
 
+/** Normalize GSTIN for storage and display (uppercase, trimmed). */
+export function formatGstin(gstin: string | undefined | null): string {
+  return (gstin || '').trim().toUpperCase()
+}
+
 export function getStateName(gstinOrCode: string | undefined): string {
   if (!gstinOrCode) return 'Unknown'
   const code = String(gstinOrCode).trim().substring(0, 2)
