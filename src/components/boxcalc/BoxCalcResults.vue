@@ -342,7 +342,7 @@ function stackRatingClass(passes: boolean) {
             { l: 'Joining', v: results?.cost?.joining },
             { l: 'Printing', v: results?.cost?.printing },
             { l: 'Shipping', v: results?.cost?.shipping },
-            { l: 'Conversion', v: results?.cost?.conversion },
+            { l: `Conversion (${fmt(results?.cost?.conversionPerKg, 2)}/kg × ${fmt(results?.cost?.conversionBoxWeightKg, 3)} kg)`, v: results?.cost?.conversion },
           ]" :key="row.l" class="border-b border-slate-100">
             <td class="py-2">{{ row.l }}</td>
             <td class="py-2 text-right font-mono">{{ fmtMoney(row.v) }}</td>

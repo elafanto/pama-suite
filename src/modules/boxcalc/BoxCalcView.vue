@@ -87,7 +87,7 @@ function initialFormState(): BoxCalcForm {
     marginPercent: 30,
     printingCost: 0.50,
     shippingCost: 0.30,
-    conversionCost: 3.0,
+    conversionCostPerKg: 3.0,
     scrapRate: 12,
     priceMode: 'auto',
     customSellingPrice: null,
@@ -184,7 +184,6 @@ function applyPreset(layerIdx: number, preset: { gsm: number; bf: number; rate: 
   const layer = form.layers[layerIdx]
   layer.gsm = preset.gsm
   layer.bf = preset.bf
-  layer.rate = preset.rate
 }
 
 function onPaperTypeChange(layerIdx: number) {
@@ -193,6 +192,7 @@ function onPaperTypeChange(layerIdx: number) {
   if (paperData?.presets.length) {
     const midIdx = Math.floor(paperData.presets.length / 2)
     applyPreset(layerIdx, paperData.presets[midIdx])
+    layer.rate = paperData.typicalRate
     layer.color = paperData.defaultColor
   }
 }
@@ -250,7 +250,7 @@ function runCostCalculation() {
     customSellingPrice: form.customSellingPrice,
     printingCost: parseFloat(String(form.printingCost)),
     shippingCost: parseFloat(String(form.shippingCost)),
-    conversionCost: parseFloat(String(form.conversionCost)),
+    conversionCostPerKg: parseFloat(String(form.conversionCostPerKg ?? (form as { conversionCost?: number }).conversionCost)),
     scrapRate: parseFloat(String(form.scrapRate)),
     stackCheck: form.stackCheck.enabled ? {
       enabled: true,
@@ -321,8 +321,16 @@ async function confirmSaveRecipe() {
   }
 }
 
+function migrateConversionField(target: BoxCalcForm & { conversionCost?: number }) {
+  if (target.conversionCost != null && target.conversionCostPerKg == null) {
+    target.conversionCostPerKg = target.conversionCost
+    delete target.conversionCost
+  }
+}
+
 function loadRecipe(rec: Recipe) {
   Object.assign(form, rec.form)
+  migrateConversionField(form as BoxCalcForm & { conversionCost?: number })
   if (!form.jobCard) form.jobCard = defaultJobCard(firmStore.activeFirm?.name || 'My Box Plant')
   results.value = rec.results
   showResults.value = true
@@ -463,6 +471,7 @@ onMounted(async () => {
     try {
       Object.assign(form, JSON.parse(saved))
       if (!form.jobCard) form.jobCard = defaultJobCard(firmStore.activeFirm?.name || 'My Box Plant')
+      migrateConversionField(form as BoxCalcForm & { conversionCost?: number })
       updateLayersForPly()
     } catch { /* */ }
   }
@@ -599,7 +608,7 @@ onMounted(async () => {
               <div class="grid grid-cols-3 gap-1 mb-2">
                 <div><label class="text-[10px]">GSM</label><input v-model.number="layer.gsm" type="number" class="pp-input !py-1 text-xs" /></div>
                 <div><label class="text-[10px]">BF</label><input v-model.number="layer.bf" type="number" class="pp-input !py-1 text-xs" /></div>
-                <div><label class="text-[10px]">₹/kg</label><input v-model.number="layer.rate" type="number" class="pp-input !py-1 text-xs" /></div>
+                <div><label class="text-[10px]">Rate ₹/kg</label><input v-model.number="layer.rate" type="number" step="0.01" class="pp-input !py-1 text-xs" /></div>
               </div>
               <div class="mb-2">
                 <label class="text-[10px]">Color</label>
@@ -692,7 +701,7 @@ onMounted(async () => {
             <div class="grid grid-cols-2 gap-2">
               <div><label class="pp-label">Printing ₹/box</label><input v-model.number="form.printingCost" type="number" class="pp-input" /></div>
               <div><label class="pp-label">Shipping ₹/box</label><input v-model.number="form.shippingCost" type="number" class="pp-input" /></div>
-              <div class="col-span-2"><label class="pp-label">Conversion ₹/box</label><input v-model.number="form.conversionCost" type="number" class="pp-input" /></div>
+              <div class="col-span-2"><label class="pp-label">Conversion ₹/kg</label><input v-model.number="form.conversionCostPerKg" type="number" step="0.01" class="pp-input" /></div>
               <div><label class="pp-label">Waste %</label><input v-model.number="form.productionWastePercent" type="number" class="pp-input" /></div>
               <div><label class="pp-label">Scrap ₹/kg</label><input v-model.number="form.scrapRate" type="number" class="pp-input" /></div>
             </div>

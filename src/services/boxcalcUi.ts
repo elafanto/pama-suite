@@ -66,7 +66,8 @@ export interface BoxCalcForm {
   marginPercent: number
   printingCost: number
   shippingCost: number
-  conversionCost: number
+  /** Corrugation/conversion charge in ₹ per kg of finished box weight */
+  conversionCostPerKg: number
   scrapRate: number
   priceMode: 'auto' | 'custom'
   customSellingPrice: number | null

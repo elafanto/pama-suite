@@ -2,7 +2,7 @@
 export const PAPER_LIBRARY = {
   kraftLiner: {
     name: "Kraft Liner",
-    typicalRate: 55,
+    typicalRate: 33,
     defaultColor: "Natural Brown",
     presets: [
       { gsm: 90,  bf: 16, rate: 48 },
@@ -55,7 +55,7 @@ export const PAPER_LIBRARY = {
   },
   duplex: {
     name: "Duplex Board",
-    typicalRate: 75,
+    typicalRate: 50,
     defaultColor: "White",
     presets: [
       { gsm: 230, bf: 16, rate: 68 },
@@ -593,7 +593,8 @@ export function calculate(input: any) {
 
   const printingCost = parseFloat(input.printingCost) || 0
   const shippingCost = parseFloat(input.shippingCost) || 0
-  const conversionCost = parseFloat(input.conversionCost) || 0
+  const conversionPerKg = parseFloat(input.conversionCostPerKg ?? input.conversionCost) || 0
+  const conversionCost = conversionPerKg * (boxWeightGm / 1000)
   const wastagePercent = (parseFloat(input.productionWastePercent) || 3) / 100
 
   const subTotalBeforeWaste = paperCostTotal + starchCost + joiningCost + printingCost + shippingCost + conversionCost
@@ -727,6 +728,8 @@ export function calculate(input: any) {
       printing: printingCost,
       shipping: shippingCost,
       conversion: conversionCost,
+      conversionPerKg,
+      conversionBoxWeightKg: boxWeightGm / 1000,
       wastage: wastageCost,
       subTotal,
       margin: marginValue,
