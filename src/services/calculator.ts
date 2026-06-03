@@ -383,11 +383,17 @@ export function calculate(input: CalcInput) {
     outerH = innerH + 2.7 * t
   }
 
-  const wrapL = isOuter ? outerL : innerL
-  const wrapW = isOuter ? outerW : innerW
-  const wrapH = isOuter ? outerH : innerH
-  const effectiveT = isOuter ? 0 : caliper
-  const effectiveClearance = isOuter ? 0 : MACHINE_LIMITS.clearanceMM
+  // Blank & machine setup always work from OUTER dimensions, so a box entered
+  // by its inner dims and the same box entered by its outer dims produce an
+  // identical sheet. The outer-spec blank is the physically correct one (board
+  // thickness is absorbed into the slightly smaller inside). Previously inner
+  // mode added an extra per-panel caliper + fold clearance, so the two entry
+  // modes disagreed for the same box — outer mode output is unchanged here.
+  const wrapL = outerL
+  const wrapW = outerW
+  const wrapH = outerH
+  const effectiveT = 0
+  const effectiveClearance = 0
 
   // Sheet Size Sizing
   const sheetLength = 2 * (wrapL + effectiveT) + 2 * (wrapW + effectiveT) + glueFlap

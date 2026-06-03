@@ -105,11 +105,15 @@ describe('calculate — 3-ply RSC (inner dims)', () => {
     expect(res.dimensions.outer.H).toBeCloseTo(150 + 2.7 * 3.2, 5)
   })
 
-  it('computes the blank sheet size', () => {
-    // sheetLength = 2*(L+t) + 2*(W+t) + glueFlap(3-ply=35)
-    expect(res.sheet.length).toBeCloseTo(2 * (300 + 3.2) + 2 * (200 + 3.2) + 35, 4)
-    // sheetWidth = W + H + t + clearance(6)
-    expect(res.sheet.width).toBeCloseTo(200 + 150 + 3.2 + 6, 4)
+  it('computes the blank from outer dims (board thickness absorbed inward)', () => {
+    const t = 3.2
+    const outerL = 300 + 1.5 * t
+    const outerW = 200 + 1.5 * t
+    const outerH = 150 + 2.7 * t
+    // sheetLength = 2*outerL + 2*outerW + glueFlap(3-ply=35)
+    expect(res.sheet.length).toBeCloseTo(2 * outerL + 2 * outerW + 35, 4)
+    // sheetWidth = outerW + outerH (body + top/bottom half-flaps)
+    expect(res.sheet.width).toBeCloseTo(outerW + outerH, 4)
   })
 
   it('uses 1-piece construction for a small box', () => {
@@ -142,5 +146,34 @@ describe('calculate — validation', () => {
   it('rejects missing layers', () => {
     const r = calculate({ length: 300, width: 200, height: 150, layers: [] })
     expect(r.success).toBe(false)
+  })
+})
+
+describe('calculate — inner/outer entry consistency (C3)', () => {
+  const base = {
+    ply: '3-ply',
+    flute: 'C',
+    layers: [
+      { name: 'Top Liner', gsm: 120, bf: 18, rate: 52 },
+      { name: 'Flute', gsm: 120, bf: 18, rate: 45, takeUp: 1.42 },
+      { name: 'Bottom Liner', gsm: 120, bf: 18, rate: 52 },
+    ],
+  }
+  const t = 3.2 // caliper for 3-ply C
+
+  it('same physical box gives the same blank whether entered by inner or outer dims', () => {
+    const inner = calculate({ ...base, dimType: 'inner', length: 300, width: 200, height: 150 })
+    // outer = inner + the standard conversion (1.5t L/W, 2.7t H)
+    const outer = calculate({
+      ...base,
+      dimType: 'outer',
+      length: 300 + 1.5 * t,
+      width: 200 + 1.5 * t,
+      height: 150 + 2.7 * t,
+    })
+    expect(inner.success && outer.success).toBe(true)
+    expect(inner.sheet.length).toBeCloseTo(outer.sheet.length, 4)
+    expect(inner.sheet.width).toBeCloseTo(outer.sheet.width, 4)
+    expect(inner.weight.boxTotal).toBeCloseTo(outer.weight.boxTotal, 4)
   })
 })
