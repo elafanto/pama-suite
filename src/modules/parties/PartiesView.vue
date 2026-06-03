@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, reactive } from 'vue'
 import { RouterLink } from 'vue-router'
 import PpModal from '@/components/PpModal.vue'
+import SegmentedFieldInput from '@/components/SegmentedFieldInput.vue'
 import { usePartyStore, type NewParty } from '@/stores/parties'
 import type { Party, PartyRole } from '@/types/models'
 import { validateGstinForForm } from '@/services/gst'
@@ -19,7 +20,7 @@ const gstHintOk = ref(true)
 const ifscStatus = ref<'idle' | 'fetching' | 'success' | 'error'>('idle')
 let ifscTimer: ReturnType<typeof setTimeout> | null = null
 
-type UpperPartyField = 'name' | 'gst' | 'acname' | 'acno' | 'bank' | 'ifsc'
+type UpperPartyField = 'name' | 'acname' | 'acno' | 'bank' | 'ifsc'
 
 const blank = (): NewParty => ({
   name: '', roles: ['customer'], gst: '', phone: '', email: '', addr: '',
@@ -51,8 +52,12 @@ function resetFormHints() {
 function onUpperInput(field: UpperPartyField, e: Event) {
   const v = toUpperTrim((e.target as HTMLInputElement).value)
   form[field] = v
-  if (field === 'gst') applyGstValidation()
   if (field === 'ifsc') scheduleIfscLookup()
+}
+
+function onGstChange(value: string) {
+  form.gst = value
+  applyGstValidation()
 }
 
 function applyGstValidation() {
@@ -238,12 +243,11 @@ onMounted(store.load)
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="pp-label">GST</label>
-            <input
-              :value="form.gst"
-              class="pp-input uppercase"
-              placeholder="05ABCDE1234F1Z5"
-              maxlength="15"
-              @input="onUpperInput('gst', $event)"
+            <SegmentedFieldInput
+              :model-value="form.gst"
+              preset="gstin"
+              aria-label="GSTIN"
+              @update:model-value="onGstChange"
               @blur="onGstBlur"
             />
             <p
@@ -254,7 +258,14 @@ onMounted(store.load)
               {{ gstHint }}
             </p>
           </div>
-          <div><label class="pp-label">Phone</label><input v-model="form.phone" class="pp-input" /></div>
+          <div>
+            <label class="pp-label">Phone</label>
+            <SegmentedFieldInput
+              v-model="form.phone"
+              preset="mobile"
+              aria-label="Mobile number"
+            />
+          </div>
         </div>
         <div><label class="pp-label">Address</label><input v-model="form.addr" class="pp-input" /></div>
         <div class="grid grid-cols-3 gap-3">
