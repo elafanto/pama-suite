@@ -275,22 +275,22 @@ onMounted(store.load)
         </div>
 
         <div class="border-t border-slate-200 pt-3">
-          <div class="pp-label !text-slate-600 !mb-2">Bank details (for RTGS/NEFT)</div>
+          <div class="pp-label-account !mb-2">Bank details (for RTGS/NEFT)</div>
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="pp-label">A/c Name</label>
-              <input :value="form.acname" class="pp-input uppercase" @input="onUpperInput('acname', $event)" />
+              <label class="pp-label-account">A/c Name</label>
+              <input :value="form.acname" class="pp-input-account uppercase" @input="onUpperInput('acname', $event)" />
             </div>
             <div>
-              <label class="pp-label">A/c No.</label>
-              <input :value="form.acno" class="pp-input uppercase" @input="onUpperInput('acno', $event)" />
+              <label class="pp-label-account">A/c No.</label>
+              <input :value="form.acno" class="pp-input-account uppercase" @input="onUpperInput('acno', $event)" />
             </div>
             <div>
-              <label class="pp-label">IFSC</label>
+              <label class="pp-label-account">IFSC</label>
               <div class="relative">
                 <input
                   :value="form.ifsc"
-                  class="pp-input uppercase pr-8"
+                  class="pp-input-account uppercase pr-8"
                   placeholder="HDFC0001234"
                   maxlength="11"
                   @input="onUpperInput('ifsc', $event)"
@@ -310,8 +310,8 @@ onMounted(store.load)
               </div>
             </div>
             <div>
-              <label class="pp-label">Bank &amp; Branch</label>
-              <input :value="form.bank" class="pp-input uppercase" @input="onUpperInput('bank', $event)" />
+              <label class="pp-label-account">Bank &amp; Branch</label>
+              <input :value="form.bank" class="pp-input-account uppercase" @input="onUpperInput('bank', $event)" />
             </div>
           </div>
         </div>

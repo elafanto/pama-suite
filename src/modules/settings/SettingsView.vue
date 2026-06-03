@@ -492,9 +492,9 @@ onMounted(() => {
           <div><label class="pp-label">Phone</label><input v-model="form.phone" class="pp-input" /></div>
         </div>
         <div class="border-t border-slate-200 pt-3 grid grid-cols-3 gap-3">
-          <div><label class="pp-label">Bank</label><input v-model="form.bank_name" class="pp-input" /></div>
-          <div><label class="pp-label">A/c</label><input v-model="form.bank_acno" class="pp-input" /></div>
-          <div><label class="pp-label">IFSC</label><input v-model="form.bank_ifsc" class="pp-input uppercase" /></div>
+          <div><label class="pp-label-account">Bank</label><input v-model="form.bank_name" class="pp-input-account" /></div>
+          <div><label class="pp-label-account">A/c</label><input v-model="form.bank_acno" class="pp-input-account" /></div>
+          <div><label class="pp-label-account">IFSC</label><input v-model="form.bank_ifsc" class="pp-input-account uppercase" /></div>
         </div>
         <div class="border-t border-slate-200 pt-3">
           <label class="pp-label">Authorised Signature (PNG/JPEG, max 512KB)</label>

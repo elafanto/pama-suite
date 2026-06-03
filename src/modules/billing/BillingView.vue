@@ -1827,7 +1827,7 @@ onMounted(async () => {
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-black pt-2">
             <div class="text-[10px] space-y-1">
               <div><strong>Amount in Words:</strong> {{ numberToWords(previewInvoice.grand_total) }}</div>
-              <div class="pt-2">
+              <div class="pt-2 text-sm font-bold leading-snug">
                 <strong>Bank details:</strong><br />
                 Bank Name: {{ firmStore.activeFirm?.bank_name || '-' }}<br />
                 A/c No: {{ firmStore.activeFirm?.bank_acno || '-' }}<br />
@@ -1998,7 +1998,7 @@ onMounted(async () => {
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-black pt-2">
         <div class="text-[10px] space-y-1">
           <div><strong>Amount in Words:</strong> {{ numberToWords(previewInvoice.grand_total) }}</div>
-          <div class="pt-2">
+          <div class="pt-2 text-sm font-bold leading-snug">
             <strong>Bank details:</strong><br />
             Bank Name: {{ firmStore.activeFirm?.bank_name || '-' }}<br />
             A/c No: {{ firmStore.activeFirm?.bank_acno || '-' }}<br />

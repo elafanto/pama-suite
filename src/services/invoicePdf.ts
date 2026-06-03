@@ -532,16 +532,16 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
   const footStart = y
   pdf.line(L + footHalf, footStart, L + footHalf, PH - M)
 
-  pdf.setFont('helvetica', 'bold').setFontSize(8)
+  pdf.setFont('helvetica', 'bold').setFontSize(9)
   pdf.setFillColor(240, 240, 240)
   pdf.rect(L, y, footHalf, 5, 'F')
   pdf.text('Bank Details', L + 3, y + 3.5)
-  pdf.setFont('helvetica', 'normal').setFontSize(7.5)
+  pdf.setFont('helvetica', 'bold').setFontSize(9)
   let by = y + 8
   ;(f.bank || '-').split('\n').forEach((line) => {
     pdf.splitTextToSize(line, footHalf - 6).forEach((ww: string) => {
       pdf.text(ww, L + 3, by)
-      by += 3
+      by += 3.4
     })
   })
   by += 3

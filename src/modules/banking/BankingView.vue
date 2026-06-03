@@ -613,15 +613,15 @@ onMounted(async () => {
 
               <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
                 <div>
-                  <label class="pp-label">Account No *</label>
-                  <input v-model="b.acno" class="pp-input font-mono" placeholder="A/c Number" />
+                  <label class="pp-label-account">Account No *</label>
+                  <input v-model="b.acno" class="pp-input-account font-mono" placeholder="A/c Number" />
                 </div>
                 <div>
-                  <label class="pp-label">IFSC Code *</label>
+                  <label class="pp-label-account">IFSC Code *</label>
                   <div class="relative">
                     <input 
                       v-model="b.ifsc" 
-                      class="pp-input font-mono uppercase" 
+                      class="pp-input-account font-mono uppercase" 
                       placeholder="IFSC Code" 
                       @input="onIfscInput(idx)"
                     />
@@ -639,15 +639,15 @@ onMounted(async () => {
                   </div>
                 </div>
                 <div>
-                  <label class="pp-label">Account Name (on Bank Record)</label>
-                  <input v-model="b.acname" class="pp-input" placeholder="Default same as name" />
+                  <label class="pp-label-account">Account Name (on Bank Record)</label>
+                  <input v-model="b.acname" class="pp-input-account" placeholder="Default same as name" />
                 </div>
               </div>
 
               <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div class="sm:col-span-2">
-                  <label class="pp-label">Bank Branch Details</label>
-                  <input v-model="b.bank" class="pp-input" placeholder="State Bank of India, branch details" />
+                  <label class="pp-label-account">Bank Branch Details</label>
+                  <input v-model="b.bank" class="pp-input-account" placeholder="State Bank of India, branch details" />
                 </div>
                 <div>
                   <label class="pp-label">Purpose of Payment</label>
@@ -856,8 +856,8 @@ onMounted(async () => {
                   <div class="text-[10px] text-slate-600">{{ b.bank }}</div>
                   <div class="text-[9px] text-slate-500">Ac Name: {{ b.acname || b.name }}</div>
                 </td>
-                <td class="border border-black p-2 font-mono">{{ b.acno }}</td>
-                <td class="border border-black p-2 font-mono">{{ b.ifsc }}</td>
+                <td class="border border-black p-2 font-mono text-sm font-bold">{{ b.acno }}</td>
+                <td class="border border-black p-2 font-mono text-sm font-bold">{{ b.ifsc }}</td>
                 <td class="border border-black p-2 text-center">{{ b.mode }}</td>
                 <td class="border border-black p-2 text-right font-mono">₹{{ n2(b.amount) }}</td>
               </tr>
