@@ -86,7 +86,7 @@ function initialFormState(): BoxCalcForm {
     productionWastePercent: 3,
     marginPercent: 30,
     printingCost: 0.50,
-    shippingCost: 0.30,
+    shippingCostPerKg: 0.30,
     conversionCostPerKg: 3.0,
     scrapRate: 12,
     priceMode: 'auto',
@@ -249,7 +249,7 @@ function runCostCalculation() {
     priceMode: form.priceMode,
     customSellingPrice: form.customSellingPrice,
     printingCost: parseFloat(String(form.printingCost)),
-    shippingCost: parseFloat(String(form.shippingCost)),
+    shippingCostPerKg: parseFloat(String(form.shippingCostPerKg ?? (form as { shippingCost?: number }).shippingCost)),
     conversionCostPerKg: parseFloat(String(form.conversionCostPerKg ?? (form as { conversionCost?: number }).conversionCost)),
     scrapRate: parseFloat(String(form.scrapRate)),
     stackCheck: form.stackCheck.enabled ? {
@@ -321,16 +321,20 @@ async function confirmSaveRecipe() {
   }
 }
 
-function migrateConversionField(target: BoxCalcForm & { conversionCost?: number }) {
+function migrateCostFields(target: BoxCalcForm & { conversionCost?: number; shippingCost?: number }) {
   if (target.conversionCost != null && target.conversionCostPerKg == null) {
     target.conversionCostPerKg = target.conversionCost
     delete target.conversionCost
+  }
+  if (target.shippingCost != null && target.shippingCostPerKg == null) {
+    target.shippingCostPerKg = target.shippingCost
+    delete target.shippingCost
   }
 }
 
 function loadRecipe(rec: Recipe) {
   Object.assign(form, rec.form)
-  migrateConversionField(form as BoxCalcForm & { conversionCost?: number })
+  migrateCostFields(form as BoxCalcForm & { conversionCost?: number; shippingCost?: number })
   if (!form.jobCard) form.jobCard = defaultJobCard(firmStore.activeFirm?.name || 'My Box Plant')
   results.value = rec.results
   showResults.value = true
@@ -471,7 +475,7 @@ onMounted(async () => {
     try {
       Object.assign(form, JSON.parse(saved))
       if (!form.jobCard) form.jobCard = defaultJobCard(firmStore.activeFirm?.name || 'My Box Plant')
-      migrateConversionField(form as BoxCalcForm & { conversionCost?: number })
+      migrateCostFields(form as BoxCalcForm & { conversionCost?: number; shippingCost?: number })
       updateLayersForPly()
     } catch { /* */ }
   }
@@ -700,7 +704,7 @@ onMounted(async () => {
             </div>
             <div class="grid grid-cols-2 gap-2">
               <div><label class="pp-label">Printing ₹/box</label><input v-model.number="form.printingCost" type="number" class="pp-input" /></div>
-              <div><label class="pp-label">Shipping ₹/box</label><input v-model.number="form.shippingCost" type="number" class="pp-input" /></div>
+              <div><label class="pp-label">Shipping ₹/kg</label><input v-model.number="form.shippingCostPerKg" type="number" step="0.01" class="pp-input" /></div>
               <div class="col-span-2"><label class="pp-label">Conversion ₹/kg</label><input v-model.number="form.conversionCostPerKg" type="number" step="0.01" class="pp-input" /></div>
               <div><label class="pp-label">Waste %</label><input v-model.number="form.productionWastePercent" type="number" class="pp-input" /></div>
               <div><label class="pp-label">Scrap ₹/kg</label><input v-model.number="form.scrapRate" type="number" class="pp-input" /></div>

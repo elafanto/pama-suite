@@ -65,7 +65,8 @@ export interface BoxCalcForm {
   productionWastePercent: number
   marginPercent: number
   printingCost: number
-  shippingCost: number
+  /** Freight/shipping charge in ₹ per kg of paper weight (same basis as layer paper rates) */
+  shippingCostPerKg: number
   /** Corrugation/conversion charge in ₹ per kg of finished box weight */
   conversionCostPerKg: number
   scrapRate: number

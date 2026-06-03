@@ -341,7 +341,7 @@ function stackRatingClass(passes: boolean) {
             { l: 'Starch', v: results?.cost?.starch },
             { l: 'Joining', v: results?.cost?.joining },
             { l: 'Printing', v: results?.cost?.printing },
-            { l: 'Shipping', v: results?.cost?.shipping },
+            { l: `Shipping (${fmt(results?.cost?.shippingPerKg, 2)}/kg × ${fmt(results?.cost?.shippingPaperWeightKg, 3)} kg)`, v: results?.cost?.shipping },
             { l: `Conversion (${fmt(results?.cost?.conversionPerKg, 2)}/kg × ${fmt(results?.cost?.conversionBoxWeightKg, 3)} kg)`, v: results?.cost?.conversion },
           ]" :key="row.l" class="border-b border-slate-100">
             <td class="py-2">{{ row.l }}</td>

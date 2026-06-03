@@ -592,7 +592,9 @@ export function calculate(input: any) {
   const starchCost = (starchGm / 1000) * (input.starchRate || 30)
 
   const printingCost = parseFloat(input.printingCost) || 0
-  const shippingCost = parseFloat(input.shippingCost) || 0
+  const shippingPerKg = parseFloat(input.shippingCostPerKg ?? input.shippingCost) || 0
+  const shippingPaperWeightKg = paperWeightTotal / 1000
+  const shippingCost = shippingPerKg * shippingPaperWeightKg
   const conversionPerKg = parseFloat(input.conversionCostPerKg ?? input.conversionCost) || 0
   const conversionCost = conversionPerKg * (boxWeightGm / 1000)
   const wastagePercent = (parseFloat(input.productionWastePercent) || 3) / 100
@@ -727,6 +729,8 @@ export function calculate(input: any) {
       joining: joiningCost,
       printing: printingCost,
       shipping: shippingCost,
+      shippingPerKg,
+      shippingPaperWeightKg,
       conversion: conversionCost,
       conversionPerKg,
       conversionBoxWeightKg: boxWeightGm / 1000,
