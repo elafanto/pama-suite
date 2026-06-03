@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import {
   fmt,
   fmtMoney,
-  paperTypeLabel,
+  joiningMethodLabel,
   type BoxCalcForm,
 } from '@/services/boxcalcUi'
 
@@ -13,7 +13,44 @@ const props = defineProps<{
   error?: string | null
 }>()
 
-const hasResults = computed(() => props.results && !props.results.error && props.results.cost)
+const hasResults = computed(() => props.results && !props.results.error && props.results.cost?.pricing)
+const pricing = computed(() => props.results?.cost?.pricing)
+const cost = computed(() => props.results?.cost)
+
+const showPin = computed(() =>
+  props.form.joining.method === 'stitching' || props.form.joining.method === 'both',
+)
+const showJoining = computed(() =>
+  props.form.joining.method === 'fevicol' || props.form.joining.method === 'both',
+)
+
+type PricingRow = { label: string; perKg: number; perBox: number; bold?: boolean }
+
+const mainRows = computed((): PricingRow[] => {
+  const p = pricing.value
+  if (!p) return []
+  return [
+    { label: 'Material', perKg: p.perKg.material, perBox: p.perBox.material },
+    { label: 'Conversion', perKg: p.perKg.conversion, perBox: p.perBox.conversion },
+    { label: 'Shipping', perKg: p.perKg.shipping, perBox: p.perBox.shipping, bold: true },
+    { label: 'Subtotal', perKg: p.perKg.subtotal, perBox: p.perBox.subtotal },
+    { label: `Margin (${fmt(cost.value?.marginPercent, 1)}%)`, perKg: p.perKg.margin, perBox: p.perBox.margin },
+    { label: 'Grand Total', perKg: p.perKg.grandTotal, perBox: p.perBox.grandTotal, bold: true },
+  ]
+})
+
+const sheetRows = computed((): PricingRow[] => {
+  const p = pricing.value
+  if (!p?.sheet) return []
+  return [
+    { label: 'Material', perKg: p.sheet.perKg.material, perBox: p.sheet.perBox.material },
+    { label: 'Conversion', perKg: p.sheet.perKg.conversion, perBox: p.sheet.perBox.conversion },
+    { label: 'Shipping', perKg: p.sheet.perKg.shipping, perBox: p.sheet.perBox.shipping, bold: true },
+    { label: 'Subtotal', perKg: p.sheet.perKg.subtotal, perBox: p.sheet.perBox.subtotal },
+    { label: `Margin (${fmt(cost.value?.marginPercent, 1)}%)`, perKg: p.sheet.perKg.margin, perBox: p.sheet.perBox.margin },
+    { label: 'Grand Total', perKg: p.sheet.perKg.grandTotal, perBox: p.sheet.perBox.grandTotal, bold: true },
+  ]
+})
 </script>
 
 <template>
@@ -27,73 +64,119 @@ const hasResults = computed(() => props.results && !props.results.error && props
     <p v-else-if="!hasResults" class="text-xs text-slate-500 py-6 text-center">Enter dimensions and layers to see live pricing.</p>
 
     <template v-else>
+      <!-- Header: GSM, joining, slab -->
       <div class="grid grid-cols-2 gap-2 mb-3 text-xs">
         <div class="bg-indigo-50 border border-indigo-200 rounded-lg p-2 col-span-2">
           <div class="text-indigo-700 font-medium">Board GSM</div>
           <div class="text-lg font-bold text-indigo-900 font-mono">{{ fmt(results.weight?.boardGSM, 0) }}</div>
-          <div class="text-[10px] text-indigo-600 mt-0.5">paper {{ fmt(results.weight?.sheetGsmTotal, 0) }} + starch glue</div>
         </div>
         <div class="bg-blue-50 border border-blue-200 rounded-lg p-2">
-          <div class="text-blue-700">Selling / box</div>
-          <div class="font-bold text-blue-900">{{ fmtMoney(results.cost?.sellingPrice) }}</div>
+          <div class="text-blue-700">Joining</div>
+          <div class="font-bold text-blue-900">{{ joiningMethodLabel(form.joining.method) }}</div>
         </div>
-        <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-2">
-          <div class="text-emerald-700">Order value</div>
-          <div class="font-bold text-emerald-900">{{ fmtMoney(results.order?.totalValue) }}</div>
-        </div>
-        <div class="bg-teal-50 border border-teal-200 rounded-lg p-2">
-          <div class="text-teal-700">Sheet ₹/kg</div>
-          <div class="font-bold text-teal-900 font-mono">{{ fmtMoney(results.cost?.sheetRatePerKg) }}</div>
-        </div>
-        <div class="bg-green-50 border border-green-200 rounded-lg p-2">
-          <div class="text-green-700">Box ₹/kg</div>
-          <div class="font-bold text-green-900 font-mono">{{ fmtMoney(results.cost?.boxRatePerKg) }}</div>
+        <div class="bg-amber-50 border border-amber-200 rounded-lg p-2">
+          <div class="text-amber-700">Conversion slab</div>
+          <div class="font-bold text-amber-900">{{ cost?.conversionSlabLabel }} @ ₹{{ fmt(cost?.conversionPerKg, 0) }}/kg</div>
         </div>
       </div>
 
-      <table class="w-full text-[11px] mb-3">
-        <thead>
-          <tr class="text-slate-500 border-b border-slate-200">
-            <th class="text-left py-1 font-medium">Layer</th>
-            <th class="text-left py-1">Paper</th>
-            <th class="text-right py-1">GSM</th>
-            <th class="text-right py-1">₹/kg</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(layer, idx) in form.layers" :key="idx" class="border-b border-slate-100">
-            <td class="py-1 pr-1 text-slate-700">{{ layer.name }}</td>
-            <td class="py-1 text-slate-600 truncate max-w-[72px]" :title="paperTypeLabel(layer.paperType)">{{ paperTypeLabel(layer.paperType) }}</td>
-            <td class="py-1 text-right font-mono">{{ layer.gsm }}</td>
-            <td class="py-1 text-right font-mono">{{ fmt(layer.rate, 2) }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <!-- Material group -->
+      <div class="mb-3">
+        <div class="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1.5">Material</div>
+        <div class="space-y-1 text-[11px]">
+          <div class="flex justify-between text-slate-600">
+            <span>Paper</span>
+            <span class="font-mono">{{ fmtMoney(pricing?.material.paper) }}</span>
+          </div>
+          <div class="flex justify-between text-slate-600">
+            <span>Starch</span>
+            <span class="font-mono">{{ fmtMoney(pricing?.material.starch) }}</span>
+          </div>
+          <div v-if="showPin" class="flex justify-between text-slate-600">
+            <span>Pin</span>
+            <span class="font-mono">{{ fmtMoney(pricing?.material.pin) }}</span>
+          </div>
+          <div v-if="showJoining" class="flex justify-between text-slate-600">
+            <span>{{ pricing?.material.joiningLabel }}</span>
+            <span class="font-mono">{{ fmtMoney(pricing?.material.joining) }}</span>
+          </div>
+          <div v-else-if="form.joining.method === 'stitching'" class="flex justify-between text-slate-600">
+            <span>Staple</span>
+            <span class="font-mono text-slate-400">—</span>
+          </div>
+          <div v-if="pricing?.material.wastage" class="flex justify-between text-orange-600">
+            <span>Wastage</span>
+            <span class="font-mono">{{ fmtMoney(pricing?.material.wastage) }}</span>
+          </div>
+          <div class="flex justify-between font-semibold text-navy border-t border-slate-200 pt-1">
+            <span>Material subtotal</span>
+            <span class="font-mono">{{ fmtMoney(pricing?.material.subtotal) }}</span>
+          </div>
+        </div>
+      </div>
 
-      <table class="w-full text-xs">
-        <tbody class="divide-y divide-slate-100">
-          <tr>
-            <td class="py-1.5 text-slate-600">Sheet weight</td>
-            <td class="py-1.5 text-right font-mono font-medium">{{ fmt(results.weight?.sheetWeight, 1) }} gm</td>
-          </tr>
-          <tr>
-            <td class="py-1.5 text-slate-600">Box weight</td>
-            <td class="py-1.5 text-right font-mono font-medium">{{ fmt(results.weight?.boxTotal, 1) }} gm</td>
-          </tr>
-          <tr>
-            <td class="py-1.5 text-slate-600">Shipping</td>
-            <td class="py-1.5 text-right font-mono">{{ fmt(form.shippingCostPerKg, 2) }}/kg → {{ fmtMoney(results.cost?.shipping) }}</td>
-          </tr>
-          <tr>
-            <td class="py-1.5 text-slate-600">Conversion</td>
-            <td class="py-1.5 text-right font-mono">{{ fmt(form.conversionCostPerKg, 2) }}/kg → {{ fmtMoney(results.cost?.conversion) }}</td>
-          </tr>
-          <tr class="bg-slate-50">
-            <td class="py-2 font-semibold text-navy">Cost subtotal</td>
-            <td class="py-2 text-right font-mono font-semibold">{{ fmtMoney(results.cost?.subTotal) }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <!-- Conversion -->
+      <div class="mb-2 text-[11px]">
+        <div class="flex justify-between text-slate-600">
+          <span>Conversion ({{ fmt(cost?.conversionPerKg, 0) }}/kg × {{ fmt(cost?.conversionPaperWeightKg, 3) }} kg)</span>
+          <span class="font-mono">{{ fmtMoney(pricing?.conversion.total) }}</span>
+        </div>
+      </div>
+
+      <!-- Shipping: bold per box, small per kg -->
+      <div class="mb-3 text-[11px]">
+        <div class="flex justify-between items-baseline">
+          <span class="text-slate-600">Shipping</span>
+          <div class="text-right">
+            <span class="font-mono font-bold text-navy">{{ fmtMoney(pricing?.perBox.shipping) }}</span>
+            <span class="block text-[9px] text-slate-400 font-mono">{{ fmtMoney(pricing?.perKg.shipping) }}/kg</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Per KG | Per Box table -->
+      <div class="mb-3">
+        <div class="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1">Box pricing</div>
+        <table class="w-full text-[11px]">
+          <thead>
+            <tr class="text-slate-500 border-b border-slate-200">
+              <th class="text-left py-1 font-medium">Line</th>
+              <th class="text-right py-1 font-medium">Per KG</th>
+              <th class="text-right py-1 font-medium">Per Box</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in mainRows" :key="row.label" class="border-b border-slate-100">
+              <td class="py-1 text-slate-700">{{ row.label }}</td>
+              <td class="py-1 text-right font-mono text-slate-500">{{ fmtMoney(row.perKg) }}</td>
+              <td class="py-1 text-right font-mono" :class="row.bold ? 'font-bold text-navy' : ''">{{ fmtMoney(row.perBox) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Sheet pricing section -->
+      <div class="border-t border-slate-200 pt-2">
+        <div class="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1">
+          Sheet pricing <span class="font-normal normal-case text-slate-400">({{ fmt(results.weight?.sheetWeight, 1) }} gm)</span>
+        </div>
+        <table class="w-full text-[11px]">
+          <thead>
+            <tr class="text-slate-500 border-b border-slate-200">
+              <th class="text-left py-1 font-medium">Line</th>
+              <th class="text-right py-1 font-medium">Per KG</th>
+              <th class="text-right py-1 font-medium">Per Box</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in sheetRows" :key="'sheet-' + row.label" class="border-b border-slate-100">
+              <td class="py-1 text-slate-700">{{ row.label }}</td>
+              <td class="py-1 text-right font-mono text-slate-500">{{ fmtMoney(row.perKg) }}</td>
+              <td class="py-1 text-right font-mono" :class="row.bold ? 'font-bold text-navy' : ''">{{ fmtMoney(row.perBox) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </template>
   </aside>
 </template>

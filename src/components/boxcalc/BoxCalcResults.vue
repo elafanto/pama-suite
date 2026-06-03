@@ -342,30 +342,64 @@ function stackRatingClass(passes: boolean) {
     <!-- Cost breakdown -->
     <div class="pp-card p-4 print-section">
       <h3 class="font-bold text-navy mb-3">Cost Breakdown (per box)</h3>
-      <table class="w-full text-sm">
+
+      <div class="mb-3">
+        <div class="text-xs font-bold uppercase text-slate-500 mb-2">Material</div>
+        <table class="w-full text-sm">
+          <tbody>
+            <tr v-for="(layer, idx) in results?.cost?.layers" :key="idx" class="border-b border-slate-100">
+              <td class="py-1.5 pl-2 text-slate-600">{{ layer.name }}</td>
+              <td class="py-1.5 text-right font-mono">{{ fmtMoney(layer.cost) }}</td>
+            </tr>
+            <tr class="border-b border-slate-100">
+              <td class="py-1.5 pl-2 text-slate-600">Starch</td>
+              <td class="py-1.5 text-right font-mono">{{ fmtMoney(results?.cost?.starch) }}</td>
+            </tr>
+            <tr v-if="form.joining.method !== 'fevicol'" class="border-b border-slate-100">
+              <td class="py-1.5 pl-2 text-slate-600">Pin</td>
+              <td class="py-1.5 text-right font-mono">{{ fmtMoney(results?.cost?.pin) }}</td>
+            </tr>
+            <tr v-if="form.joining.method !== 'stitching'" class="border-b border-slate-100">
+              <td class="py-1.5 pl-2 text-slate-600">{{ results?.cost?.joiningLabel || 'Fevicol' }}</td>
+              <td class="py-1.5 text-right font-mono">{{ fmtMoney(results?.cost?.joining) }}</td>
+            </tr>
+            <tr v-if="results?.cost?.wastage" class="border-b border-slate-100">
+              <td class="py-1.5 pl-2 text-orange-700">Wastage</td>
+              <td class="py-1.5 text-right font-mono text-orange-700">{{ fmtMoney(results?.cost?.wastage) }}</td>
+            </tr>
+            <tr class="bg-slate-50">
+              <td class="py-2 pl-2 font-semibold">Material Subtotal</td>
+              <td class="py-2 text-right font-mono font-semibold">{{ fmtMoney(results?.cost?.materialSubtotal) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <table class="w-full text-sm mb-3">
         <tbody>
-          <tr v-for="(layer, idx) in results?.cost?.layers" :key="idx" class="border-b border-slate-100">
-            <td class="py-2">{{ layer.name }}</td>
-            <td class="py-2 text-right font-mono">{{ fmtMoney(layer.cost) }}</td>
+          <tr class="border-b border-slate-100">
+            <td class="py-2">
+              Conversion ({{ fmt(results?.cost?.conversionPerKg, 0) }}/kg × {{ fmt(results?.cost?.conversionPaperWeightKg, 3) }} kg)
+              <span class="text-xs text-slate-400 ml-1">{{ results?.cost?.conversionSlabLabel }}</span>
+            </td>
+            <td class="py-2 text-right font-mono">{{ fmtMoney(results?.cost?.conversion) }}</td>
           </tr>
-          <tr class="border-b bg-slate-50">
-            <td class="py-2 font-semibold">Paper Subtotal</td>
-            <td class="py-2 text-right font-mono font-semibold">{{ fmtMoney(results?.cost?.paperTotal) }}</td>
+          <tr class="border-b border-slate-100">
+            <td class="py-2">
+              Shipping
+              <span class="block text-[10px] text-slate-400 font-mono">{{ fmtMoney(results?.cost?.pricing?.perKg?.shipping) }}/kg</span>
+            </td>
+            <td class="py-2 text-right">
+              <span class="font-mono font-bold">{{ fmtMoney(results?.cost?.shipping) }}</span>
+            </td>
           </tr>
-          <tr v-for="row in [
-            { l: 'Starch', v: results?.cost?.starch },
-            { l: 'Joining', v: results?.cost?.joining },
-            { l: 'Printing', v: results?.cost?.printing },
-            { l: `Shipping (${fmt(results?.cost?.shippingPerKg, 2)}/kg × ${fmt(results?.cost?.shippingPaperWeightKg, 3)} kg)`, v: results?.cost?.shipping },
-            { l: `Conversion (${fmt(results?.cost?.conversionPerKg, 2)}/kg × ${fmt(results?.cost?.conversionBoxWeightKg, 3)} kg)`, v: results?.cost?.conversion },
-          ]" :key="row.l" class="border-b border-slate-100">
-            <td class="py-2">{{ row.l }}</td>
-            <td class="py-2 text-right font-mono">{{ fmtMoney(row.v) }}</td>
-          </tr>
-          <tr class="border-b"><td class="py-2 text-orange-700">Wastage</td><td class="py-2 text-right font-mono text-orange-700">{{ fmtMoney(results?.cost?.wastage) }}</td></tr>
           <tr class="bg-slate-100">
-            <td class="py-2 font-semibold">Subtotal (Cost)</td>
-            <td class="py-2 text-right font-mono font-semibold">{{ fmtMoney(results?.cost?.subTotal) }}</td>
+            <td class="py-2 font-semibold">Subtotal (Material + Conversion + Shipping)</td>
+            <td class="py-2 text-right font-mono font-semibold">{{ fmtMoney(results?.cost?.pricingSubtotal) }}</td>
+          </tr>
+          <tr v-if="results?.cost?.printing" class="border-b border-slate-100">
+            <td class="py-2 text-slate-600">Printing</td>
+            <td class="py-2 text-right font-mono">{{ fmtMoney(results?.cost?.printing) }}</td>
           </tr>
           <tr class="border-b" :class="results?.cost?.margin < 0 ? 'bg-red-50' : ''">
             <td class="py-2" :class="results?.cost?.margin < 0 ? 'text-red-700' : 'text-green-700'">
@@ -379,6 +413,26 @@ function stackRatingClass(passes: boolean) {
           </tr>
         </tbody>
       </table>
+
+      <div v-if="results?.cost?.pricing" class="border-t border-slate-200 pt-3">
+        <div class="text-xs font-bold uppercase text-slate-500 mb-2">Per KG / Per Box Summary</div>
+        <table class="w-full text-xs">
+          <thead>
+            <tr class="text-slate-500 border-b">
+              <th class="text-left py-1">Line</th>
+              <th class="text-right py-1">Per KG</th>
+              <th class="text-right py-1">Per Box</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="key in ['material', 'conversion', 'shipping', 'subtotal', 'margin', 'grandTotal']" :key="key" class="border-b border-slate-100">
+              <td class="py-1 capitalize">{{ key === 'subtotal' ? 'Subtotal' : key === 'grandTotal' ? 'Grand Total' : key }}</td>
+              <td class="py-1 text-right font-mono text-slate-500">{{ fmtMoney(results.cost.pricing.perKg[key]) }}</td>
+              <td class="py-1 text-right font-mono" :class="key === 'shipping' || key === 'grandTotal' ? 'font-bold' : ''">{{ fmtMoney(results.cost.pricing.perBox[key]) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <!-- Order total -->

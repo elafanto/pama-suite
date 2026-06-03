@@ -28,6 +28,7 @@ import {
   setDimensionUnit,
   unitLabel,
   computeBoxCalcResults,
+  defaultConversionSlabs,
   type BoxCalcForm,
   type BoxCalcJobCard,
   type VendorPhone,
@@ -85,10 +86,10 @@ function initialFormState(): BoxCalcForm {
     },
     quantity: 1000,
     productionWastePercent: 3,
-    marginPercent: 30,
+    marginPercent: 15,
     printingCost: 0.50,
     shippingCostPerKg: 0.30,
-    conversionCostPerKg: 3.0,
+    conversionSlabs: defaultConversionSlabs(),
     scrapRate: 12,
     priceMode: 'auto',
     customSellingPrice: null,
@@ -286,14 +287,19 @@ async function confirmSaveRecipe() {
   }
 }
 
-function migrateCostFields(target: BoxCalcForm & { conversionCost?: number; shippingCost?: number }) {
-  if (target.conversionCost != null && target.conversionCostPerKg == null) {
-    target.conversionCostPerKg = target.conversionCost
+function migrateCostFields(target: BoxCalcForm & { conversionCost?: number; shippingCost?: number; conversionCostPerKg?: number }) {
+  if (target.conversionCost != null && !target.conversionSlabs?.length) {
     delete target.conversionCost
+  }
+  if (target.conversionCostPerKg != null && !target.conversionSlabs?.length) {
+    delete target.conversionCostPerKg
   }
   if (target.shippingCost != null && target.shippingCostPerKg == null) {
     target.shippingCostPerKg = target.shippingCost
     delete target.shippingCost
+  }
+  if (!target.conversionSlabs?.length) {
+    target.conversionSlabs = defaultConversionSlabs()
   }
 }
 
@@ -673,9 +679,20 @@ onMounted(async () => {
             <div class="grid grid-cols-2 gap-2">
               <div><label class="pp-label">Printing ₹/box</label><input v-model.number="form.printingCost" type="number" class="pp-input" /></div>
               <div><label class="pp-label">Shipping ₹/kg</label><input v-model.number="form.shippingCostPerKg" type="number" step="0.01" class="pp-input" /></div>
-              <div class="col-span-2"><label class="pp-label">Conversion ₹/kg</label><input v-model.number="form.conversionCostPerKg" type="number" step="0.01" class="pp-input" /></div>
               <div><label class="pp-label">Waste %</label><input v-model.number="form.productionWastePercent" type="number" class="pp-input" /></div>
               <div><label class="pp-label">Scrap ₹/kg</label><input v-model.number="form.scrapRate" type="number" class="pp-input" /></div>
+            </div>
+            <div class="mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3">
+              <div class="text-xs font-bold text-amber-900 mb-2">Conversion Slabs (₹/kg × paper weight)</div>
+              <div class="space-y-1.5">
+                <div v-for="(slab, idx) in form.conversionSlabs" :key="idx" class="grid grid-cols-[1fr_5rem] gap-2 items-center text-xs">
+                  <span class="text-amber-800 font-medium">{{ slab.label }}</span>
+                  <input v-model.number="slab.ratePerKg" type="number" step="0.01" class="pp-input !py-1 text-xs" />
+                </div>
+              </div>
+              <p v-if="liveResults?.cost?.conversionSlabLabel" class="text-[10px] text-amber-700 mt-2">
+                Active: {{ liveResults.cost.conversionSlabLabel }} → ₹{{ liveResults.cost.conversionPerKg?.toFixed(0) }}/kg
+              </p>
             </div>
           </div>
 

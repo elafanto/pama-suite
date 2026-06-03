@@ -3,9 +3,11 @@ import {
   calculate as runCalculator,
   getCaliper,
   getPapersForRole,
+  DEFAULT_CONVERSION_SLABS,
+  type ConversionSlab,
 } from '@/services/calculator'
 
-export { COMMON_PAPER_COLORS, getPapersForRole } from '@/services/calculator'
+export { COMMON_PAPER_COLORS, getPapersForRole, DEFAULT_CONVERSION_SLABS, type ConversionSlab } from '@/services/calculator'
 
 export interface BoxCalcLayer {
   name: string
@@ -68,8 +70,8 @@ export interface BoxCalcForm {
   printingCost: number
   /** Freight/shipping charge in ₹ per kg of paper weight (same basis as layer paper rates) */
   shippingCostPerKg: number
-  /** Corrugation/conversion charge in ₹ per kg of finished box weight */
-  conversionCostPerKg: number
+  /** Weight-based conversion slab rates (₹/kg × paper weight) */
+  conversionSlabs: ConversionSlab[]
   scrapRate: number
   priceMode: 'auto' | 'custom'
   customSellingPrice: number | null
@@ -220,7 +222,14 @@ export function buildCalcInputs(form: BoxCalcForm) {
     customSellingPrice: form.customSellingPrice,
     printingCost: parseFloat(String(form.printingCost)),
     shippingCostPerKg: parseFloat(String(form.shippingCostPerKg ?? (form as { shippingCost?: number }).shippingCost)),
-    conversionCostPerKg: parseFloat(String(form.conversionCostPerKg ?? (form as { conversionCost?: number }).conversionCost)),
+    conversionSlabs: form.conversionSlabs?.length
+      ? form.conversionSlabs.map((s) => ({
+          label: s.label,
+          minWeightGm: parseFloat(String(s.minWeightGm)),
+          maxWeightGm: s.maxWeightGm != null ? parseFloat(String(s.maxWeightGm)) : null,
+          ratePerKg: parseFloat(String(s.ratePerKg)),
+        }))
+      : DEFAULT_CONVERSION_SLABS,
     scrapRate: parseFloat(String(form.scrapRate)),
     stackCheck: form.stackCheck.enabled ? {
       enabled: true,
@@ -238,6 +247,16 @@ export function computeBoxCalcResults(form: BoxCalcForm) {
   const res = runCalculator(buildCalcInputs(form))
   if (res.error) return { error: res.error } as const
   return res
+}
+
+export function joiningMethodLabel(method: BoxCalcForm['joining']['method']): string {
+  if (method === 'fevicol') return 'Fevicol'
+  if (method === 'both') return 'Staple + Fevicol'
+  return 'Staple'
+}
+
+export function defaultConversionSlabs(): ConversionSlab[] {
+  return DEFAULT_CONVERSION_SLABS.map((s) => ({ ...s }))
 }
 
 export function paperTypeLabel(paperType: string): string {

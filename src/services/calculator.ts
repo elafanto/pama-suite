@@ -244,6 +244,34 @@ export function estimateReelLength(gsm: number): number {
   return Math.round(600000 / gsm)
 }
 
+export interface ConversionSlab {
+  label: string
+  minWeightGm: number
+  maxWeightGm: number | null
+  ratePerKg: number
+}
+
+export const DEFAULT_CONVERSION_SLABS: ConversionSlab[] = [
+  { label: '> 2 kg', minWeightGm: 2000, maxWeightGm: null, ratePerKg: 4 },
+  { label: '1–2 kg', minWeightGm: 1000, maxWeightGm: 2000, ratePerKg: 5 },
+  { label: '500g–1 kg', minWeightGm: 500, maxWeightGm: 1000, ratePerKg: 6 },
+  { label: '< 500 g', minWeightGm: 0, maxWeightGm: 500, ratePerKg: 7 },
+]
+
+export function resolveConversionSlab(
+  paperWeightGm: number,
+  slabs: ConversionSlab[] | undefined,
+): ConversionSlab {
+  const list = slabs?.length ? slabs : DEFAULT_CONVERSION_SLABS
+  const sorted = [...list].sort((a, b) => b.minWeightGm - a.minWeightGm)
+  for (const slab of sorted) {
+    const aboveMin = paperWeightGm >= slab.minWeightGm
+    const belowMax = slab.maxWeightGm == null || paperWeightGm < slab.maxWeightGm
+    if (aboveMin && belowMax) return slab
+  }
+  return sorted[sorted.length - 1] ?? DEFAULT_CONVERSION_SLABS[DEFAULT_CONVERSION_SLABS.length - 1]
+}
+
 // Costing Calculations
 export function calculate(input: any) {
   const warnings: string[] = []
@@ -521,13 +549,14 @@ export function calculate(input: any) {
   const starchGm = sheetAreaM2 * (input.starchGSM || 7) * (input.layers.length - 1)
 
   let joiningWeightGm = 0
+  let pinCost = 0
   let joiningCost = 0
   const joiningMethod = input.joining || { method: 'stitching' }
   let pinInfo: any = null
 
   if (joiningMethod.method === 'stitching' || joiningMethod.method === 'both') {
-    // Pin calculation
     const stitchingDefaults = ADHESIVE_DEFAULTS.stitching
+    const wireRate = parseFloat(joiningMethod.wireRate) || stitchingDefaults.wireRate || 120
     const headType = joiningMethod.pinHeadType || (parseInt(input.ply) >= 5 ? 'double' : 'single')
     const spacing = stitchingDefaults.spacing[headType] || 60
     const minPins = stitchingDefaults.minPins || 3
@@ -538,12 +567,13 @@ export function calculate(input: any) {
       pins,
       headType,
       spacing,
-      weightPerPin
+      weightPerPin,
+      wireRate,
     }
 
     const stitchGm = pins * weightPerPin
     joiningWeightGm += stitchGm
-    joiningCost += (stitchGm / 1000) * (stitchingDefaults.wireRate || 120)
+    pinCost += (stitchGm / 1000) * wireRate
   }
 
   if (joiningMethod.method === 'fevicol' || joiningMethod.method === 'both') {
@@ -595,33 +625,44 @@ export function calculate(input: any) {
   const shippingPerKg = parseFloat(input.shippingCostPerKg ?? input.shippingCost) || 0
   const shippingPaperWeightKg = paperWeightTotal / 1000
   const shippingCost = shippingPerKg * shippingPaperWeightKg
-  const conversionPerKg = parseFloat(input.conversionCostPerKg ?? input.conversionCost) || 0
-  const conversionCost = conversionPerKg * (boxWeightGm / 1000)
+
+  const conversionSlab = resolveConversionSlab(paperWeightTotal, input.conversionSlabs)
+  const conversionPerKg = conversionSlab.ratePerKg
+  const conversionCost = conversionPerKg * shippingPaperWeightKg
+
   const wastagePercent = (parseFloat(input.productionWastePercent) || 3) / 100
+  const wastageCost = (paperCostTotal + starchCost + pinCost + joiningCost) * wastagePercent
 
-  const subTotalBeforeWaste = paperCostTotal + starchCost + joiningCost + printingCost + shippingCost + conversionCost
-  const wastageCost = (paperCostTotal + starchCost + joiningCost) * wastagePercent
-  const subTotal = subTotalBeforeWaste + wastageCost
+  const materialSubtotal = paperCostTotal + starchCost + pinCost + joiningCost + wastageCost
+  const pricingSubtotal = materialSubtotal + conversionCost + shippingCost
+  const subTotal = pricingSubtotal + printingCost
 
-  // Price pricing modes
+  const joiningLabel =
+    joiningMethod.method === 'fevicol' ? 'Fevicol'
+    : joiningMethod.method === 'both' ? 'Fevicol'
+    : 'Staple'
+
+  // Margin applies to Material + Conversion + Shipping only
   const priceMode = input.priceMode || 'auto'
   let sellingPrice = 0
   let marginValue = 0
-  let marginPercent = (parseFloat(input.marginPercent) || 30) / 100
+  let marginPercent = (parseFloat(input.marginPercent) || 15) / 100
   let effectiveMarginPercent = marginPercent * 100
 
   if (priceMode === 'custom' && input.customSellingPrice && input.customSellingPrice > 0) {
     sellingPrice = parseFloat(input.customSellingPrice)
     marginValue = sellingPrice - subTotal
-    effectiveMarginPercent = subTotal > 0 ? (marginValue / subTotal) * 100 : 0
+    effectiveMarginPercent = pricingSubtotal > 0 ? (marginValue / pricingSubtotal) * 100 : 0
     marginPercent = effectiveMarginPercent / 100
   } else {
-    marginValue = subTotal * marginPercent
+    marginValue = pricingSubtotal * marginPercent
     sellingPrice = subTotal + marginValue
   }
 
-  // Order totals
   const qty = parseInt(input.quantity) || 1
+  const divisorQty = qty > 0 ? qty : 1
+
+  // Order totals
   const orderTotal = {
     quantity: qty,
     totalWeightKg: (boxWeightGm * qty) / 1000,
@@ -662,8 +703,82 @@ export function calculate(input: any) {
     }
   })
 
-  const sheetKgRate = paperWeightTotal > 0 ? (paperCostTotal / (paperWeightTotal / 1000)) : 0
-  const boxKgRate = boxWeightGm > 0 ? (sellingPrice / (boxWeightGm / 1000)) : 0
+  const paperWeightKg = paperWeightTotal / 1000
+  const boxWeightKg = boxWeightGm / 1000
+  const sheetWeightKg = sheetWeightGm / 1000
+
+  const sheetKgRate = paperWeightKg > 0 ? (paperCostTotal / paperWeightKg) : 0
+  const boxKgRate = boxWeightKg > 0 ? (sellingPrice / boxWeightKg) : 0
+
+  const perKgDivisor = paperWeightKg > 0 ? paperWeightKg : 1
+
+  const toPerKg = (total: number, weightKg = perKgDivisor) =>
+    weightKg > 0 ? total / weightKg : 0
+  const toPerBox = (total: number) => total
+
+  const pricing = {
+    material: {
+      paper: paperCostTotal,
+      starch: starchCost,
+      pin: pinCost,
+      joining: joiningCost,
+      joiningLabel,
+      wastage: wastageCost,
+      subtotal: materialSubtotal,
+    },
+    conversion: {
+      ratePerKg: conversionPerKg,
+      slabLabel: conversionSlab.label,
+      paperWeightKg: shippingPaperWeightKg,
+      total: conversionCost,
+    },
+    shipping: {
+      ratePerKg: shippingPerKg,
+      paperWeightKg: shippingPaperWeightKg,
+      total: shippingCost,
+    },
+    pricingSubtotal,
+    margin: { percent: effectiveMarginPercent, amount: marginValue },
+    printing: printingCost,
+    subtotal: subTotal,
+    grandTotal: sellingPrice,
+    perKg: {
+      material: toPerKg(materialSubtotal),
+      conversion: toPerKg(conversionCost),
+      shipping: toPerKg(shippingCost),
+      subtotal: toPerKg(pricingSubtotal),
+      margin: toPerKg(marginValue),
+      grandTotal: toPerKg(sellingPrice),
+    },
+    perBox: {
+      material: toPerBox(materialSubtotal),
+      conversion: toPerBox(conversionCost),
+      shipping: toPerBox(shippingCost),
+      subtotal: toPerBox(pricingSubtotal),
+      margin: toPerBox(marginValue),
+      grandTotal: toPerBox(sellingPrice),
+    },
+    sheet: {
+      weightKg: sheetWeightKg,
+      perKg: {
+        material: sheetWeightKg > 0 ? materialSubtotal / sheetWeightKg : 0,
+        conversion: sheetWeightKg > 0 ? conversionCost / sheetWeightKg : 0,
+        shipping: sheetWeightKg > 0 ? shippingCost / sheetWeightKg : 0,
+        subtotal: sheetWeightKg > 0 ? pricingSubtotal / sheetWeightKg : 0,
+        margin: sheetWeightKg > 0 ? marginValue / sheetWeightKg : 0,
+        grandTotal: sheetWeightKg > 0 ? sellingPrice / sheetWeightKg : 0,
+      },
+      perBox: {
+        material: materialSubtotal,
+        conversion: conversionCost,
+        shipping: shippingCost,
+        subtotal: pricingSubtotal,
+        margin: marginValue,
+        grandTotal: sellingPrice,
+      },
+    },
+    orderQty: divisorQty,
+  }
 
   return {
     success: true,
@@ -728,22 +843,29 @@ export function calculate(input: any) {
       layers: layerCosts,
       paperTotal: paperCostTotal,
       starch: starchCost,
+      pin: pinCost,
       joining: joiningCost,
+      joiningLabel,
       printing: printingCost,
       shipping: shippingCost,
       shippingPerKg,
       shippingPaperWeightKg,
       conversion: conversionCost,
       conversionPerKg,
-      conversionBoxWeightKg: boxWeightGm / 1000,
+      conversionSlabLabel: conversionSlab.label,
+      conversionPaperWeightKg: shippingPaperWeightKg,
+      conversionBoxWeightKg: boxWeightKg,
       wastage: wastageCost,
+      materialSubtotal,
+      pricingSubtotal,
       subTotal,
       margin: marginValue,
       marginPercent: effectiveMarginPercent,
       sellingPrice,
       priceMode,
       sheetRatePerKg: sheetKgRate,
-      boxRatePerKg: boxKgRate
+      boxRatePerKg: boxKgRate,
+      pricing,
     },
     order: orderTotal,
     timestamp: new Date().toISOString()
