@@ -5,7 +5,7 @@ import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useProductionStore } from '@/stores/production'
-import { normalizePaperType, productionBalance, STAGE_LABELS, STOCK_LABELS } from '@/services/production'
+import { normalizePaperType, productionBalance, REEL_LOW_STOCK_KG, reelInventorySummary, STAGE_LABELS, STOCK_LABELS } from '@/services/production'
 import type { PaperType, ProductionStage, ProductionStockType, ReelStock } from '@/types/models'
 
 const firmStore = useFirmStore()
@@ -140,45 +140,22 @@ const recentReelMoves = computed(() => {
     .filter((m) => m.stock_type === 'raw_reel')
     .slice(0, 12)
 })
-const reelBalanceReportRows = computed(() => {
-  const rows = new Map<string, {
-    key: string
-    paper_type: PaperType
-    gsm: string
-    bf: string
-    deckle: string
-    color: string
-    reels: number
-    activeReels: number
-    openingWeight: number
-    currentWeight: number
-  }>()
+const reelInventory = computed(() => reelInventorySummary(production.reels, production.movements))
+const reelBalanceReportRows = computed(() => reelInventory.value.breakdown)
 
-  for (const reel of production.reels) {
-    const row = {
-      paper_type: paperTypeOf(reel),
-      gsm: reel.gsm || '-',
-      bf: reel.bf || '-',
-      deckle: reel.deckle_size || '-',
-      color: reel.color || '-',
-    }
-    const key = [row.paper_type, row.gsm, row.bf, row.deckle, row.color].join('|')
-    if (!rows.has(key)) rows.set(key, { key, ...row, reels: 0, activeReels: 0, openingWeight: 0, currentWeight: 0 })
-    const out = rows.get(key)!
-    out.reels += 1
-    if (reel.status === 'active' && reel.current_weight > 0) out.activeReels += 1
-    out.openingWeight += Number(reel.opening_weight) || 0
-    out.currentWeight += Number(reel.current_weight) || 0
-  }
+const BREAKDOWN_STATUS_META = {
+  zero: { label: 'Zero stock', cls: 'bg-red-100 text-red-700' },
+  low: { label: 'Low stock', cls: 'bg-amber-100 text-amber-700' },
+  ok: { label: 'In stock', cls: 'bg-emerald-100 text-emerald-700' },
+} as const
 
-  return [...rows.values()].sort((a, b) =>
-    a.paper_type.localeCompare(b.paper_type) ||
-    a.gsm.localeCompare(b.gsm, undefined, { numeric: true }) ||
-    a.bf.localeCompare(b.bf, undefined, { numeric: true }) ||
-    a.deckle.localeCompare(b.deckle, undefined, { numeric: true }) ||
-    a.color.localeCompare(b.color)
-  )
-})
+function breakdownRowCls(status: keyof typeof BREAKDOWN_STATUS_META) {
+  return status === 'zero' ? 'bg-red-50' : status === 'low' ? 'bg-amber-50' : ''
+}
+
+function paperTypeCardCls(type: PaperType) {
+  return type === 'DUPLEX' ? 'from-purple-600 to-violet-800' : 'from-amber-600 to-orange-800'
+}
 const reelConsumptionReportRows = computed(() => {
   const reelsById = new Map(production.reels.map((reel) => [reel.id, reel]))
   const rows = new Map<string, {
@@ -621,7 +598,116 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-else-if="activeTab === 'reels'" class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+    <div v-else-if="activeTab === 'reels'" class="space-y-6">
+      <div class="space-y-4">
+        <div>
+          <h2 class="text-lg font-semibold text-navy">Paper Reel Inventory Summary</h2>
+          <p class="text-xs text-slate-500">Firm-scoped totals from reel stock and movement ledger (Kraft / Duplex, GSM, BF, deckle, color).</p>
+        </div>
+
+        <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+          <div class="pp-card p-4">
+            <div class="text-xs font-semibold text-slate-500 uppercase">Total Reels</div>
+            <div class="text-2xl font-bold text-navy mt-1">{{ reelInventory.totalReels }}</div>
+            <div class="text-xs text-slate-500 mt-1">{{ reelInventory.activeReels }} active</div>
+          </div>
+          <div class="pp-card p-4 border-l-4 border-emerald-400">
+            <div class="text-xs font-semibold text-slate-500 uppercase">Available KG</div>
+            <div class="text-2xl font-bold text-emerald-700 mt-1 font-mono">{{ n2(reelInventory.currentWeight) }}</div>
+          </div>
+          <div class="pp-card p-4 border-l-4 border-slate-400">
+            <div class="text-xs font-semibold text-slate-500 uppercase">Consumed KG</div>
+            <div class="text-2xl font-bold text-slate-700 mt-1 font-mono">{{ n2(reelInventory.consumedWeight) }}</div>
+            <div class="text-xs text-slate-500 mt-1">Ledger out {{ n2(reelInventory.movementConsumed) }} KG</div>
+          </div>
+          <div class="pp-card p-4 border-l-4 border-blue-400">
+            <div class="text-xs font-semibold text-slate-500 uppercase">Opening KG</div>
+            <div class="text-2xl font-bold text-blue-800 mt-1 font-mono">{{ n2(reelInventory.openingWeight) }}</div>
+          </div>
+          <div class="pp-card p-4 border-l-4 border-amber-400">
+            <div class="text-xs font-semibold text-slate-500 uppercase">Low Stock</div>
+            <div class="text-2xl font-bold text-amber-600 mt-1">{{ reelInventory.lowStockReels }}</div>
+            <div class="text-xs text-slate-500 mt-1">reels &lt; {{ REEL_LOW_STOCK_KG }} KG or 15% left</div>
+          </div>
+          <div class="pp-card p-4 border-l-4 border-red-400">
+            <div class="text-xs font-semibold text-slate-500 uppercase">Zero / Used</div>
+            <div class="text-2xl font-bold text-red-600 mt-1">{{ reelInventory.zeroStockReels + reelInventory.consumedReels }}</div>
+            <div class="text-xs text-slate-500 mt-1">{{ reelInventory.consumedReels }} fully consumed</div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div
+            v-for="row in reelInventory.byPaperType"
+            :key="row.paper_type"
+            class="pp-card p-4 bg-gradient-to-br text-white"
+            :class="paperTypeCardCls(row.paper_type)"
+          >
+            <div class="text-xs font-semibold uppercase opacity-90">{{ row.paper_type }}</div>
+            <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+              <span class="opacity-80">Reels</span>
+              <span class="font-mono text-right font-semibold">{{ row.reels }} ({{ row.activeReels }} active)</span>
+              <span class="opacity-80">Available KG</span>
+              <span class="font-mono text-right font-semibold">{{ n2(row.currentWeight) }}</span>
+              <span class="opacity-80">Consumed KG</span>
+              <span class="font-mono text-right font-semibold">{{ n2(row.consumedWeight) }}</span>
+              <span class="opacity-80">Opening KG</span>
+              <span class="font-mono text-right">{{ n2(row.openingWeight) }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="pp-card p-4 overflow-x-auto">
+          <h3 class="font-semibold text-sm mb-3 border-b pb-2">Breakdown by GSM / BF / Deckle / Color</h3>
+          <table class="w-full text-sm min-w-[980px]">
+            <thead class="text-xs uppercase text-slate-500 bg-slate-50">
+              <tr>
+                <th class="p-2 text-left">Type</th>
+                <th class="p-2 text-left">GSM</th>
+                <th class="p-2 text-left">BF</th>
+                <th class="p-2 text-left">Deckle</th>
+                <th class="p-2 text-left">Color</th>
+                <th class="p-2 text-right">Reels</th>
+                <th class="p-2 text-right">Active</th>
+                <th class="p-2 text-right">Available KG</th>
+                <th class="p-2 text-right">Consumed KG</th>
+                <th class="p-2 text-center">Status</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y">
+              <tr
+                v-for="row in reelBalanceReportRows"
+                :key="row.key"
+                :class="breakdownRowCls(row.stockStatus)"
+              >
+                <td class="p-2">
+                  <span class="pp-badge text-xs" :class="row.paper_type === 'DUPLEX' ? 'bg-purple-100 text-purple-800' : 'bg-amber-100 text-amber-800'">
+                    {{ row.paper_type }}
+                  </span>
+                </td>
+                <td class="p-2">{{ row.gsm }}</td>
+                <td class="p-2">{{ row.bf }}</td>
+                <td class="p-2">{{ row.deckle }}</td>
+                <td class="p-2">{{ row.color }}</td>
+                <td class="p-2 text-right font-mono">{{ row.reels }}</td>
+                <td class="p-2 text-right font-mono">{{ row.activeReels }}</td>
+                <td class="p-2 text-right font-mono">{{ n2(row.currentWeight) }}</td>
+                <td class="p-2 text-right font-mono text-slate-600">{{ n2(row.consumedWeight) }}</td>
+                <td class="p-2 text-center">
+                  <span class="pp-badge text-xs" :class="BREAKDOWN_STATUS_META[row.stockStatus].cls">
+                    {{ BREAKDOWN_STATUS_META[row.stockStatus].label }}
+                  </span>
+                </td>
+              </tr>
+              <tr v-if="reelBalanceReportRows.length === 0">
+                <td colspan="10" class="p-6 text-center text-slate-400">No paper reel stock yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
       <div class="xl:col-span-2 pp-card p-6">
         <div class="flex flex-col gap-2 border-b pb-3 mb-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -778,6 +864,7 @@ onMounted(async () => {
           </div>
         </div>
       </div>
+      </div>
     </div>
 
     <div v-else-if="activeTab === 'consumables'" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -922,8 +1009,26 @@ onMounted(async () => {
 
       <div class="pp-card p-6">
         <h2 class="font-semibold border-b pb-2 mb-4">Reel Balance by Type / GSM / BF / Deckle / Color</h2>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <div class="pp-card p-3 text-sm">
+            <div class="text-slate-500">Total reels</div>
+            <div class="font-bold text-navy text-lg">{{ reelInventory.totalReels }}</div>
+          </div>
+          <div class="pp-card p-3 text-sm">
+            <div class="text-slate-500">Available KG</div>
+            <div class="font-mono font-bold text-emerald-700 text-lg">{{ n2(reelInventory.currentWeight) }}</div>
+          </div>
+          <div class="pp-card p-3 text-sm">
+            <div class="text-slate-500">Consumed KG</div>
+            <div class="font-mono font-bold text-lg">{{ n2(reelInventory.consumedWeight) }}</div>
+          </div>
+          <div class="pp-card p-3 text-sm">
+            <div class="text-slate-500">Movement out KG</div>
+            <div class="font-mono font-bold text-lg">{{ n2(reelInventory.movementConsumed) }}</div>
+          </div>
+        </div>
         <div class="overflow-x-auto">
-          <table class="w-full text-sm min-w-[920px]">
+          <table class="w-full text-sm min-w-[1020px]">
             <thead class="text-xs uppercase text-slate-500 bg-slate-50">
               <tr>
                 <th class="p-3 text-left">Type</th>
@@ -934,11 +1039,13 @@ onMounted(async () => {
                 <th class="p-3 text-right">Reels</th>
                 <th class="p-3 text-right">Active</th>
                 <th class="p-3 text-right">Opening KG</th>
-                <th class="p-3 text-right">Current KG</th>
+                <th class="p-3 text-right">Available KG</th>
+                <th class="p-3 text-right">Consumed KG</th>
+                <th class="p-3 text-center">Status</th>
               </tr>
             </thead>
             <tbody class="divide-y">
-              <tr v-for="row in reelBalanceReportRows" :key="row.key">
+              <tr v-for="row in reelBalanceReportRows" :key="row.key" :class="breakdownRowCls(row.stockStatus)">
                 <td class="p-3">{{ row.paper_type }}</td>
                 <td class="p-3">{{ row.gsm }}</td>
                 <td class="p-3">{{ row.bf }}</td>
@@ -948,9 +1055,15 @@ onMounted(async () => {
                 <td class="p-3 text-right font-mono">{{ row.activeReels }}</td>
                 <td class="p-3 text-right font-mono">{{ n2(row.openingWeight) }}</td>
                 <td class="p-3 text-right font-mono">{{ n2(row.currentWeight) }}</td>
+                <td class="p-3 text-right font-mono">{{ n2(row.consumedWeight) }}</td>
+                <td class="p-3 text-center">
+                  <span class="pp-badge text-xs" :class="BREAKDOWN_STATUS_META[row.stockStatus].cls">
+                    {{ BREAKDOWN_STATUS_META[row.stockStatus].label }}
+                  </span>
+                </td>
               </tr>
               <tr v-if="reelBalanceReportRows.length === 0">
-                <td colspan="9" class="p-8 text-center text-slate-400">No paper reel stock yet.</td>
+                <td colspan="11" class="p-8 text-center text-slate-400">No paper reel stock yet.</td>
               </tr>
             </tbody>
           </table>
