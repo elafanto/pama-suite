@@ -6,6 +6,7 @@ import {
   fmtMoney,
   getSheetDiagramSVG,
   getStrengthRating,
+  joiningMethodLabel,
   type BoxCalcForm,
 } from '@/services/boxcalcUi'
 
@@ -26,9 +27,80 @@ defineEmits<{
 
 const diagramSvg = computed(() => getSheetDiagramSVG(props.results))
 
+const boxWeightKg = computed(() => (props.results?.weight?.boxTotal || 0) / 1000)
+
+function perKgFromBox(perBox: number) {
+  return boxWeightKg.value > 0 ? perBox / boxWeightKg.value : 0
+}
+
 function stackRatingClass(passes: boolean) {
   return passes ? 'bg-emerald-50 border-emerald-300 text-emerald-800' : 'bg-red-50 border-red-300 text-red-800'
 }
+
+const showPin = computed(() =>
+  props.form.joining.method === 'stitching' || props.form.joining.method === 'both',
+)
+const showJoining = computed(() =>
+  props.form.joining.method === 'fevicol' || props.form.joining.method === 'both',
+)
+
+type DualRow = { label: string; perBox: number; perKg?: number; bold?: boolean; highlight?: string; negative?: boolean }
+
+const weightRows = computed((): DualRow[] => {
+  const w = props.results?.weight
+  if (!w) return []
+  return [
+    { label: 'SHEET WEIGHT / box', perBox: w.sheetWeight, bold: true, highlight: 'teal' },
+    { label: '− Trim Waste', perBox: w.trimPerBox, negative: true, highlight: 'red' },
+    { label: '= Net Sheet', perBox: w.netSheetWeight, highlight: 'cyan' },
+    { label: '− Slot Cutout', perBox: w.slotWaste, negative: true, highlight: 'orange' },
+    {
+      label: `+ Joining (${joiningMethodLabel(props.form.joining.method)})`,
+      perBox: w.joining,
+      highlight: 'blue',
+    },
+    { label: 'BOX WEIGHT (Final)', perBox: w.boxTotal, bold: true, highlight: 'green' },
+  ].map((row) => ({ ...row, perKg: perKgFromBox(row.perBox) }))
+})
+
+type CostDualRow = DualRow & { shippingStyle?: boolean; marginNegative?: boolean }
+
+const materialCostRows = computed((): CostDualRow[] => {
+  const c = props.results?.cost
+  if (!c) return []
+  const rows: CostDualRow[] = [
+    { label: 'Paper', perBox: c.paperTotal ?? 0 },
+    { label: 'Starch', perBox: c.starch ?? 0 },
+  ]
+  if (showPin.value) rows.push({ label: 'Pin', perBox: c.pin ?? 0 })
+  if (showJoining.value) {
+    rows.push({ label: c.joiningLabel || 'Fevicol', perBox: c.joining ?? 0 })
+  }
+  if (c.wastage) rows.push({ label: 'Wastage', perBox: c.wastage, highlight: 'orange' })
+  rows.push({ label: 'Material Subtotal', perBox: c.materialSubtotal ?? 0, bold: true })
+  return rows.map((row) => ({ ...row, perKg: perKgFromBox(row.perBox) }))
+})
+
+const costRowsAfterMaterial = computed((): CostDualRow[] => {
+  const c = props.results?.cost
+  if (!c) return []
+  const rows: CostDualRow[] = [
+    {
+      label: `Conversion (${fmt(c.conversionPerKg, 0)}/kg × ${fmt(c.conversionPaperWeightKg, 3)} kg)`,
+      perBox: c.conversion ?? 0,
+    },
+    { label: 'Shipping', perBox: c.shipping ?? 0, shippingStyle: true },
+    { label: 'Subtotal (Material + Conversion + Shipping)', perBox: c.pricingSubtotal ?? 0, bold: true },
+  ]
+  if (c.printing) rows.push({ label: 'Printing', perBox: c.printing })
+  rows.push({
+    label: `Margin (${fmt(c.marginPercent, 1)}%)`,
+    perBox: c.margin ?? 0,
+    marginNegative: (c.margin ?? 0) < 0,
+  })
+  rows.push({ label: 'SELLING PRICE', perBox: c.sellingPrice ?? 0, bold: true, highlight: 'sell' })
+  return rows.map((row) => ({ ...row, perKg: perKgFromBox(row.perBox) }))
+})
 </script>
 
 <template>
@@ -297,43 +369,86 @@ function stackRatingClass(passes: boolean) {
       <details class="mb-2 text-sm">
         <summary class="cursor-pointer text-slate-600 text-xs font-medium">Paper layer breakdown (click to expand)</summary>
         <table class="w-full text-xs mt-2">
+          <thead>
+            <tr class="text-slate-500 border-b border-slate-200">
+              <th class="text-left py-1 pl-2 font-medium">Layer</th>
+              <th class="text-right py-1 font-medium">Per Box</th>
+              <th class="text-right py-1 pr-2 font-medium">Per KG</th>
+            </tr>
+          </thead>
           <tbody>
             <tr v-for="(layer, idx) in results?.weight?.layers" :key="idx" class="border-b border-slate-100">
               <td class="py-1.5 pl-2">{{ layer.name }}</td>
               <td class="py-1.5 text-right font-mono">{{ fmt(layer.weightGm, 2) }} gm</td>
+              <td class="py-1.5 pr-2 text-right font-mono text-slate-500">{{ fmt(perKgFromBox(layer.weightGm), 1) }} gm/kg</td>
             </tr>
             <tr class="bg-slate-50">
               <td class="py-1.5 pl-2 font-semibold">Paper Subtotal</td>
               <td class="py-1.5 text-right font-mono font-semibold">{{ fmt(results?.weight?.paperTotal, 2) }} gm</td>
+              <td class="py-1.5 pr-2 text-right font-mono font-semibold text-slate-600">{{ fmt(perKgFromBox(results?.weight?.paperTotal || 0), 1) }} gm/kg</td>
             </tr>
           </tbody>
         </table>
       </details>
       <table class="w-full text-sm">
+        <thead>
+          <tr class="text-slate-500 border-b border-slate-200">
+            <th class="text-left py-1.5 font-medium">Line</th>
+            <th class="text-right py-1.5 font-medium">Per Box</th>
+            <th class="text-right py-1.5 font-medium">Per KG</th>
+          </tr>
+        </thead>
         <tbody>
-          <tr class="bg-teal-50 border-y-2 border-teal-400">
-            <td class="py-2.5 font-bold text-teal-900">SHEET WEIGHT / box</td>
-            <td class="py-2.5 text-right font-mono font-bold text-teal-900 text-lg">{{ fmt(results?.weight?.sheetWeight, 2) }} gm</td>
-          </tr>
-          <tr class="border-b bg-red-50/50">
-            <td class="py-2 text-red-700">− Trim Waste</td>
-            <td class="py-2 text-right font-mono text-red-700">− {{ fmt(results?.weight?.trimPerBox, 2) }} gm</td>
-          </tr>
-          <tr class="bg-cyan-50 border-y border-cyan-200">
-            <td class="py-2 text-cyan-900">= Net Sheet</td>
-            <td class="py-2 text-right font-mono font-semibold text-cyan-900">{{ fmt(results?.weight?.netSheetWeight, 2) }} gm</td>
-          </tr>
-          <tr class="border-b">
-            <td class="py-2 text-orange-700 text-xs">− Slot Cutout</td>
-            <td class="py-2 text-right font-mono text-orange-700 text-xs">− {{ fmt(results?.weight?.slotWaste, 2) }} gm</td>
-          </tr>
-          <tr class="border-b">
-            <td class="py-2 text-blue-700">+ Joining ({{ form.joining.method }})</td>
-            <td class="py-2 text-right font-mono text-blue-700">+ {{ fmt(results?.weight?.joining, 2) }} gm</td>
-          </tr>
-          <tr class="bg-green-50 border-y-2 border-green-500">
-            <td class="py-2.5 font-bold text-green-900">BOX WEIGHT (Final)</td>
-            <td class="py-2.5 text-right font-mono font-bold text-green-900 text-lg">{{ fmt(results?.weight?.boxTotal, 2) }} gm</td>
+          <tr
+            v-for="row in weightRows"
+            :key="row.label"
+            :class="[
+              row.highlight === 'teal' ? 'bg-teal-50 border-y-2 border-teal-400' : '',
+              row.highlight === 'red' ? 'border-b bg-red-50/50' : '',
+              row.highlight === 'cyan' ? 'bg-cyan-50 border-y border-cyan-200' : '',
+              row.highlight === 'orange' ? 'border-b' : '',
+              row.highlight === 'blue' ? 'border-b' : '',
+              row.highlight === 'green' ? 'bg-green-50 border-y-2 border-green-500' : '',
+              !row.highlight ? 'border-b border-slate-100' : '',
+            ]"
+          >
+            <td
+              class="py-2 pl-1"
+              :class="{
+                'font-bold text-teal-900 py-2.5': row.highlight === 'teal',
+                'text-red-700': row.highlight === 'red',
+                'text-cyan-900 font-semibold': row.highlight === 'cyan',
+                'text-orange-700 text-xs': row.highlight === 'orange',
+                'text-blue-700': row.highlight === 'blue',
+                'font-bold text-green-900 py-2.5': row.highlight === 'green',
+              }"
+            >{{ row.label }}</td>
+            <td
+              class="py-2 text-right font-mono"
+              :class="{
+                'font-bold text-teal-900 text-lg py-2.5': row.highlight === 'teal',
+                'text-red-700': row.highlight === 'red',
+                'font-semibold text-cyan-900': row.highlight === 'cyan',
+                'text-orange-700 text-xs': row.highlight === 'orange',
+                'text-blue-700': row.highlight === 'blue',
+                'font-bold text-green-900 text-lg py-2.5': row.highlight === 'green',
+              }"
+            >
+              <span v-if="row.negative">− </span><span v-else-if="row.highlight === 'blue' || row.highlight === 'green'">+ </span>{{ fmt(row.perBox, 2) }} gm
+            </td>
+            <td
+              class="py-2 text-right font-mono text-slate-500"
+              :class="{
+                'font-bold text-teal-800 py-2.5': row.highlight === 'teal',
+                'text-red-600': row.highlight === 'red',
+                'text-cyan-800': row.highlight === 'cyan',
+                'text-orange-600 text-xs': row.highlight === 'orange',
+                'text-blue-600': row.highlight === 'blue',
+                'font-bold text-green-800 py-2.5': row.highlight === 'green',
+              }"
+            >
+              <span v-if="row.negative">− </span>{{ fmt(row.perKg, 1) }} gm/kg
+            </td>
           </tr>
         </tbody>
       </table>
@@ -341,98 +456,122 @@ function stackRatingClass(passes: boolean) {
 
     <!-- Cost breakdown -->
     <div class="pp-card p-4 print-section">
-      <h3 class="font-bold text-navy mb-3">Cost Breakdown (per box)</h3>
+      <h3 class="font-bold text-navy mb-3">Cost Breakdown</h3>
 
-      <div class="mb-3">
-        <div class="text-xs font-bold uppercase text-slate-500 mb-2">Material</div>
-        <table class="w-full text-sm">
+      <details class="mb-3 text-sm">
+        <summary class="cursor-pointer text-slate-600 text-xs font-medium">Paper layer costs (click to expand)</summary>
+        <table class="w-full text-xs mt-2">
+          <thead>
+            <tr class="text-slate-500 border-b border-slate-200">
+              <th class="text-left py-1 pl-2 font-medium">Layer</th>
+              <th class="text-right py-1 font-medium">Per Box</th>
+              <th class="text-right py-1 pr-2 font-medium">Per KG</th>
+            </tr>
+          </thead>
           <tbody>
             <tr v-for="(layer, idx) in results?.cost?.layers" :key="idx" class="border-b border-slate-100">
               <td class="py-1.5 pl-2 text-slate-600">{{ layer.name }}</td>
               <td class="py-1.5 text-right font-mono">{{ fmtMoney(layer.cost) }}</td>
-            </tr>
-            <tr class="border-b border-slate-100">
-              <td class="py-1.5 pl-2 text-slate-600">Starch</td>
-              <td class="py-1.5 text-right font-mono">{{ fmtMoney(results?.cost?.starch) }}</td>
-            </tr>
-            <tr v-if="form.joining.method !== 'fevicol'" class="border-b border-slate-100">
-              <td class="py-1.5 pl-2 text-slate-600">Pin</td>
-              <td class="py-1.5 text-right font-mono">{{ fmtMoney(results?.cost?.pin) }}</td>
-            </tr>
-            <tr v-if="form.joining.method !== 'stitching'" class="border-b border-slate-100">
-              <td class="py-1.5 pl-2 text-slate-600">{{ results?.cost?.joiningLabel || 'Fevicol' }}</td>
-              <td class="py-1.5 text-right font-mono">{{ fmtMoney(results?.cost?.joining) }}</td>
-            </tr>
-            <tr v-if="results?.cost?.wastage" class="border-b border-slate-100">
-              <td class="py-1.5 pl-2 text-orange-700">Wastage</td>
-              <td class="py-1.5 text-right font-mono text-orange-700">{{ fmtMoney(results?.cost?.wastage) }}</td>
-            </tr>
-            <tr class="bg-slate-50">
-              <td class="py-2 pl-2 font-semibold">Material Subtotal</td>
-              <td class="py-2 text-right font-mono font-semibold">{{ fmtMoney(results?.cost?.materialSubtotal) }}</td>
+              <td class="py-1.5 pr-2 text-right font-mono text-slate-500">{{ fmtMoney(perKgFromBox(layer.cost)) }}/kg</td>
             </tr>
           </tbody>
         </table>
-      </div>
+      </details>
 
-      <table class="w-full text-sm mb-3">
-        <tbody>
-          <tr class="border-b border-slate-100">
-            <td class="py-2">
-              Conversion ({{ fmt(results?.cost?.conversionPerKg, 0) }}/kg × {{ fmt(results?.cost?.conversionPaperWeightKg, 3) }} kg)
-              <span class="text-xs text-slate-400 ml-1">{{ results?.cost?.conversionSlabLabel }}</span>
-            </td>
-            <td class="py-2 text-right font-mono">{{ fmtMoney(results?.cost?.conversion) }}</td>
-          </tr>
-          <tr class="border-b border-slate-100">
-            <td class="py-2">
-              Shipping
-              <span class="block text-[10px] text-slate-400 font-mono">{{ fmtMoney(results?.cost?.pricing?.perKg?.shipping) }}/kg</span>
-            </td>
-            <td class="py-2 text-right">
-              <span class="font-mono font-bold">{{ fmtMoney(results?.cost?.shipping) }}</span>
-            </td>
-          </tr>
-          <tr class="bg-slate-100">
-            <td class="py-2 font-semibold">Subtotal (Material + Conversion + Shipping)</td>
-            <td class="py-2 text-right font-mono font-semibold">{{ fmtMoney(results?.cost?.pricingSubtotal) }}</td>
-          </tr>
-          <tr v-if="results?.cost?.printing" class="border-b border-slate-100">
-            <td class="py-2 text-slate-600">Printing</td>
-            <td class="py-2 text-right font-mono">{{ fmtMoney(results?.cost?.printing) }}</td>
-          </tr>
-          <tr class="border-b" :class="results?.cost?.margin < 0 ? 'bg-red-50' : ''">
-            <td class="py-2" :class="results?.cost?.margin < 0 ? 'text-red-700' : 'text-green-700'">
-              Margin ({{ fmt(results?.cost?.marginPercent, 1) }}%)
-            </td>
-            <td class="py-2 text-right font-mono" :class="results?.cost?.margin < 0 ? 'text-red-700 font-bold' : 'text-green-700'">{{ fmtMoney(results?.cost?.margin) }}</td>
-          </tr>
-          <tr :class="results?.cost?.priceMode === 'custom' ? 'bg-orange-50' : 'bg-green-50'">
-            <td class="py-2 font-bold text-lg">SELLING PRICE</td>
-            <td class="py-2 text-right font-mono font-bold text-lg">{{ fmtMoney(results?.cost?.sellingPrice) }}</td>
-          </tr>
-        </tbody>
-      </table>
-
-      <div v-if="results?.cost?.pricing" class="border-t border-slate-200 pt-3">
-        <div class="text-xs font-bold uppercase text-slate-500 mb-2">Per KG / Per Box Summary</div>
-        <table class="w-full text-xs">
+      <div class="mb-3">
+        <div class="text-xs font-bold uppercase text-slate-500 mb-2">Material</div>
+        <table class="w-full text-sm">
           <thead>
-            <tr class="text-slate-500 border-b">
-              <th class="text-left py-1">Line</th>
-              <th class="text-right py-1">Per KG</th>
-              <th class="text-right py-1">Per Box</th>
+            <tr class="text-slate-500 border-b border-slate-200">
+              <th class="text-left py-1.5 font-medium">Line</th>
+              <th class="text-right py-1.5 font-medium">Per Box</th>
+              <th class="text-right py-1.5 font-medium">Per KG</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="key in ['material', 'conversion', 'shipping', 'subtotal', 'margin', 'grandTotal']" :key="key" class="border-b border-slate-100">
-              <td class="py-1 capitalize">{{ key === 'subtotal' ? 'Subtotal' : key === 'grandTotal' ? 'Grand Total' : key }}</td>
-              <td class="py-1 text-right font-mono text-slate-500">{{ fmtMoney(results.cost.pricing.perKg[key]) }}</td>
-              <td class="py-1 text-right font-mono" :class="key === 'shipping' || key === 'grandTotal' ? 'font-bold' : ''">{{ fmtMoney(results.cost.pricing.perBox[key]) }}</td>
+            <tr
+              v-for="row in materialCostRows"
+              :key="row.label"
+              :class="[
+                'border-b border-slate-100',
+                row.bold ? 'bg-slate-50' : '',
+                row.highlight === 'orange' ? 'text-orange-700' : '',
+              ]"
+            >
+              <td class="py-1.5 pl-2" :class="row.bold ? 'font-semibold' : 'text-slate-600'">{{ row.label }}</td>
+              <td class="py-1.5 text-right font-mono" :class="row.bold ? 'font-semibold' : ''">{{ fmtMoney(row.perBox) }}</td>
+              <td class="py-1.5 text-right font-mono text-slate-500" :class="row.bold ? 'font-semibold text-slate-600' : ''">{{ fmtMoney(row.perKg) }}/kg</td>
             </tr>
           </tbody>
         </table>
       </div>
+
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-slate-500 border-b border-slate-200">
+            <th class="text-left py-1.5 font-medium">Line</th>
+            <th class="text-right py-1.5 font-medium">Per Box</th>
+            <th class="text-right py-1.5 font-medium">Per KG</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="row in costRowsAfterMaterial"
+            :key="row.label"
+            :class="[
+              'border-b border-slate-100',
+              row.bold && row.highlight !== 'sell' ? 'bg-slate-100' : '',
+              row.marginNegative ? 'bg-red-50' : '',
+              row.highlight === 'sell' ? (results?.cost?.priceMode === 'custom' ? 'bg-orange-50' : 'bg-green-50') : '',
+            ]"
+          >
+            <td
+              class="py-2 pl-1"
+              :class="{
+                'font-semibold': row.bold && row.highlight !== 'sell',
+                'text-red-700': row.marginNegative,
+                'text-green-700': row.label.startsWith('Margin') && !row.marginNegative,
+                'font-bold text-lg': row.highlight === 'sell',
+              }"
+            >
+              {{ row.label }}
+              <span v-if="row.label.startsWith('Conversion')" class="text-xs text-slate-400 ml-1">{{ results?.cost?.conversionSlabLabel }}</span>
+            </td>
+            <td
+              class="py-2 text-right"
+              :class="{
+                'font-mono font-semibold': row.bold && row.highlight !== 'sell',
+                'text-red-700 font-bold font-mono': row.marginNegative,
+                'text-green-700 font-mono': row.label.startsWith('Margin') && !row.marginNegative,
+                'font-mono font-bold text-lg': row.highlight === 'sell',
+              }"
+            >
+              <template v-if="row.shippingStyle">
+                <span class="font-mono font-bold text-navy">{{ fmtMoney(row.perBox) }}</span>
+              </template>
+              <template v-else>
+                <span class="font-mono" :class="row.bold ? 'font-bold' : ''">{{ fmtMoney(row.perBox) }}</span>
+              </template>
+            </td>
+            <td
+              class="py-2 text-right font-mono text-slate-500"
+              :class="{
+                'font-semibold text-slate-600': row.bold && row.highlight !== 'sell',
+                'text-red-600': row.marginNegative,
+                'text-green-600': row.label.startsWith('Margin') && !row.marginNegative,
+                'font-bold text-slate-600': row.highlight === 'sell',
+              }"
+            >
+              <template v-if="row.shippingStyle">
+                <span class="text-[10px]">{{ fmtMoney(row.perKg) }}/kg</span>
+              </template>
+              <template v-else>
+                {{ fmtMoney(row.perKg) }}/kg
+              </template>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
 
     <!-- Order total -->
