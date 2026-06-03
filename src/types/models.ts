@@ -223,6 +223,11 @@ export interface ActivityLog extends BaseRecord {
   meta?: Record<string, unknown>
 }
 
+export interface DashboardTodo extends BaseRecord {
+  text: string
+  completed: boolean
+}
+
 export type ReelColor = 'NS' | 'GY' | 'NATURAL_BROWN' | string
 export type ReelStatus = 'active' | 'consumed'
 export type PaperType = 'KRAFT' | 'DUPLEX'

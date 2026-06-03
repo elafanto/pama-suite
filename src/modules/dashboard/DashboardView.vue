@@ -11,6 +11,7 @@ import { outstandingAging } from '@/services/reports'
 import { listItemStockMovements } from '@/services/inventoryLedger'
 import { computeStock, stockSummary } from '@/services/stock'
 import type { Invoice, ItemStockMovement } from '@/types/models'
+import DashboardTodoPanel from './DashboardTodoPanel.vue'
 
 const invoiceStore = useInvoiceStore()
 const purchaseStore = usePurchaseStore()
@@ -118,12 +119,14 @@ function n2(n: number) {
 </script>
 
 <template>
-  <div class="p-6 max-w-6xl mx-auto">
+  <div class="p-4 sm:p-6 max-w-[90rem] mx-auto">
     <header class="mb-6">
       <h1 class="text-2xl font-bold text-navy">Dashboard</h1>
       <p class="text-sm text-slate-500 mt-1">{{ firmStore.activeFirm?.name || 'Pama Business Suite' }}</p>
     </header>
 
+    <div class="flex flex-col xl:flex-row gap-6 items-stretch">
+      <div class="flex-1 min-w-0 order-2 xl:order-1">
     <!-- Headline KPIs -->
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
       <div class="pp-card p-4 bg-gradient-to-br from-navy to-primary text-white">
@@ -267,6 +270,12 @@ function n2(n: number) {
           <p class="text-sm text-slate-500">{{ t.desc }}</p>
         </div>
       </RouterLink>
+    </div>
+      </div>
+
+      <div class="w-full xl:w-[min(22rem,32%)] xl:min-w-[20rem] xl:max-w-md shrink-0 order-1 xl:order-2 xl:sticky xl:top-4 xl:self-start">
+        <DashboardTodoPanel />
+      </div>
     </div>
   </div>
 </template>
