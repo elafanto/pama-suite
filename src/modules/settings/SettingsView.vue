@@ -31,10 +31,13 @@ const supabaseKeyOk = ref(false)
 const includeSensitiveBackup = ref(false)
 const syncDiag = ref(getSyncDiagnostics())
 
+const MAX_SIGNATURE_BYTES = 512 * 1024
+
 const blank = (): NewFirm => ({
   name: '', gst: '', addr: '', city: '', state: '05', pin: '', phone: '', email: '',
   bank_name: '', bank_acno: '', bank_ifsc: '',
   prefix: 'INV', next_bill_no: 1,
+  signature: undefined,
 })
 const form = reactive<NewFirm>(blank())
 
@@ -49,13 +52,40 @@ function openEdit(f: Firm) {
     name: f.name, gst: f.gst, addr: f.addr, city: f.city, state: f.state, pin: f.pin,
     phone: f.phone, email: f.email, bank_name: f.bank_name, bank_acno: f.bank_acno, bank_ifsc: f.bank_ifsc,
     prefix: f.prefix || 'INV', next_bill_no: f.next_bill_no || 1,
+    signature: f.signature || undefined,
   })
   showModal.value = true
 }
+
+function onSignatureFile(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  if (!/^image\/(png|jpe?g)$/i.test(file.type)) {
+    alert('Please choose a PNG or JPEG image.')
+    input.value = ''
+    return
+  }
+  if (file.size > MAX_SIGNATURE_BYTES) {
+    alert(`Signature image must be under ${Math.round(MAX_SIGNATURE_BYTES / 1024)}KB.`)
+    input.value = ''
+    return
+  }
+  const reader = new FileReader()
+  reader.onload = () => { form.signature = reader.result as string }
+  reader.readAsDataURL(file)
+  input.value = ''
+}
+
+function clearSignature() {
+  form.signature = undefined
+}
+
 async function save() {
   if (!form.name.trim()) return alert('Firm name required')
-  if (editingId.value) await firmStore.update(editingId.value, { ...form })
-  else await firmStore.add({ ...form })
+  const payload = { ...form, signature: form.signature || undefined }
+  if (editingId.value) await firmStore.update(editingId.value, payload)
+  else await firmStore.add(payload)
   showModal.value = false
 }
 
@@ -278,7 +308,10 @@ onMounted(() => {
             <div class="font-semibold text-navy">{{ f.name }}
               <span v-if="f.id === firmStore.activeFirmId" class="pp-badge bg-accent text-white ml-1">Active</span>
             </div>
-            <div class="text-xs text-slate-500">{{ f.gst || 'No GST' }} · {{ f.city || '—' }} · Bill: {{ f.prefix || 'INV' }}-xxxx (next {{ f.next_bill_no || 1 }})</div>
+            <div class="text-xs text-slate-500">
+              {{ f.gst || 'No GST' }} · {{ f.city || '—' }} · Bill: {{ f.prefix || 'INV' }}-xxxx (next {{ f.next_bill_no || 1 }})
+              <span v-if="f.signature" class="ml-1 text-green-700">· ✍️ Signature</span>
+            </div>
           </div>
           <button v-if="f.id !== firmStore.activeFirmId" class="pp-btn pp-btn-ghost !py-1.5" @click="firmStore.setActive(f.id)">Switch</button>
           <button class="pp-btn pp-btn-ghost !px-2 !py-1" @click="openEdit(f)">✏️</button>
@@ -462,6 +495,21 @@ onMounted(() => {
           <div><label class="pp-label">Bank</label><input v-model="form.bank_name" class="pp-input" /></div>
           <div><label class="pp-label">A/c</label><input v-model="form.bank_acno" class="pp-input" /></div>
           <div><label class="pp-label">IFSC</label><input v-model="form.bank_ifsc" class="pp-input uppercase" /></div>
+        </div>
+        <div class="border-t border-slate-200 pt-3">
+          <label class="pp-label">Authorised Signature (PNG/JPEG, max 512KB)</label>
+          <div class="flex flex-wrap items-center gap-3 mt-1">
+            <label class="pp-btn pp-btn-ghost cursor-pointer !py-1.5">
+              Choose image
+              <input type="file" accept="image/png,image/jpeg,image/jpg" class="hidden" @change="onSignatureFile" />
+            </label>
+            <button v-if="form.signature" type="button" class="pp-btn pp-btn-danger !py-1.5" @click="clearSignature">Remove</button>
+            <div class="flex items-center justify-center min-w-[120px] min-h-[44px] rounded-lg border border-dashed border-slate-300 bg-slate-50 px-2">
+              <img v-if="form.signature" :src="form.signature" alt="Signature preview" class="max-h-12 max-w-[140px] object-contain" />
+              <span v-else class="text-xs text-slate-400">No signature</span>
+            </div>
+          </div>
+          <p class="text-xs text-slate-400 mt-1">Transparent PNG recommended. Used on invoice PDF and bill preview.</p>
         </div>
         <div class="flex justify-end gap-2 pt-2">
           <button class="pp-btn pp-btn-ghost" @click="showModal = false">Cancel</button>

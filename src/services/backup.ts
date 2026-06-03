@@ -334,6 +334,7 @@ async function importLegacyBilling(data: any, mode: ImportMode): Promise<ImportR
       bank_name: f.bankName || f.bank_name || '', bank_acno: f.bankAcno || f.bank_acno || '',
       bank_ifsc: f.bankIfsc || f.bank_ifsc || '',
       prefix: f.prefix || 'INV', next_bill_no: f.nextBillNo || f.next_bill_no || 1,
+      signature: f.signature || undefined,
       created_at: f.createdAt || nowISO(), updated_at: nowISO(), is_deleted: !!f.isDeleted, _dirty: true,
     })
     counts.firms = (counts.firms || 0) + 1
