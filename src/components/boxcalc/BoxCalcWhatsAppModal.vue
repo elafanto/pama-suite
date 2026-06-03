@@ -63,7 +63,7 @@ async function copyText() {
 </script>
 
 <template>
-  <div class="fixed inset-0 bg-black/50 z-50 flex items-start justify-center p-2 sm:p-4 overflow-y-auto" @click.self="emit('close')">
+  <div class="fixed inset-0 bg-black/50 z-50 flex items-start justify-center p-2 sm:p-4 overflow-y-auto">
     <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full my-4 max-h-[95vh] overflow-y-auto">
       <div class="sticky top-0 bg-gradient-to-r from-green-500 to-emerald-600 text-white px-4 py-3 rounded-t-2xl flex items-center justify-between z-10">
         <h3 class="text-lg font-bold">WhatsApp Reel Order Share</h3>

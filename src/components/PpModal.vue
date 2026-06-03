@@ -6,7 +6,7 @@ withDefaults(
     maxWidth?: string
     closeOnBackdrop?: boolean
   }>(),
-  { show: true, maxWidth: 'max-w-lg', closeOnBackdrop: true },
+  { show: true, maxWidth: 'max-w-lg', closeOnBackdrop: false },
 )
 const emit = defineEmits<{ close: [] }>()
 </script>

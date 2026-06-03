@@ -4,6 +4,8 @@ import { RouterLink } from 'vue-router'
 import PpModal from '@/components/PpModal.vue'
 import { usePartyStore, type NewParty } from '@/stores/parties'
 import type { Party, PartyRole } from '@/types/models'
+import { validateGstinForForm } from '@/services/gst'
+import { fetchIfscDetails, isValidIfsc, toUpperTrim } from '@/services/partyLookup'
 
 const store = usePartyStore()
 const search = ref('')
@@ -12,6 +14,12 @@ const showModal = ref(false)
 const editingId = ref<string | null>(null)
 const deleteTarget = ref<Party | null>(null)
 const deleteConfirmText = ref('')
+const gstHint = ref('')
+const gstHintOk = ref(true)
+const ifscStatus = ref<'idle' | 'fetching' | 'success' | 'error'>('idle')
+let ifscTimer: ReturnType<typeof setTimeout> | null = null
+
+type UpperPartyField = 'name' | 'gst' | 'acname' | 'acno' | 'bank' | 'ifsc'
 
 const blank = (): NewParty => ({
   name: '', roles: ['customer'], gst: '', phone: '', email: '', addr: '',
@@ -33,9 +41,70 @@ const deleteConfirmed = computed(() => {
   return !!target && deleteConfirmText.value.trim() === target.name
 })
 
+function resetFormHints() {
+  gstHint.value = ''
+  gstHintOk.value = true
+  ifscStatus.value = 'idle'
+  if (ifscTimer) clearTimeout(ifscTimer)
+}
+
+function onUpperInput(field: UpperPartyField, e: Event) {
+  const v = toUpperTrim((e.target as HTMLInputElement).value)
+  form[field] = v
+  if (field === 'gst') applyGstValidation()
+  if (field === 'ifsc') scheduleIfscLookup()
+}
+
+function applyGstValidation() {
+  const result = validateGstinForForm(form.gst)
+  gstHint.value = result.message
+  gstHintOk.value = result.valid || !form.gst.trim()
+  if (result.valid && result.stateCode) form.state = result.stateCode
+}
+
+function onGstBlur() {
+  applyGstValidation()
+}
+
+function scheduleIfscLookup() {
+  const code = toUpperTrim(form.ifsc)
+  if (code.length < 11) {
+    ifscStatus.value = 'idle'
+    return
+  }
+  if (!isValidIfsc(code)) {
+    ifscStatus.value = 'error'
+    return
+  }
+  ifscStatus.value = 'fetching'
+  if (ifscTimer) clearTimeout(ifscTimer)
+  ifscTimer = setTimeout(() => void lookupIfscNow(), 400)
+}
+
+async function lookupIfscNow() {
+  const code = toUpperTrim(form.ifsc)
+  if (!isValidIfsc(code)) {
+    ifscStatus.value = code.length >= 11 ? 'error' : 'idle'
+    return
+  }
+  ifscStatus.value = 'fetching'
+  const details = await fetchIfscDetails(code)
+  if (details) {
+    form.bank = details.bankLine
+    ifscStatus.value = 'success'
+  } else {
+    ifscStatus.value = 'error'
+  }
+}
+
+function onIfscBlur() {
+  void lookupIfscNow()
+}
+
 function openAdd() {
   editingId.value = null
   Object.assign(form, blank())
+  resetFormHints()
   showModal.value = true
 }
 function openEdit(p: Party) {
@@ -45,6 +114,8 @@ function openEdit(p: Party) {
     addr: p.addr, city: p.city, pin: p.pin, state: p.state, is_consumer: p.is_consumer,
     bank: p.bank, acno: p.acno, ifsc: p.ifsc, acname: p.acname,
   })
+  resetFormHints()
+  if (form.gst.trim()) applyGstValidation()
   showModal.value = true
 }
 function toggleRole(r: PartyRole) {
@@ -143,13 +214,17 @@ onMounted(store.load)
     <PpModal
       v-if="showModal"
       :title="editingId ? 'Edit Party' : 'Add Party'"
-      :close-on-backdrop="false"
       @close="showModal = false"
     >
       <div class="space-y-3">
         <div>
           <label class="pp-label">Name *</label>
-          <input v-model="form.name" class="pp-input" placeholder="M/s ABC Traders" />
+          <input
+            :value="form.name"
+            class="pp-input uppercase"
+            placeholder="M/s ABC Traders"
+            @input="onUpperInput('name', $event)"
+          />
         </div>
         <div>
           <label class="pp-label">Roles</label>
@@ -161,7 +236,24 @@ onMounted(store.load)
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
-          <div><label class="pp-label">GST</label><input v-model="form.gst" class="pp-input uppercase" placeholder="05ABCDE1234F1Z5" /></div>
+          <div>
+            <label class="pp-label">GST</label>
+            <input
+              :value="form.gst"
+              class="pp-input uppercase"
+              placeholder="05ABCDE1234F1Z5"
+              maxlength="15"
+              @input="onUpperInput('gst', $event)"
+              @blur="onGstBlur"
+            />
+            <p
+              v-if="gstHint"
+              class="text-xs mt-1"
+              :class="gstHintOk ? 'text-slate-500' : 'text-amber-700'"
+            >
+              {{ gstHint }}
+            </p>
+          </div>
           <div><label class="pp-label">Phone</label><input v-model="form.phone" class="pp-input" /></div>
         </div>
         <div><label class="pp-label">Address</label><input v-model="form.addr" class="pp-input" /></div>
@@ -174,10 +266,42 @@ onMounted(store.load)
         <div class="border-t border-slate-200 pt-3">
           <div class="pp-label !text-slate-600 !mb-2">Bank details (for RTGS/NEFT)</div>
           <div class="grid grid-cols-2 gap-3">
-            <div><label class="pp-label">A/c Name</label><input v-model="form.acname" class="pp-input" /></div>
-            <div><label class="pp-label">A/c No.</label><input v-model="form.acno" class="pp-input" /></div>
-            <div><label class="pp-label">IFSC</label><input v-model="form.ifsc" class="pp-input uppercase" /></div>
-            <div><label class="pp-label">Bank &amp; Branch</label><input v-model="form.bank" class="pp-input" /></div>
+            <div>
+              <label class="pp-label">A/c Name</label>
+              <input :value="form.acname" class="pp-input uppercase" @input="onUpperInput('acname', $event)" />
+            </div>
+            <div>
+              <label class="pp-label">A/c No.</label>
+              <input :value="form.acno" class="pp-input uppercase" @input="onUpperInput('acno', $event)" />
+            </div>
+            <div>
+              <label class="pp-label">IFSC</label>
+              <div class="relative">
+                <input
+                  :value="form.ifsc"
+                  class="pp-input uppercase pr-8"
+                  placeholder="HDFC0001234"
+                  maxlength="11"
+                  @input="onUpperInput('ifsc', $event)"
+                  @blur="onIfscBlur"
+                />
+                <span
+                  v-if="ifscStatus !== 'idle'"
+                  class="absolute right-2 top-1/2 -translate-y-1/2 text-sm"
+                  :class="{
+                    'text-slate-400': ifscStatus === 'fetching',
+                    'text-green-600': ifscStatus === 'success',
+                    'text-rose-500': ifscStatus === 'error',
+                  }"
+                >
+                  {{ ifscStatus === 'fetching' ? '⏳' : ifscStatus === 'success' ? '✓' : '✗' }}
+                </span>
+              </div>
+            </div>
+            <div>
+              <label class="pp-label">Bank &amp; Branch</label>
+              <input :value="form.bank" class="pp-input uppercase" @input="onUpperInput('bank', $event)" />
+            </div>
           </div>
         </div>
 
@@ -191,7 +315,6 @@ onMounted(store.load)
     <PpModal
       v-if="deleteTarget"
       title="Delete Party?"
-      :close-on-backdrop="false"
       @close="closeDelete"
     >
       <div class="space-y-4">

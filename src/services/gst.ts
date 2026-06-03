@@ -69,3 +69,71 @@ export function isGstinValid(gstin: string | undefined): boolean {
   const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/
   return GSTIN_RE.test(val)
 }
+
+/** 15th-character check digit per GSTIN encoding (GSTN). */
+export function isGstinChecksumValid(gstin: string | undefined): boolean {
+  if (!gstin) return false
+  const val = gstin.trim().toUpperCase()
+  if (val.length !== 15) return false
+  const charset = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+  let factor = 2
+  let sum = 0
+  const mod = charset.length
+  for (let i = 0; i < 14; i++) {
+    const codePoint = charset.indexOf(val[i])
+    if (codePoint < 0) return false
+    let digit = factor * codePoint
+    factor = factor === 2 ? 1 : 2
+    digit = Math.floor(digit / mod) + (digit % mod)
+    sum += digit
+  }
+  const check = (mod - (sum % mod)) % mod
+  return val[14] === charset[check]
+}
+
+export type GstinValidation = {
+  valid: boolean
+  message: string
+  stateCode: string
+  stateName: string
+}
+
+/** Client-side GSTIN checks only — no public CORS-friendly legal-name API exists. */
+export function validateGstinForForm(gstin: string | undefined): GstinValidation {
+  const raw = (gstin || '').trim().toUpperCase()
+  if (!raw) {
+    return { valid: true, message: '', stateCode: '', stateName: '' }
+  }
+  if (raw.length < 15) {
+    return {
+      valid: false,
+      message: `GSTIN must be 15 characters (${raw.length}/15)`,
+      stateCode: getStateCode(raw),
+      stateName: getStateName(raw),
+    }
+  }
+  if (!isGstinValid(raw)) {
+    return {
+      valid: false,
+      message: 'Invalid GSTIN format (e.g. 05ABCDE1234F1Z5)',
+      stateCode: getStateCode(raw),
+      stateName: getStateName(raw),
+    }
+  }
+  if (!isGstinChecksumValid(raw)) {
+    return {
+      valid: false,
+      message: 'GSTIN check digit does not match — verify the number',
+      stateCode: getStateCode(raw),
+      stateName: getStateName(raw),
+    }
+  }
+  const stateCode = getStateCode(raw)
+  const stateName = getStateName(raw)
+  return {
+    valid: true,
+    stateCode,
+    stateName,
+    message: `Valid GSTIN · ${stateName} (${stateCode}). Legal/trade name is not available offline — enter manually or verify on the GST portal.`,
+  }
+}

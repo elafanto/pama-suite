@@ -473,7 +473,6 @@ onMounted(() => {
     <PpModal
       v-if="deleteTarget"
       title="Delete Firm?"
-      :close-on-backdrop="false"
       @close="closeDelete"
     >
       <div class="space-y-4">
