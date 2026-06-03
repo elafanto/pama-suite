@@ -274,13 +274,75 @@ export function resolveConversionSlab(
 }
 
 // Costing Calculations
-export function calculate(input: any) {
+
+/** One paper layer as fed to {@link calculate}. Form values may still arrive as
+ *  strings, so numeric fields accept `number | string` and are parsed inside. */
+export interface CalcLayerInput {
+  name: string
+  gsm: number
+  bf: number
+  rate: number
+  takeUp?: number
+  reelLength?: number | string | null
+  rctOverride?: number | string | null
+}
+
+export interface CalcJoiningInput {
+  method?: 'stitching' | 'fevicol' | 'both' | string
+  pinHeadType?: 'single' | 'double' | ''
+  wireRate?: number | string
+  cwpGSM?: number
+  coverage?: number
+  cwpRate?: number
+}
+
+export interface CalcStackCheckInput {
+  enabled: boolean
+  stackCount: number | string
+  contentWeight: number | string
+}
+
+export interface CalcStackingConditions {
+  storage?: 'short' | 'medium' | 'long'
+  humid?: boolean
+  transport?: boolean
+  cold?: boolean
+}
+
+export interface CalcInput {
+  length: number | string
+  width: number | string
+  height: number | string
+  dimType?: 'inner' | 'outer'
+  ply: string
+  flute: string
+  caliperOverride?: number | string | null
+  glueFlap?: number | string | null
+  layers: CalcLayerInput[]
+  starchGSM?: number
+  starchRate?: number
+  joining?: CalcJoiningInput
+  quantity?: number | string
+  productionWastePercent?: number | string
+  marginPercent?: number | string
+  priceMode?: 'auto' | 'custom'
+  customSellingPrice?: number | string | null
+  printingCost?: number | string
+  shippingCostPerKg?: number | string
+  shippingCost?: number | string
+  conversionSlabs?: ConversionSlab[]
+  scrapRate?: number
+  stackCheck?: CalcStackCheckInput | null
+  stackingConditions?: CalcStackingConditions
+}
+
+export function calculate(input: CalcInput) {
   const warnings: string[] = []
 
   // Sizing inputs
-  const length = parseFloat(input.length)
-  const width = parseFloat(input.width)
-  const height = parseFloat(input.height)
+  const length = parseFloat(String(input.length))
+  const width = parseFloat(String(input.width))
+  const height = parseFloat(String(input.height))
 
   if (!length || !width || !height || length <= 0 || width <= 0 || height <= 0) {
     return { error: 'Box dimensions must be positive numbers', success: false }
@@ -291,12 +353,12 @@ export function calculate(input: any) {
   }
 
   // Determine caliper
-  let caliper = input.caliperOverride ? parseFloat(input.caliperOverride) : null
+  let caliper = input.caliperOverride ? parseFloat(String(input.caliperOverride)) : null
   if (!caliper) {
     caliper = getCaliper(input.ply, input.flute)
   }
 
-  const glueFlap = input.glueFlap ? parseFloat(input.glueFlap) : (GLUE_FLAP_DEFAULTS[input.ply] || 40)
+  const glueFlap = input.glueFlap ? parseFloat(String(input.glueFlap)) : (GLUE_FLAP_DEFAULTS[input.ply] || 40)
 
   // Outer vs Inner Sizing
   const isOuter = input.dimType === 'outer'
@@ -450,9 +512,10 @@ export function calculate(input: any) {
   }
 
   // Strength calculations
-  const layerStrengths = input.layers.map((l: any) => {
+  const layerStrengths = input.layers.map((l) => {
     const autoRCT = 0.6 * Math.sqrt(l.gsm * l.bf)
-    const finalRCT = l.rctOverride && l.rctOverride > 0 ? l.rctOverride : autoRCT
+    const rctOverrideNum = l.rctOverride != null ? parseFloat(String(l.rctOverride)) : 0
+    const finalRCT = rctOverrideNum > 0 ? rctOverrideNum : autoRCT
     return {
       name: l.name,
       gsm: l.gsm,
@@ -461,13 +524,13 @@ export function calculate(input: any) {
       bs: (l.bf * l.gsm) / 1000,
       rct: finalRCT,
       rctAuto: autoRCT,
-      rctOverridden: l.rctOverride && l.rctOverride > 0
+      rctOverridden: rctOverrideNum > 0
     }
   })
 
   // ECT = 0.0035 * sum(gsm * sqrt(bf) * takeUp)
   let ectSum = 0
-  input.layers.forEach((l: any) => {
+  input.layers.forEach((l) => {
     ectSum += l.gsm * Math.sqrt(l.bf) * (l.takeUp || 1.0)
   })
   const ect = 0.0035 * ectSum
@@ -486,7 +549,7 @@ export function calculate(input: any) {
   }
 
   // Safe stacking load
-  const stackingConditions = input.stackingConditions || { storage: 'medium' }
+  const stackingConditions: CalcStackingConditions = input.stackingConditions || { storage: 'medium' }
   let baseSF = SAFETY_FACTORS.mediumTerm
   switch (stackingConditions.storage) {
     case 'short': baseSF = SAFETY_FACTORS.shortTerm; break;
@@ -511,8 +574,8 @@ export function calculate(input: any) {
   // Stack check validation
   let stackValidation: any = null
   if (input.stackCheck && input.stackCheck.enabled) {
-    const stackCount = parseInt(input.stackCheck.stackCount) || 1
-    const contentWeight = parseFloat(input.stackCheck.contentWeight) || 0
+    const stackCount = parseInt(String(input.stackCheck.stackCount)) || 1
+    const contentWeight = parseFloat(String(input.stackCheck.contentWeight)) || 0
     const load = (stackCount - 1) * contentWeight
     const margin = safeLoadKg - load
     const passes = margin >= 0
@@ -537,7 +600,7 @@ export function calculate(input: any) {
   }
 
   // Weight Sizing
-  const layerWeights = input.layers.map((l: any) => {
+  const layerWeights = input.layers.map((l) => {
     const w = sheetAreaM2 * l.gsm * (l.takeUp || 1.0)
     return {
       name: l.name,
@@ -546,18 +609,20 @@ export function calculate(input: any) {
     }
   })
 
-  const paperWeightTotal = layerWeights.reduce((sum: number, l: any) => sum + l.weightGm, 0)
+  const paperWeightTotal = layerWeights.reduce((sum, l) => sum + l.weightGm, 0)
   const starchGm = sheetAreaM2 * (input.starchGSM || 7) * (input.layers.length - 1)
 
   let joiningWeightGm = 0
   let pinCost = 0
   let joiningCost = 0
-  const joiningMethod = input.joining || { method: 'stitching' }
-  let pinInfo: any = null
+  const joiningMethod: CalcJoiningInput = input.joining || { method: 'stitching' }
+  let pinInfo: {
+    pins: number; headType: string; spacing: number; weightPerPin: number; wireRate: number
+  } | null = null
 
   if (joiningMethod.method === 'stitching' || joiningMethod.method === 'both') {
     const stitchingDefaults = ADHESIVE_DEFAULTS.stitching
-    const wireRate = parseFloat(joiningMethod.wireRate) || stitchingDefaults.wireRate || 120
+    const wireRate = parseFloat(String(joiningMethod.wireRate)) || stitchingDefaults.wireRate || 120
     const headType = joiningMethod.pinHeadType || (parseInt(input.ply) >= 5 ? 'double' : 'single')
     const spacing = stitchingDefaults.spacing[headType] || 60
     const minPins = stitchingDefaults.minPins || 3
@@ -587,7 +652,7 @@ export function calculate(input: any) {
   }
 
   // Big Sheet Approach - Allocated corrugator trim waste
-  const sheetGsmTotal = input.layers.reduce((sum: number, l: any) => sum + l.gsm * (l.takeUp || 1.0), 0)
+  const sheetGsmTotal = input.layers.reduce((sum, l) => sum + l.gsm * (l.takeUp || 1.0), 0)
   const starchGsmPerArea = (input.starchGSM || 7) * (input.layers.length - 1)
   const combinedGsmPerArea = sheetGsmTotal + starchGsmPerArea
 
@@ -613,17 +678,17 @@ export function calculate(input: any) {
   const boxWeightGm = netSheetWeightGm - slotWasteGm + joiningWeightGm
 
   // Cost Sizing
-  const layerCosts = layerWeights.map((l: any) => ({
+  const layerCosts = layerWeights.map((l) => ({
     name: l.name,
     weightGm: l.weightGm,
     cost: (l.weightGm / 1000) * l.rate
   }))
 
-  const paperCostTotal = layerCosts.reduce((sum: number, l: any) => sum + l.cost, 0)
+  const paperCostTotal = layerCosts.reduce((sum, l) => sum + l.cost, 0)
   const starchCost = (starchGm / 1000) * (input.starchRate || 30)
 
-  const printingCost = parseFloat(input.printingCost) || 0
-  const shippingPerKg = parseFloat(input.shippingCostPerKg ?? input.shippingCost) || 0
+  const printingCost = parseFloat(String(input.printingCost)) || 0
+  const shippingPerKg = parseFloat(String(input.shippingCostPerKg ?? input.shippingCost)) || 0
   const shippingPaperWeightKg = paperWeightTotal / 1000
   const shippingCost = shippingPerKg * shippingPaperWeightKg
 
@@ -633,7 +698,7 @@ export function calculate(input: any) {
   const conversionPerKg = conversionSlab.ratePerKg
   const conversionCost = conversionPerKg * conversionWeightKg
 
-  const wastagePercent = (parseFloat(input.productionWastePercent) || 3) / 100
+  const wastagePercent = (parseFloat(String(input.productionWastePercent)) || 3) / 100
   const wastageCost = (paperCostTotal + starchCost + pinCost + joiningCost) * wastagePercent
 
   const materialSubtotal = paperCostTotal + starchCost + pinCost + joiningCost + wastageCost
@@ -649,11 +714,11 @@ export function calculate(input: any) {
   const priceMode = input.priceMode || 'auto'
   let sellingPrice = 0
   let marginValue = 0
-  let marginPercent = (parseFloat(input.marginPercent) || 15) / 100
+  let marginPercent = (parseFloat(String(input.marginPercent)) || 15) / 100
   let effectiveMarginPercent = marginPercent * 100
 
-  if (priceMode === 'custom' && input.customSellingPrice && input.customSellingPrice > 0) {
-    sellingPrice = parseFloat(input.customSellingPrice)
+  if (priceMode === 'custom' && Number(input.customSellingPrice) > 0) {
+    sellingPrice = parseFloat(String(input.customSellingPrice))
     marginValue = sellingPrice - subTotal
     effectiveMarginPercent = pricingSubtotal > 0 ? (marginValue / pricingSubtotal) * 100 : 0
     marginPercent = effectiveMarginPercent / 100
@@ -662,7 +727,7 @@ export function calculate(input: any) {
     sellingPrice = subTotal + marginValue
   }
 
-  const qty = parseInt(input.quantity) || 1
+  const qty = parseInt(String(input.quantity)) || 1
   const divisorQty = qty > 0 ? qty : 1
 
   // Order totals
@@ -676,10 +741,10 @@ export function calculate(input: any) {
   }
 
   // Reel Orders
-  const reelOrders = input.layers.map((layer: any) => {
+  const reelOrders = input.layers.map((layer) => {
     const wPerSheet = sheetAreaM2 * layer.gsm * (layer.takeUp || 1.0)
     const totalNeeded = (wPerSheet / 1000) * qty * (1 + wastagePercent)
-    const reelLength = layer.reelLength || estimateReelLength(layer.gsm)
+    const reelLength = Number(layer.reelLength) || estimateReelLength(layer.gsm)
     const reelWeightKg = (reelInfo.reelWidthMM * reelLength * layer.gsm) / 1000000
     const reelsNeeded = Math.ceil(totalNeeded / reelWeightKg)
     return {
@@ -696,8 +761,8 @@ export function calculate(input: any) {
   })
 
   // Scrap recycle value
-  const trimWaste = input.layers.map((layer: any) => {
-    const reelLength = layer.reelLength || estimateReelLength(layer.gsm)
+  const trimWaste = input.layers.map((layer) => {
+    const reelLength = Number(layer.reelLength) || estimateReelLength(layer.gsm)
     const trimKg = (reelInfo.totalTrimMM * reelLength * layer.gsm) / 1000000
     return {
       name: layer.name,

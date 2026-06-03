@@ -1,12 +1,16 @@
-// @ts-nocheck
 /**
  * Hindi Job Card Generator — printable A4 pages (2 stage cards per sheet, 50% height each)
  */
+import type { BoxCalcForm, BoxCalcJobCard, CureStatus } from '@/services/boxcalcUi'
 
+// `results` stays loosely typed (Record) because the cards read deep,
+// presentation-only paths off the calculator output. `form` is the real
+// BoxCalcForm with jobCard required (the generator is only ever called once a
+// job card exists), so a wrong key like data.f is still caught at build time.
 export interface JobCardData {
-  form: any
-  results: any
-  cureStatus: any
+  form: BoxCalcForm & { jobCard: BoxCalcJobCard }
+  results: Record<string, any>
+  cureStatus: CureStatus
   totalBundles: number
   twoPlyCount: number
 }
@@ -14,26 +18,27 @@ export interface JobCardData {
 const JobCardGenerator = (function () {
 
   // ============ HELPER FORMATTERS ============
-  const fmt = (n, d = 2) => (n === null || n === undefined || isNaN(n)) ? '-' : Number(n).toFixed(d);
-  const fmtInt = (n) => (n === null || n === undefined || isNaN(n)) ? '-' : Math.round(n).toString();
-  const fmtMoney = (n) => {
-    if (n === null || n === undefined || isNaN(n)) return '₹0.00';
+  type Num = number | string | null | undefined
+  const fmt = (n: Num, d = 2) => (n === null || n === undefined || isNaN(Number(n))) ? '-' : Number(n).toFixed(d);
+  const fmtInt = (n: Num) => (n === null || n === undefined || isNaN(Number(n))) ? '-' : Math.round(Number(n)).toString();
+  const fmtMoney = (n: Num) => {
+    if (n === null || n === undefined || isNaN(Number(n))) return '₹0.00';
     return '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
-  const fmtDate = (iso) => {
+  const fmtDate = (iso: string | null | undefined) => {
     if (!iso) return '_______________';
     const d = new Date(iso);
-    if (isNaN(d)) return iso;
+    if (isNaN(d.getTime())) return iso;
     return String(d.getDate()).padStart(2, '0') + '/' +
            String(d.getMonth() + 1).padStart(2, '0') + '/' +
            d.getFullYear();
   };
-  const safe = (v, fallback = '_______________') => (v && String(v).trim()) ? String(v) : fallback;
+  const safe = (v: unknown, fallback = '_______________') => (v && String(v).trim()) ? String(v) : fallback;
 
   /**
    * Format dimension based on user's chosen unit (mm/inch)
    */
-  function dimFmt(mmValue, unit) {
+  function dimFmt(mmValue: number | null | undefined, unit: string) {
     if (mmValue === null || mmValue === undefined || isNaN(mmValue)) return '-';
     if (unit === 'inch') return (mmValue / 25.4).toFixed(2);
     return Math.round(mmValue).toString();
@@ -42,7 +47,7 @@ const JobCardGenerator = (function () {
   /**
    * Build dimension rows for master card — shows in user's unit + mm
    */
-  function dimensionRowsHTML(f, r) {
+  function dimensionRowsHTML(f: any, r: any) {
     const unit = f.dimensionUnit || 'mm';
     const unitLabel = unit === 'inch' ? 'in' : 'mm';
     const showBoth = unit === 'inch'; // Show mm alongside inch for reference
@@ -292,12 +297,12 @@ const JobCardGenerator = (function () {
   `;
 
   /** Wrap a stage card in a half-page slot (50% A4 height) */
-  function cardHalf(cardHtml) {
+  function cardHalf(cardHtml: string) {
     return `<div class="card-half">${cardHtml}</div>`;
   }
 
   /** One A4 page with exactly 2 job cards — top half + bottom half */
-  function pagePair(topCardFn, bottomCardFn, data) {
+  function pagePair(topCardFn: (d: JobCardData) => string, bottomCardFn: (d: JobCardData) => string, data: JobCardData) {
     return `<div class="page">
       ${cardHalf(topCardFn(data))}
       <div class="cut-line"></div>
@@ -306,7 +311,7 @@ const JobCardGenerator = (function () {
   }
 
   // ============ CARD 1: MASTER (COVER) ============
-  function masterCard(data) {
+  function masterCard(data: JobCardData) {
     const f = data.form;
     const r = data.results;
     const jc = f.jobCard;
@@ -385,7 +390,7 @@ const JobCardGenerator = (function () {
   }
 
   // ============ CARD 2: PAPER ISSUE ============
-  function paperIssueCard(data) {
+  function paperIssueCard(data: JobCardData) {
     const f = data.form;
     const r = data.results;
     const jc = f.jobCard;
@@ -395,7 +400,7 @@ const JobCardGenerator = (function () {
     const isMultiPly = twoPlyCount > 1;
 
     // Build reels list
-    const reelsHTML = r.reelOrders.map((order, idx) => `
+    const reelsHTML = r.reelOrders.map((order: any) => `
       <tr>
         <td>${order.name}</td>
         <td class="num">${order.gsm} / ${order.bf}</td>
@@ -444,7 +449,7 @@ const JobCardGenerator = (function () {
             <span class="label">कुल कागज वजन:</span> <span class="value bold mono">${fmt(r.order.paperWeightKg, 1)} kg</span>
           </div>
           <div class="col">
-            <span class="label">कुल रील जारी:</span> <span class="value bold">${r.reelOrders.reduce((s,o)=>s+o.reelsToOrder, 0)} रील</span>
+            <span class="label">कुल रील जारी:</span> <span class="value bold">${r.reelOrders.reduce((s: number, o: any)=>s+o.reelsToOrder, 0)} रील</span>
           </div>
         </div>
 
@@ -458,9 +463,8 @@ const JobCardGenerator = (function () {
   }
 
   // ============ CARD 3: CORRUGATOR (2-PLY) ============
-  function corrugatorCard(data) {
+  function corrugatorCard(data: JobCardData) {
     const f = data.form;
-    const r = data.results;
     const jc = f.jobCard;
 
     // Find liner and flute paper specs
@@ -516,7 +520,7 @@ const JobCardGenerator = (function () {
   }
 
   // ============ CARD 4: SHEET CUTTER ============
-  function sheetCutterCard(data) {
+  function sheetCutterCard(data: JobCardData) {
     const f = data.form;
     const r = data.results;
     const jc = f.jobCard;
@@ -571,7 +575,7 @@ const JobCardGenerator = (function () {
   }
 
   // ============ CARD 5: SHEET PASTING (with cure timer) ============
-  function pastingCard(data) {
+  function pastingCard(data: JobCardData) {
     const f = data.form;
     const r = data.results;
     const jc = f.jobCard;
@@ -651,21 +655,21 @@ const JobCardGenerator = (function () {
   }
 
   // ============ CARD 6: SLITTER SCORER (detail-heavy) ============
-  function slitterScorerCard(data) {
+  function slitterScorerCard(data: JobCardData) {
     const f = data.form;
     const r = data.results;
     const jc = f.jobCard;
 
     // Slitter blades
-    const bladesHTML = r.machineSetup.slitterBlades.map((b, i) =>
+    const bladesHTML = r.machineSetup.slitterBlades.map((b: any) =>
       `<td class="num center">${fmtInt(b)}</td>`
     ).join('');
-    const bladeHeadersHTML = r.machineSetup.slitterBlades.map((_, i) =>
+    const bladeHeadersHTML = r.machineSetup.slitterBlades.map((_: any, i: number) =>
       `<th class="num center">B${i+1}</th>`
     ).join('');
 
     // Multi-sheet creases
-    const creasesHTML = r.machineSetup.multiSheetCreases.map(c => `
+    const creasesHTML = r.machineSetup.multiSheetCreases.map((c: any) => `
       <tr>
         <td class="center bold">शीट ${c.sheetNumber}</td>
         <td class="num">${fmtInt(c.sheetLeftEdge)}</td>
@@ -742,16 +746,16 @@ const JobCardGenerator = (function () {
   }
 
   // ============ CARD 7: PRINTER SLOTTER ============
-  function printerSlotterCard(data) {
+  function printerSlotterCard(data: JobCardData) {
     const f = data.form;
     const r = data.results;
     const jc = f.jobCard;
 
-    const slotsHTML = r.machineSetup.slots.slots.map((s, i) =>
+    const slotsHTML = r.machineSetup.slots.slots.map((s: any) =>
       `<td class="num center bold blue">${fmtInt(s)}</td>`
     ).join('');
 
-    const panelsHTML = r.machineSetup.slots.panels.map(p =>
+    const panelsHTML = r.machineSetup.slots.panels.map((p: any) =>
       `<td class="center" style="background:${p.name.includes('Glue') ? '#fef3c7' : '#dbeafe'}">
         <span class="bold">${p.name.split(' ')[0]}</span><br>
         <span class="smaller">${fmtInt(p.width)} mm</span>
@@ -804,7 +808,7 @@ const JobCardGenerator = (function () {
         <h3 class="section-title">C) वर्टिकल क्रीज़</h3>
         <div class="smaller">
           स्लॉट के <span class="bold">same पोज़िशन</span> पर 4 वर्टिकल क्रीज़:
-          <span class="bold mono blue">${r.machineSetup.slots.slots.map(s => fmtInt(s)).join(', ')} mm</span>
+          <span class="bold mono blue">${r.machineSetup.slots.slots.map((s: any) => fmtInt(s)).join(', ')} mm</span>
         </div>
 
         <h3 class="section-title">D) पैनल लेआउट</h3>
@@ -829,7 +833,7 @@ const JobCardGenerator = (function () {
   }
 
   // ============ CARD 8: STITCHING ============
-  function stitchingCard(data) {
+  function stitchingCard(data: JobCardData) {
     const f = data.form;
     const r = data.results;
     const jc = f.jobCard;
@@ -848,7 +852,7 @@ const JobCardGenerator = (function () {
         </div>
         ${method !== 'fevicol' && r.pinInfo ? `<div class="row">
           <div class="col"><span class="label">पिन गैप:</span> <span class="value">${r.pinInfo.spacing} mm apart</span></div>
-          <div class="col"><span class="label">कुल लंबाई:</span> <span class="value">${data.f.dimensionUnit === 'inch' ? (data.r.dimensions.outer.H / 25.4).toFixed(2) + '"' : Math.round(data.r.dimensions.outer.H) + ' mm'}</span></div>
+          <div class="col"><span class="label">कुल लंबाई:</span> <span class="value">${f.dimensionUnit === 'inch' ? (r.dimensions.outer.H / 25.4).toFixed(2) + '"' : Math.round(r.dimensions.outer.H) + ' mm'}</span></div>
         </div>` : ''}
 
         <h3 class="section-title">प्रक्रिया</h3>
@@ -882,7 +886,7 @@ const JobCardGenerator = (function () {
   }
 
   // ============ CARD 9: BUNDLING ============
-  function bundlingCard(data) {
+  function bundlingCard(data: JobCardData) {
     const f = data.form;
     const r = data.results;
     const jc = f.jobCard;
@@ -937,9 +941,8 @@ const JobCardGenerator = (function () {
   }
 
   // ============ CARD 10: DISPATCH ============
-  function dispatchCard(data) {
+  function dispatchCard(data: JobCardData) {
     const f = data.form;
-    const r = data.results;
     const jc = f.jobCard;
     const totalBundles = data.totalBundles;
 
@@ -998,7 +1001,7 @@ const JobCardGenerator = (function () {
   }
 
   // ============ MAIN GENERATOR ============
-  function generate(data) {
+  function generate(data: JobCardData) {
     // 2 job cards per A4 sheet (top half + bottom half) — 5 pages for 10 stage cards
     const pages = [
       pagePair(masterCard, paperIssueCard, data),

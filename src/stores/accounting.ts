@@ -115,12 +115,20 @@ export const useAccountingStore = defineStore('accounting', () => {
   async function getNextVoucherNo(type: Voucher['type']): Promise<string> {
     const firmStore = useFirmStore()
     const firmId = firmStore.activeFirmId
+    // Include soft-deleted rows so a deleted voucher's number is never reused
+    // (length+1 would collide after any deletion). Next = highest suffix + 1.
     const list = await db.vouchers
       .where('firm_id')
       .equals(firmId)
-      .filter((v) => v.type === type && !v.is_deleted)
+      .filter((v) => v.type === type)
       .toArray()
-    return `${type}-${String(list.length + 1).padStart(4, '0')}`
+    const re = new RegExp(`^${type}-0*(\\d+)$`)
+    let max = 0
+    for (const v of list) {
+      const m = (v.voucher_no || '').match(re)
+      if (m) max = Math.max(max, parseInt(m[1], 10))
+    }
+    return `${type}-${String(max + 1).padStart(4, '0')}`
   }
 
   async function postVoucher(

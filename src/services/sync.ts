@@ -4,7 +4,7 @@ import { getSupabase } from '@/services/supabase'
 import { reloadAllStores } from '@/services/reloadStores'
 import { useAuthStore } from '@/stores/auth'
 import { allocateBillNo, findDuplicateBillNoGroups, resolveNextSequence } from '@/services/invoiceNumber'
-import type { Firm, Party, Item, Invoice, Purchase, Recipe, Account, Voucher, ItemStockMovement } from '@/types/models'
+import type { Firm, Party, Item, Invoice, Purchase, Recipe, Account, Voucher, ItemStockMovement, DashboardTodo } from '@/types/models'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 
 type SyncTable =
@@ -21,6 +21,7 @@ type SyncTable =
   | 'production_stages'
   | 'stock_movements'
   | 'item_stock_movements'
+  | 'dashboard_todos'
 
 const TABLE_MAP: Record<SyncTable, string> = {
   firms: 'firms',
@@ -36,6 +37,7 @@ const TABLE_MAP: Record<SyncTable, string> = {
   production_stages: 'production_stages',
   stock_movements: 'stock_movements',
   item_stock_movements: 'item_stock_movements',
+  dashboard_todos: 'dashboard_todos',
 }
 
 const PAYLOAD_TABLES: SyncTable[] = [
@@ -49,6 +51,7 @@ const PAYLOAD_TABLES: SyncTable[] = [
   'production_stages',
   'stock_movements',
   'item_stock_movements',
+  'dashboard_todos',
 ]
 
 function isNewer(remote: string, local?: string): boolean {
@@ -67,6 +70,7 @@ const OPTIONAL_TABLE_MIGRATIONS: Partial<Record<SyncTable, string>> = {
   production_stages: '005_production_tracking.sql',
   stock_movements: '005_production_tracking.sql',
   item_stock_movements: '006_item_stock_movements.sql',
+  dashboard_todos: '008_dashboard_todos.sql',
 }
 
 let syncInFlight: Promise<string> | null = null
@@ -479,7 +483,7 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
       }
       const table = (db as any)[name] as { get: (id: string) => Promise<any>; put: (r: any) => Promise<void> }
       for (const r of rows) {
-        const payload = r.payload as Invoice | Purchase | Recipe | Account | Voucher | ItemStockMovement
+        const payload = r.payload as Invoice | Purchase | Recipe | Account | Voucher | ItemStockMovement | DashboardTodo
         const rec = {
           ...payload,
           id: r.id,
