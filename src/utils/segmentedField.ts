@@ -1,4 +1,4 @@
-/** Segmented GSTIN (2+5+5+3) and Indian mobile (4+3+3) field helpers. */
+/** Segmented GSTIN (2+5+5+3) and Indian mobile (4+2+2+2) field helpers. */
 
 export type SegmentKind = 'digits' | 'alnum'
 
@@ -8,7 +8,7 @@ export type SegmentedFieldConfig = {
 }
 
 export const GSTIN_SEGMENT_LENGTHS = [2, 5, 5, 3] as const
-export const MOBILE_SEGMENT_LENGTHS = [4, 3, 3] as const
+export const MOBILE_SEGMENT_LENGTHS = [4, 2, 2, 2] as const
 
 export const GSTIN_SEGMENT_CONFIG: SegmentedFieldConfig = {
   lengths: GSTIN_SEGMENT_LENGTHS,
@@ -17,7 +17,7 @@ export const GSTIN_SEGMENT_CONFIG: SegmentedFieldConfig = {
 
 export const MOBILE_SEGMENT_CONFIG: SegmentedFieldConfig = {
   lengths: MOBILE_SEGMENT_LENGTHS,
-  kinds: ['digits', 'digits', 'digits'],
+  kinds: ['digits', 'digits', 'digits', 'digits'],
 }
 
 const DIGIT_RE = /[0-9]/
@@ -39,6 +39,13 @@ export function splitToSegments(value: string, config: SegmentedFieldConfig): st
 
 export function joinSegments(parts: readonly string[]): string {
   return parts.join('')
+}
+
+/** Raw value formatted for display: segments separated by a single space,
+ *  e.g. "07ABCDE1234F1Z5" -> "07 ABCDE 1234F 1Z5". Trailing empty segments are
+ *  dropped so partial input formats cleanly while typing. */
+export function formatSegments(value: string, config: SegmentedFieldConfig): string {
+  return splitToSegments(value, config).filter((s) => s.length > 0).join(' ')
 }
 
 export function sanitizeChar(ch: string, kind: SegmentKind): string | null {

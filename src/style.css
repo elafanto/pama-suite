@@ -49,9 +49,11 @@ body {
            outline-none focus:border-accent focus:ring-2 focus:ring-accent/15;
   }
   .pp-label { @apply block text-xs font-semibold text-slate-500 mb-1; }
-  .pp-label-account { @apply block text-base font-bold text-slate-600 mb-1; }
+  /* One step larger than the normal field — clear enough to avoid entry
+     mistakes for bank details, without looking oversized. */
+  .pp-label-account { @apply block text-sm font-semibold text-slate-600 mb-1; }
   .pp-input-account {
-    @apply w-full rounded-lg border border-slate-300 px-3 py-2 text-lg font-bold bg-white
+    @apply w-full rounded-lg border border-slate-300 px-3 py-2 text-base font-medium bg-white
            outline-none focus:border-accent focus:ring-2 focus:ring-accent/15;
   }
   .pp-badge { @apply inline-block text-xs font-bold px-2 py-0.5 rounded-full; }

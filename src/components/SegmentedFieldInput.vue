@@ -1,14 +1,12 @@
 <script setup lang="ts">
-import { ref, watch, computed, nextTick } from 'vue'
+import { ref, watch, computed } from 'vue'
 import {
   type SegmentedFieldConfig,
   GSTIN_SEGMENT_CONFIG,
   MOBILE_SEGMENT_CONFIG,
-  splitToSegments,
-  joinSegments,
-  filterSegmentValue,
-  invalidCharMessage,
   sanitizeCombinedInput,
+  formatSegments,
+  totalSegmentLength,
 } from '@/utils/segmentedField'
 
 const props = withDefaults(
@@ -33,123 +31,87 @@ const fieldConfig = computed(() => {
   return GSTIN_SEGMENT_CONFIG
 })
 
-const segmentValues = ref<string[]>([])
-const inputRefs = ref<(HTMLInputElement | null)[]>([])
-const charError = ref('')
+// Single input: raw value (no separators) is stored/emitted, while the box
+// shows segments separated by spaces (e.g. 07 ABCDE 1234F 1Z5).
+const display = ref('')
+const allDigits = computed(() => fieldConfig.value.kinds.every((k) => k === 'digits'))
+// Total chars + one space between each segment.
+const maxLen = computed(() => totalSegmentLength(fieldConfig.value) + fieldConfig.value.lengths.length - 1)
 
-function syncFromModel(value: string) {
-  segmentValues.value = splitToSegments(value, fieldConfig.value)
+function syncFromModel() {
+  display.value = formatSegments(props.modelValue, fieldConfig.value)
 }
-
-syncFromModel(props.modelValue)
+syncFromModel()
 
 watch(
   () => props.modelValue,
   (v) => {
-    const joined = joinSegments(segmentValues.value)
-    if (v !== joined) syncFromModel(v)
+    if (v !== sanitizeCombinedInput(display.value, fieldConfig.value)) syncFromModel()
   },
 )
+watch(fieldConfig, syncFromModel)
 
-watch(fieldConfig, () => syncFromModel(props.modelValue))
-
-function setInputRef(idx: number, el: unknown) {
-  inputRefs.value[idx] = el as HTMLInputElement | null
-}
-
-function emitValue() {
-  const combined = joinSegments(segmentValues.value)
-  emit('update:modelValue', combined)
-}
-
-function focusSegment(idx: number, placeAtEnd = false) {
-  nextTick(() => {
-    const el = inputRefs.value[idx]
-    if (!el) return
-    el.focus()
-    const pos = placeAtEnd ? el.value.length : 0
-    el.setSelectionRange(pos, pos)
-  })
-}
-
-function onSegmentInput(idx: number, e: Event) {
-  const el = e.target as HTMLInputElement
-  const maxLen = fieldConfig.value.lengths[idx]
-  const kind = fieldConfig.value.kinds[idx]
-  const { value, rejected } = filterSegmentValue(el.value, kind, maxLen)
-  segmentValues.value[idx] = value
-  el.value = value
-  charError.value = rejected ? invalidCharMessage(rejected, kind) : ''
-  emitValue()
-  if (value.length >= maxLen && idx < fieldConfig.value.lengths.length - 1) {
-    focusSegment(idx + 1)
+/** Caret position in `text` just after the first `sig` non-space characters. */
+function caretAfterSignificant(text: string, sig: number): number {
+  let pos = 0
+  let seen = 0
+  while (pos < text.length && seen < sig) {
+    if (text[pos] !== ' ') seen++
+    pos++
   }
+  while (pos < text.length && text[pos] === ' ') pos++
+  return pos
 }
 
-function onKeydown(idx: number, e: KeyboardEvent) {
+/** Re-sanitize + re-format `typed`, keep the caret on the same logical char. */
+function apply(el: HTMLInputElement, typed: string, caret: number) {
+  const sigBefore = sanitizeCombinedInput(typed.slice(0, caret), fieldConfig.value).length
+  const raw = sanitizeCombinedInput(typed, fieldConfig.value)
+  const formatted = formatSegments(raw, fieldConfig.value)
+  display.value = formatted
+  el.value = formatted
+  const pos = caretAfterSignificant(formatted, sigBefore)
+  el.setSelectionRange(pos, pos)
+  if (raw !== props.modelValue) emit('update:modelValue', raw)
+}
+
+function onInput(e: Event) {
+  const el = e.target as HTMLInputElement
+  apply(el, el.value, el.selectionStart ?? el.value.length)
+}
+
+function onKeydown(e: KeyboardEvent) {
   if (e.key !== 'Backspace') return
   const el = e.target as HTMLInputElement
-  const atStart = (el.selectionStart ?? 0) === 0
-  if (segmentValues.value[idx] === '' && idx > 0 && atStart) {
+  const start = el.selectionStart ?? 0
+  // Backspacing onto an auto-inserted separator should remove the real
+  // character before it, not get stuck on the space.
+  if (start === el.selectionEnd && start >= 2 && el.value[start - 1] === ' ') {
     e.preventDefault()
-    focusSegment(idx - 1, true)
+    apply(el, el.value.slice(0, start - 2) + el.value.slice(start), start - 2)
   }
-}
-
-function onPaste(e: ClipboardEvent) {
-  e.preventDefault()
-  const pasted = e.clipboardData?.getData('text') ?? ''
-  const combined = sanitizeCombinedInput(pasted, fieldConfig.value)
-  if (!combined) return
-  segmentValues.value = splitToSegments(combined, fieldConfig.value)
-  charError.value = ''
-  emitValue()
-  const lastIdx = fieldConfig.value.lengths.length - 1
-  const firstIncomplete = segmentValues.value.findIndex(
-    (s, i) => s.length < fieldConfig.value.lengths[i],
-  )
-  focusSegment(firstIncomplete >= 0 ? firstIncomplete : lastIdx, true)
 }
 
 function onBlur() {
   emit('blur')
 }
-
-const segmentWidths = computed(() =>
-  fieldConfig.value.lengths.map((len) => {
-    if (len <= 2) return 'w-10'
-    if (len <= 3) return 'w-12'
-    return 'w-[4.5rem] sm:w-20'
-  }),
-)
 </script>
 
 <template>
   <div>
-    <div
-      class="flex flex-wrap items-center gap-1"
-      role="group"
+    <input
+      :value="display"
+      type="text"
+      :class="[inputClass, 'uppercase tracking-wide']"
+      :maxlength="maxLen"
+      :inputmode="allDigits ? 'numeric' : 'text'"
+      :autocomplete="preset === 'mobile' ? 'tel' : 'off'"
+      autocapitalize="characters"
+      spellcheck="false"
       :aria-label="ariaLabel"
-    >
-      <template v-for="(len, idx) in fieldConfig.lengths" :key="idx">
-        <span v-if="idx > 0" class="text-slate-400 text-sm select-none" aria-hidden="true">·</span>
-        <input
-          :ref="(el) => setInputRef(idx, el)"
-          :value="segmentValues[idx] ?? ''"
-          type="text"
-          :class="[inputClass, segmentWidths[idx], '!w-auto min-w-0 text-center uppercase tracking-wide']"
-          :maxlength="len"
-          :inputmode="fieldConfig.kinds[idx] === 'digits' ? 'numeric' : 'text'"
-          :autocomplete="preset === 'mobile' ? 'tel' : 'off'"
-          autocapitalize="characters"
-          spellcheck="false"
-          @input="onSegmentInput(idx, $event)"
-          @keydown="onKeydown(idx, $event)"
-          @paste="onPaste"
-          @blur="onBlur"
-        />
-      </template>
-    </div>
-    <p v-if="charError" class="text-xs mt-1 text-amber-700">{{ charError }}</p>
+      @input="onInput"
+      @keydown="onKeydown"
+      @blur="onBlur"
+    />
   </div>
 </template>
