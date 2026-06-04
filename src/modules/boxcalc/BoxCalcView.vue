@@ -309,7 +309,11 @@ function loadRecipe(rec: Recipe) {
   Object.assign(form, rec.form)
   migrateCostFields(form as BoxCalcForm & { conversionCost?: number; shippingCost?: number })
   if (!form.jobCard) form.jobCard = defaultJobCard(firmStore.activeFirm?.name || 'My Box Plant')
-  results.value = rec.results
+  // Recompute from the loaded form so older recipes pick up the current
+  // calculator logic (2-D nesting, productionPlan, deckle/length limits)
+  // instead of replaying stale saved output.
+  const fresh = computeBoxCalcResults(form)
+  results.value = fresh && !('error' in fresh) ? fresh : rec.results
   showResults.value = true
   activeTab.value = 'calculator'
   updateLayersForPly()
@@ -347,11 +351,16 @@ function generateJobCard() {
 }
 
 function printFromRecipe(rec: Recipe) {
+  const recForm = JSON.parse(JSON.stringify(rec.form)) as BoxCalcForm
+  if (!recForm.jobCard) recForm.jobCard = defaultJobCard(firmStore.activeFirm?.name || 'My Box Plant')
+  // Recompute so the job card reflects the latest calculator (nesting/plan).
+  const fresh = computeBoxCalcResults(recForm)
+  const res = fresh && !('error' in fresh) ? fresh : rec.results
   openJobCardPrintWindow({
-    form: JSON.parse(JSON.stringify(rec.form)),
-    results: JSON.parse(JSON.stringify(rec.results)),
-    cureStatus: getCureStatus(rec.form?.jobCard),
-    totalBundles: getTotalBundles(rec.form?.quantity || 0, rec.form?.jobCard?.bundleSize || 25),
+    form: recForm as BoxCalcForm & { jobCard: NonNullable<BoxCalcForm['jobCard']> },
+    results: JSON.parse(JSON.stringify(res)),
+    cureStatus: getCureStatus(recForm.jobCard),
+    totalBundles: getTotalBundles(recForm.quantity || 0, recForm.jobCard?.bundleSize || 25),
     twoPlyCount: getTwoPlyCount(rec.ply),
   })
 }
