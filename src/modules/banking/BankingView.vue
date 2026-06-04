@@ -570,31 +570,31 @@ onMounted(async () => {
           </div>
 
           <div class="space-y-4">
-            <div 
-              v-for="(b, idx) in beneficiaries" 
-              :key="b.id" 
-              class="border rounded-xl p-4 bg-slate-50/50 hover:border-slate-300 relative transition-all"
+            <div
+              v-for="(b, idx) in beneficiaries"
+              :key="b.id"
+              class="border rounded-xl p-4 bg-slate-50/50 hover:border-slate-300 transition-all"
             >
-              <div class="absolute top-2 right-2 flex gap-1">
-                <button
-                  type="button"
-                  @click="saveBeneToSavedList(idx)"
-                  class="pp-btn pp-btn-ghost px-2 py-0.5 text-[11px]"
-                  title="Save to quick-add chip list"
-                >📌 Save</button>
-                <button 
-                  @click="saveBankDetailsToParty(b)"
-                  class="pp-btn pp-btn-ghost px-2 py-0.5 text-[11px] bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200"
-                  title="Sync bank details back to contact list"
-                >
-                  💾 Sync Party
-                </button>
-                <button @click="removeBene(idx)" class="text-rose-500 hover:text-rose-700 text-sm p-1">
-                  ✕ Remove
-                </button>
+              <div class="flex items-center justify-between gap-2 flex-wrap mb-3 pb-2 border-b border-slate-200">
+                <div class="text-xs font-bold text-slate-400">TARGET RECIPIENT #{{ idx + 1 }}</div>
+                <div class="flex gap-1 flex-wrap">
+                  <button
+                    type="button"
+                    @click="saveBeneToSavedList(idx)"
+                    class="pp-btn pp-btn-ghost px-2 py-0.5 text-[11px]"
+                    title="Save to quick-add chip list"
+                  >📌 Save</button>
+                  <button
+                    @click="saveBankDetailsToParty(b)"
+                    class="pp-btn pp-btn-ghost px-2 py-0.5 text-[11px] bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200"
+                    title="Sync bank details back to contact list"
+                  >💾 Sync Party</button>
+                  <button
+                    @click="removeBene(idx)"
+                    class="pp-btn pp-btn-ghost px-2 py-0.5 text-[11px] text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200"
+                  >✕ Remove</button>
+                </div>
               </div>
-
-              <div class="text-xs font-bold text-slate-400 mb-2">TARGET RECIPIENT #{{ idx + 1 }}</div>
 
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
                 <div>
