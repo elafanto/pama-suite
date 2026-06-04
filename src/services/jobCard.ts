@@ -68,46 +68,49 @@ const JobCardGenerator = (function () {
   }
 
   // ============ CSS STYLES ============
-  // Cards flow at full, readable size; pages are grouped by content density
-  // (3 + 2 + 3 + 2) instead of squeezing two half-height cards onto each sheet.
+  // 2 job cards per A4 — top half + bottom half — with a dashed cut line at the
+  // exact centre so the printed sheet can be cut in half into two operator cards.
+  // Compact sizing so each stage card fits its half of the sheet.
   const styles = `
-    @page {
-      size: A4;
-      margin: 8mm 6mm;
-    }
+    @page { size: A4 portrait; margin: 0; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: 'Noto Sans Devanagari', 'Inter', system-ui, sans-serif;
-      font-size: 9pt;
-      line-height: 1.3;
+      font-size: 8pt;
+      line-height: 1.22;
       color: #1e293b;
       background: white;
     }
     .page {
-      width: 198mm;
+      width: 210mm;
+      height: 297mm;
+      display: flex;
+      flex-direction: column;
       page-break-after: always;
-      page-break-inside: avoid;
+      overflow: hidden;
     }
     .page:last-child { page-break-after: auto; }
 
-    .card {
-      border: 1.5px solid #000;
-      padding: 6mm;
-      margin-bottom: 4mm;
-      page-break-inside: avoid;
+    /* Each half = one stage card, exactly 50% of the A4 sheet. */
+    .half {
+      flex: 1 1 50%;
+      height: 50%;
+      min-height: 0;
+      padding: 4mm 5mm;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
     }
-    .card.compact { padding: 4mm; font-size: 8.5pt; }
 
-    /* Cut line */
+    /* Centre cut line between the two halves. */
     .cut-line {
-      border-top: 1px dashed #9ca3af;
-      text-align: center;
-      margin: 3mm 0;
+      flex: 0 0 auto;
+      height: 0;
+      border-top: 1.5px dashed #64748b;
       position: relative;
-      height: 4mm;
     }
     .cut-line::before {
-      content: "✂ — — — — — — — — — — — — — — — — — — — — — — — — — —";
+      content: "✂ — — — — — — — — — —  CUT — — — — — — — — — —";
       position: absolute;
       top: -7px;
       left: 50%;
@@ -115,8 +118,19 @@ const JobCardGenerator = (function () {
       background: white;
       padding: 0 6px;
       color: #94a3b8;
-      font-size: 8pt;
-      letter-spacing: 2px;
+      font-size: 7.5pt;
+      letter-spacing: 1px;
+      white-space: nowrap;
+    }
+
+    .card {
+      flex: 1;
+      min-height: 0;
+      border: 1.5px solid #000;
+      padding: 3mm 4mm;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
 
     .card-header {
@@ -124,164 +138,77 @@ const JobCardGenerator = (function () {
       justify-content: space-between;
       align-items: center;
       border-bottom: 2px solid #1e40af;
-      padding-bottom: 2mm;
-      margin-bottom: 3mm;
+      padding-bottom: 1.5mm;
+      margin-bottom: 2mm;
+      flex-shrink: 0;
     }
-    .card-title {
-      font-size: 12pt;
-      font-weight: 700;
-      color: #1e40af;
-    }
-    .card-job {
-      font-size: 9pt;
-      color: #475569;
-      font-weight: 600;
-    }
+    .card-title { font-size: 11pt; font-weight: 700; color: #1e40af; }
+    .card-job { font-size: 8pt; color: #475569; font-weight: 600; }
 
-    .row { display: flex; gap: 4mm; margin-bottom: 1.5mm; }
+    .row { display: flex; gap: 3mm; margin-bottom: 1mm; }
     .col { flex: 1; }
-    .label { color: #64748b; font-size: 8pt; }
+    .label { color: #64748b; font-size: 7.5pt; }
     .value { font-weight: 600; }
 
-    table { width: 100%; border-collapse: collapse; font-size: 8.5pt; margin: 2mm 0; }
-    table th, table td { border: 1px solid #cbd5e1; padding: 2mm 1mm; text-align: left; }
+    table { width: 100%; border-collapse: collapse; font-size: 7.5pt; margin: 1.2mm 0; }
+    table th, table td { border: 1px solid #cbd5e1; padding: 1mm 1mm; text-align: left; }
     table th { background: #f1f5f9; font-weight: 600; }
     table td.num, table th.num { text-align: right; font-family: 'JetBrains Mono', monospace; }
     table td.center, table th.center { text-align: center; }
 
-    .info-box {
-      background: #f1f5f9;
-      border-left: 3px solid #2563eb;
-      padding: 2mm 3mm;
-      margin: 2mm 0;
-      font-size: 8.5pt;
-    }
-    .warn-box {
-      background: #fef3c7;
-      border-left: 3px solid #d97706;
-      padding: 2mm 3mm;
-      margin: 2mm 0;
-      font-size: 8.5pt;
-    }
-    .success-box {
-      background: #dcfce7;
-      border-left: 3px solid #16a34a;
-      padding: 2mm 3mm;
-      margin: 2mm 0;
-      font-size: 8.5pt;
-    }
+    .info-box { background:#f1f5f9; border-left:3px solid #2563eb; padding:1.2mm 2mm; margin:1mm 0; font-size:7.5pt; }
+    .warn-box { background:#fef3c7; border-left:3px solid #d97706; padding:1.2mm 2mm; margin:1mm 0; font-size:7.5pt; }
+    .success-box { background:#dcfce7; border-left:3px solid #16a34a; padding:1.2mm 2mm; margin:1mm 0; font-size:7.5pt; }
 
-    .checklist { margin: 2mm 0; }
-    .checklist label { display: block; margin: 0.8mm 0; font-size: 8.5pt; }
-    .checklist input[type="checkbox"] {
-      display: inline-block;
-      width: 3mm; height: 3mm;
-      border: 1.5px solid #475569;
-      vertical-align: middle;
-      margin-right: 2mm;
-    }
-    .check-inline { display: inline-block; margin-right: 4mm; }
+    .checklist { margin: 1mm 0; }
+    .checklist label { display:block; margin:0.5mm 0; font-size:7.5pt; }
+    .checklist input[type="checkbox"] { display:inline-block; width:3mm; height:3mm; border:1.5px solid #475569; vertical-align:middle; margin-right:2mm; }
+    .check-inline { display:inline-block; margin-right:4mm; }
 
-    .stages-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 1mm 4mm;
-      margin: 2mm 0;
-    }
+    .stages-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:0.4mm 4mm; margin:1mm 0; }
 
-    .signature-row {
-      display: flex;
-      gap: 6mm;
-      margin-top: 3mm;
-      padding-top: 2mm;
-      border-top: 1px dotted #94a3b8;
-      font-size: 8.5pt;
-    }
+    .signature-row { display:flex; gap:5mm; margin-top:auto; padding-top:1.5mm; border-top:1px dotted #94a3b8; font-size:7.5pt; flex-shrink:0; }
     .signature-row > div { flex: 1; }
 
-    .mono { font-family: 'JetBrains Mono', monospace; }
-    .small { font-size: 8pt; }
-    .smaller { font-size: 7.5pt; }
+    .mono { font-family:'JetBrains Mono', monospace; }
+    .small { font-size: 7.5pt; }
+    .smaller { font-size: 7pt; }
     .bold { font-weight: 700; }
     .center-text { text-align: center; }
-    .red { color: #dc2626; }
-    .green { color: #16a34a; }
-    .blue { color: #1d4ed8; }
-    .amber { color: #d97706; }
+    .red { color:#dc2626; } .green { color:#16a34a; } .blue { color:#1d4ed8; } .amber { color:#d97706; }
 
-    .input-line {
-      display: inline-block;
-      border-bottom: 1px dotted #94a3b8;
-      min-width: 30mm;
-      padding: 0 2mm;
-    }
-    .input-line.lg { min-width: 60mm; }
+    .input-line { display:inline-block; border-bottom:1px dotted #94a3b8; min-width:25mm; padding:0 2mm; }
+    .input-line.lg { min-width: 50mm; }
 
-    .empty-box {
-      border: 1px solid #94a3b8;
-      padding: 1mm 2mm;
-      min-height: 5mm;
-      display: inline-block;
-      min-width: 18mm;
-      font-family: 'JetBrains Mono', monospace;
-    }
+    .empty-box { border:1px solid #94a3b8; padding:1mm 2mm; min-height:5mm; display:inline-block; min-width:16mm; font-family:'JetBrains Mono', monospace; }
 
-    h3.section-title {
-      font-size: 9.5pt;
-      color: #1e40af;
-      margin: 2mm 0 1mm 0;
-      padding: 1mm 0;
-      border-bottom: 1px dotted #cbd5e1;
-    }
+    h3.section-title { font-size:8.5pt; color:#1e40af; margin:1.2mm 0 0.6mm 0; padding:0.4mm 0; border-bottom:1px dotted #cbd5e1; }
 
-    .badge {
-      display: inline-block;
-      padding: 0.5mm 2mm;
-      border-radius: 2mm;
-      font-size: 7.5pt;
-      font-weight: 600;
-    }
-    .badge-blue { background: #dbeafe; color: #1d4ed8; }
-    .badge-amber { background: #fef3c7; color: #b45309; }
-    .badge-green { background: #dcfce7; color: #15803d; }
+    .badge { display:inline-block; padding:0.5mm 2mm; border-radius:2mm; font-size:7pt; font-weight:600; }
+    .badge-blue { background:#dbeafe; color:#1d4ed8; }
+    .badge-amber { background:#fef3c7; color:#b45309; }
+    .badge-green { background:#dcfce7; color:#15803d; }
 
     @media screen {
-      body { background: #f1f5f9; padding: 10mm; }
-      .page {
-        background: white;
-        padding: 8mm 6mm;
-        margin: 0 auto 8mm auto;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        width: 210mm;
-        min-height: 297mm;
-      }
-      .print-btn {
-        position: fixed;
-        top: 10px;
-        right: 10px;
-        padding: 10px 20px;
-        background: #2563eb;
-        color: white;
-        border: none;
-        border-radius: 8px;
-        cursor: pointer;
-        font-weight: bold;
-        font-size: 14px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-        z-index: 100;
-      }
-      .print-btn:hover { background: #1d4ed8; }
+      body { background:#f1f5f9; padding:10mm; }
+      .page { background:white; margin:0 auto 8mm auto; box-shadow:0 4px 12px rgba(0,0,0,0.1); }
+      .print-btn { position:fixed; top:10px; right:10px; padding:10px 20px; background:#2563eb; color:white; border:none; border-radius:8px; cursor:pointer; font-weight:bold; font-size:14px; box-shadow:0 4px 12px rgba(0,0,0,0.2); z-index:100; }
+      .print-btn:hover { background:#1d4ed8; }
     }
     @media print {
-      .print-btn { display: none; }
-      body { background: white; padding: 0; }
-      .page { box-shadow: none; margin: 0; padding: 0; width: auto; min-height: auto; }
+      .print-btn { display:none; }
+      body { background:white; padding:0; }
+      .page { box-shadow:none; margin:0; width:210mm; height:297mm; }
     }
   `;
 
-  /** Assemble a page from a list of card HTML strings, with cut lines between. */
-  function pageOf(...cards: string[]) {
-    return `<div class="page">${cards.join('\n      <div class="cut-line"></div>\n      ')}</div>`;
+  /** One A4 page = two stage cards (top + bottom half) with a centre cut line. */
+  function pageOf2(top: string, bottom: string) {
+    return `<div class="page">
+      <div class="half">${top}</div>
+      <div class="cut-line"></div>
+      <div class="half">${bottom}</div>
+    </div>`;
   }
 
   // ============ CARD 1: MASTER (COVER) ============
@@ -1013,16 +940,18 @@ const JobCardGenerator = (function () {
 
   // ============ MAIN GENERATOR ============
   function generate(data: JobCardData) {
-    // Pages grouped by content density so each card prints at full, readable size:
-    //   1: Master + Paper Issue + Corrugator
-    //   2: Slitter Scorer + Printer Slotter (detail-heavy → 2 per page)
-    //   3: Sheet Cutter + Pasting + Stitching
-    //   4: Bundling + Dispatch
+    // 2 cards per A4 (top + bottom), centre cut line → 5 sheets for 10 cards:
+    //   1: Master + Paper Issue
+    //   2: Corrugator + Sheet Cutter
+    //   3: Pasting + Slitter Scorer
+    //   4: Printer Slotter + Stitching
+    //   5: Bundling + Dispatch
     const pages = [
-      pageOf(masterCard(data), paperIssueCard(data), corrugatorCard(data)),
-      pageOf(slitterScorerCard(data), printerSlotterCard(data)),
-      pageOf(sheetCutterCard(data), pastingCard(data), stitchingCard(data)),
-      pageOf(bundlingCard(data), dispatchCard(data)),
+      pageOf2(masterCard(data), paperIssueCard(data)),
+      pageOf2(corrugatorCard(data), sheetCutterCard(data)),
+      pageOf2(pastingCard(data), slitterScorerCard(data)),
+      pageOf2(printerSlotterCard(data), stitchingCard(data)),
+      pageOf2(bundlingCard(data), dispatchCard(data)),
     ].join('\n');
 
     return `<!DOCTYPE html>
