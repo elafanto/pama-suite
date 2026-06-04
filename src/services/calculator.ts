@@ -168,6 +168,11 @@ export const SAFETY_FACTORS = {
   maxEffectiveSF: 6.0
 }
 
+// Combined-board bursting strength factor. Summing every ply's BS overstates
+// the measured Mullen value because the corrugated medium contributes less than
+// a flat sheet — about a 20% fluting loss. Tune to match your lab readings.
+export const BS_COMBINED_FACTOR = 0.8
+
 // Adhesive Defaults
 export const ADHESIVE_DEFAULTS = {
   starch: {
@@ -534,9 +539,11 @@ export function calculate(input: CalcInput) {
     }
   })
 
-  // Combined board burst: sum of each ply's BS (kg/cm²); BF is the GSM-weighted
-  // average bursting factor of the plies (= combinedBS × 1000 / Σgsm).
-  const combinedBS = layerStrengths.reduce((s, l) => s + l.bs, 0)
+  // Combined board burst. Raw = sum of each ply's BS (kg/cm²), then reduced by
+  // BS_COMBINED_FACTOR for fluting loss so it tracks the measured Mullen value.
+  // BF stays consistent with the (factored) BS: BF = BS × 1000 / Σgsm.
+  const rawCombinedBS = layerStrengths.reduce((s, l) => s + l.bs, 0)
+  const combinedBS = rawCombinedBS * BS_COMBINED_FACTOR
   const combinedGsmRaw = layerStrengths.reduce((s, l) => s + l.gsm, 0)
   const combinedBF = combinedGsmRaw > 0 ? (combinedBS * 1000) / combinedGsmRaw : 0
 
