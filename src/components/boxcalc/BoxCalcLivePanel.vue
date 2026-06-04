@@ -83,8 +83,9 @@ const sheetRows = computed((): PricingRow[] => {
           <div class="text-lg font-bold text-indigo-900 font-mono">{{ fmt(results.weight?.boardGSM, 0) }}</div>
         </div>
         <div class="bg-teal-50 border border-teal-200 rounded-lg p-2">
-          <div class="text-teal-700">Box weight</div>
+          <div class="text-teal-700">Box wt / Boxes/big</div>
           <div class="font-bold text-teal-900 font-mono">{{ fmt(results.weight?.boxTotal, 1) }} gm</div>
+          <div class="text-xs text-teal-700 font-mono">{{ results.reel?.sheetsPerWidth }}w×{{ results.reel?.sheetsPerLength }}l={{ results.weight?.sheetsPerBigSheet }}</div>
         </div>
         <div class="bg-purple-50 border border-purple-200 rounded-lg p-2">
           <div class="text-purple-700">Sheet BS / BF</div>

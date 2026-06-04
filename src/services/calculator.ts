@@ -145,13 +145,14 @@ export const GLUE_FLAP_DEFAULTS: Record<string, number> = {
 
 // Machine Limits
 export const MACHINE_LIMITS = {
-  maxDeckleMM: 1727,          // 68 inch
-  workingDeckleMM: 1720,      // Safety buffer
-  sideTrimMM: 10,             // Per side
-  maxSheetLengthMM: 2500,     // Single piece limit
-  maxSheetLength2PieceMM: 5000,
-  maxSheetLength3PieceMM: 7500,
-  clearanceMM: 6,             // Sheet width clearance
+  maxDeckleMM: 1702,           // 67 inch
+  workingDeckleMM: 1702,       // 67 inch (no separate safety buffer)
+  sideTrimMM: 10,              // Per side (total 20 mm width trim)
+  maxSheetLengthMM: 2286,      // 90 inch — single-piece / per-box blank limit
+  maxSheetLength2PieceMM: 4572,// 2 × 90 inch
+  maxSheetLength3PieceMM: 6858,// 3 × 90 inch
+  lengthTrimMM: 10,            // Cut-off trim per box in feed direction
+  clearanceMM: 6,              // Sheet width clearance
   slotBladeWidthMM: 7
 }
 
@@ -467,22 +468,23 @@ export function calculate(input: CalcInput) {
     slotDepth: wrapW / 2
   }
 
-  // Reel Recommendation
+  // Reel / Nesting — 2-D grid: N_w (across deckle) × N_l (feed direction)
   const workingDeckle = MACHINE_LIMITS.workingDeckleMM
   const sideTrim = MACHINE_LIMITS.sideTrimMM
   const totalTrim = 2 * sideTrim
 
-  let N = Math.floor(workingDeckle / sheetWidth)
-  if (N < 1) {
+  // ── Width direction (deckle) ──────────────────────────────────────────────
+  let N_w = Math.floor(workingDeckle / sheetWidth)
+  if (N_w < 1) {
     return { error: `Sheet width ${sheetWidth.toFixed(0)}mm exceeds deckle limit`, success: false }
   }
 
-  let reelWidthRaw = N * sheetWidth + totalTrim
+  let reelWidthRaw = N_w * sheetWidth + totalTrim
   let reelWidth = Math.ceil(reelWidthRaw / 5) * 5
 
-  while (reelWidth > workingDeckle && N > 1) {
-    N--
-    reelWidthRaw = N * sheetWidth + totalTrim
+  while (reelWidth > workingDeckle && N_w > 1) {
+    N_w--
+    reelWidthRaw = N_w * sheetWidth + totalTrim
     reelWidth = Math.ceil(reelWidthRaw / 5) * 5
   }
 
@@ -490,28 +492,42 @@ export function calculate(input: CalcInput) {
     return { error: `Sheet width + trim exceeds machine limit`, success: false }
   }
 
-  const utilization = (N * sheetWidth) / reelWidth * 100
-  const totalTrimMM = reelWidth - (N * sheetWidth)
+  const utilization = (N_w * sheetWidth) / reelWidth * 100
+  const totalTrimMM = reelWidth - (N_w * sheetWidth)
+
+  // ── Length direction (feed / cut-off) ─────────────────────────────────────
+  // Each box occupies (blank length + 10 mm cut-off trim) in the feed direction.
+  // 2-piece boxes cannot be nested in length (their blank already exceeds 90").
+  const effectiveLengthUnit = sheetLength + MACHINE_LIMITS.lengthTrimMM
+  const N_l = pieces === 1
+    ? Math.max(1, Math.floor(MACHINE_LIMITS.maxSheetLengthMM / effectiveLengthUnit))
+    : 1
+
+  const boxesPerBig = N_w * N_l
+  const bigSheetLength = N_l * effectiveLengthUnit   // total feed-direction length
 
   const reelInfo = {
     feasible: true,
     reelWidthMM: reelWidth,
     reelWidthRawMM: reelWidthRaw,
-    sheetsPerWidth: N,
+    sheetsPerWidth: N_w,          // boxes across deckle
+    sheetsPerLength: N_l,         // boxes in feed direction
+    boxesPerBigSheet: boxesPerBig,
+    bigSheetLengthMM: bigSheetLength,
     utilizationPercent: utilization,
     totalTrimMM: totalTrimMM,
     sideTrimMM: sideTrim
   }
 
-  // Slitter Blades Setup
+  // Slitter Blades Setup (width direction — N_w cuts)
   const slitterBlades = [sideTrim]
-  for (let i = 1; i <= N; i++) {
+  for (let i = 1; i <= N_w; i++) {
     slitterBlades.push(sideTrim + i * sheetWidth)
   }
 
   // Multi-sheet creasing machine wheels
   const multiSheetCreases = []
-  for (let i = 0; i < N; i++) {
+  for (let i = 0; i < N_w; i++) {
     const sheetLeftEdge = sideTrim + i * sheetWidth
     multiSheetCreases.push({
       sheetNumber: i + 1,
@@ -670,23 +686,23 @@ export function calculate(input: CalcInput) {
     joiningCost += (fevGm / 1000) * (joiningMethod.cwpRate || cwpDefaults.rate)
   }
 
-  // Big Sheet Approach - Allocated corrugator trim waste
+  // Big Sheet — 2-D nesting: width N_w × length N_l boxes per big sheet
   const sheetGsmTotal = input.layers.reduce((sum, l) => sum + l.gsm * (l.takeUp || 1.0), 0)
   const starchGsmPerArea = (input.starchGSM || 7) * (input.layers.length - 1)
   const combinedGsmPerArea = sheetGsmTotal + starchGsmPerArea
 
   const reelWidthM = reelInfo.reelWidthMM / 1000
-  const sheetLengthM = sheetLength / 1000
+  const bigSheetLengthM = bigSheetLength / 1000           // N_l × (blank+trim)
 
-  const bigSheetAreaM2 = reelWidthM * sheetLengthM
+  const bigSheetAreaM2 = reelWidthM * bigSheetLengthM     // total board area
   const bigSheetWeightGm = bigSheetAreaM2 * combinedGsmPerArea
-  const netSheetWeightGm = sheetAreaM2 * combinedGsmPerArea
-  const sheetWeightGm = bigSheetWeightGm / N
+  const netSheetWeightGm = sheetAreaM2 * combinedGsmPerArea   // one box blank
+  const sheetWeightGm = bigSheetWeightGm / boxesPerBig    // per-box share (÷ N_w×N_l)
 
-  // Trim weights
-  const totalTrimAreaM2 = bigSheetAreaM2 - (N * sheetAreaM2)
+  // Trim: side trim (width) + cut-off trim (length) together
+  const totalTrimAreaM2 = bigSheetAreaM2 - (boxesPerBig * sheetAreaM2)
   const totalTrimWeightGm = totalTrimAreaM2 * combinedGsmPerArea
-  const trimPerBoxGm = totalTrimWeightGm / N
+  const trimPerBoxGm = totalTrimWeightGm / boxesPerBig
   const trimPercent = bigSheetWeightGm > 0 ? (totalTrimWeightGm / bigSheetWeightGm) * 100 : 0
 
   // Slot waste
@@ -759,13 +775,43 @@ export function calculate(input: CalcInput) {
     totalMargin: marginValue * qty
   }
 
-  // Reel Orders
+  // ── Production Plan (single source of truth for all stage quantities) ──────
+  const plyNum = parseInt(String(input.ply)) || 3
+  const corrugatorPasses = plyNum >= 7 ? 3 : plyNum >= 5 ? 2 : 1  // 2-ply passes
+
+  const Qm = Math.ceil(qty * (1 + wastagePercent))           // boxes to make
+  const bigSheets = Math.ceil(Qm / boxesPerBig)              // big board sheets
+  const actualBoxes = bigSheets * boxesPerBig                // total boxes made
+  const surplus = actualBoxes - Qm                           // extra beyond Qm
+
+  const productionPlan = {
+    Q: qty,
+    Qm,
+    N_w,
+    N_l,
+    boxesPerBig,
+    bigSheets,
+    actualBoxes,
+    surplus,
+    P: corrugatorPasses,
+    bigSheetLengthMM: bigSheetLength,
+    bigSheetWidthMM: reelWidth,
+    // per-stage quantities
+    corrugatorBigSheets: corrugatorPasses * bigSheets,  // 2-ply sheets from corrugator
+    topLinerSheets: bigSheets,                          // top liner (fed at pasting, separately)
+    pastedBoards: bigSheets,                            // full boards after pasting
+    blankCount: actualBoxes,                            // box blanks after slitter
+  }
+
+  // Reel Orders — use actualBoxes so material covers the full production run
   const reelOrders = input.layers.map((layer) => {
     const wPerSheet = sheetAreaM2 * layer.gsm * (layer.takeUp || 1.0)
-    const totalNeeded = (wPerSheet / 1000) * qty * (1 + wastagePercent)
+    const totalNeeded = (wPerSheet / 1000) * actualBoxes    // covers actual production
     const reelLength = Number(layer.reelLength) || estimateReelLength(layer.gsm)
     const reelWeightKg = (reelInfo.reelWidthMM * reelLength * layer.gsm) / 1000000
     const reelsNeeded = Math.ceil(totalNeeded / reelWeightKg)
+    // Running metres this layer needs at corrugator (flute × take-up factor)
+    const runningM = bigSheets * (bigSheetLength / 1000) * (layer.takeUp || 1.0)
     return {
       name: layer.name,
       gsm: layer.gsm,
@@ -775,7 +821,8 @@ export function calculate(input: CalcInput) {
       reelWeightKg: reelWeightKg,
       reelsToOrder: reelsNeeded,
       totalOrderKg: reelsNeeded * reelWeightKg,
-      surplusKg: (reelsNeeded * reelWeightKg) - totalNeeded
+      surplusKg: (reelsNeeded * reelWeightKg) - totalNeeded,
+      runningM,
     }
   })
 
@@ -919,7 +966,7 @@ export function calculate(input: CalcInput) {
       slotWaste: slotWasteGm,
 
       bigSheetWeight: bigSheetWeightGm,
-      sheetsPerBigSheet: N,
+      sheetsPerBigSheet: boxesPerBig,   // N_w × N_l
       sheetWeight: sheetWeightGm,
       netSheetWeight: netSheetWeightGm,
       trimPerBox: trimPerBoxGm,
@@ -958,6 +1005,7 @@ export function calculate(input: CalcInput) {
       pricing,
     },
     order: orderTotal,
+    productionPlan,
     timestamp: new Date().toISOString()
   }
 }

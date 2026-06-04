@@ -33,13 +33,8 @@ const costPerKgDivisor = computed(
   () => props.results?.cost?.shippingPaperWeightKg ?? (props.results?.weight?.paperTotal || 0) / 1000,
 )
 
-const bigSheetWeightGm = computed(() => {
-  const boardGSM = props.results?.weight?.boardGSM ?? 0
-  const L = props.results?.sheet?.length ?? 0
-  const W = props.results?.reel?.reelWidthMM ?? 0
-  if (!boardGSM || !L || !W) return 0
-  return boardGSM * (L * W) / 1_000_000
-})
+// Use the calculator's own value so it reflects 2-D nesting (N_w × N_l).
+const bigSheetWeightGm = computed(() => props.results?.weight?.bigSheetWeight ?? 0)
 
 function perKgFromBoxWeight(perBox: number) {
   return boxWeightKg.value > 0 ? perBox / boxWeightKg.value : 0
@@ -158,9 +153,9 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
       </div>
       <div class="bg-gradient-to-br from-amber-500 to-amber-600 text-white rounded-xl p-4 shadow">
         <div class="text-xs opacity-90">Sheet Size</div>
-        <div class="text-sm font-bold mt-1">{{ fmtInt(results?.sheet?.length) }} × {{ fmtInt(results?.sheet?.width) }} indiv</div>
-        <div class="text-sm font-bold">{{ fmtInt(results?.sheet?.length) }} × {{ fmtInt(results?.reel?.reelWidthMM) }} big</div>
-        <div class="text-[10px] opacity-90 mt-1">{{ results?.weight?.sheetsPerBigSheet }} box/big | {{ fmt(bigSheetWeightGm, 0) }} gm</div>
+        <div class="text-sm font-bold mt-1">{{ fmtInt(results?.sheet?.length) }} × {{ fmtInt(results?.sheet?.width) }} blank</div>
+        <div class="text-sm font-bold">{{ fmtInt(results?.reel?.bigSheetLengthMM) }} × {{ fmtInt(results?.reel?.reelWidthMM) }} big</div>
+        <div class="text-[10px] opacity-90 mt-1">{{ results?.reel?.sheetsPerWidth }}w×{{ results?.reel?.sheetsPerLength }}l={{ results?.weight?.sheetsPerBigSheet }} box/big | {{ fmt(bigSheetWeightGm, 0) }} gm</div>
       </div>
       <div class="bg-gradient-to-br from-purple-500 to-purple-600 text-white rounded-xl p-4 shadow">
         <div class="text-xs opacity-90">Order Value</div>

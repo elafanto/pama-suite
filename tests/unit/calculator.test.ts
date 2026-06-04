@@ -117,10 +117,15 @@ describe('calculate — 3-ply RSC (inner dims)', () => {
     expect(res.construction.pieces).toBe(1)
   })
 
-  it('produces a feasible reel and positive paper weight', () => {
+  it('produces a feasible reel with 2-D nesting info', () => {
     expect(res.reel.feasible).toBe(true)
     expect(res.reel.reelWidthMM).toBeGreaterThan(0)
     expect(res.weight.paperTotal).toBeGreaterThan(0)
+    // sheetWidth=359.2 → N_w=floor(1702/359.2)=4; effectiveUnit=1047.8+10=1057.8 → N_l=floor(2286/1057.8)=2
+    expect(res.reel.sheetsPerWidth).toBe(4)
+    expect(res.reel.sheetsPerLength).toBe(2)
+    expect(res.reel.boxesPerBigSheet).toBe(8)
+    expect(res.weight.sheetsPerBigSheet).toBe(8)
   })
 
   it('adds a positive margin so selling price exceeds cost', () => {
@@ -150,6 +155,50 @@ describe('calculate — validation', () => {
   it('rejects missing layers', () => {
     const r = calculate({ length: 300, width: 200, height: 150, layers: [] })
     expect(r.success).toBe(false)
+  })
+})
+
+describe('calculate — production plan (2-D nesting)', () => {
+  const input = {
+    length: 300, width: 200, height: 150,
+    dimType: 'inner', ply: '3-ply', flute: 'C',
+    layers: [
+      { name: 'Top Liner', gsm: 120, bf: 18, rate: 52 },
+      { name: 'Flute', gsm: 120, bf: 18, rate: 45, takeUp: 1.42 },
+      { name: 'Bottom Liner', gsm: 120, bf: 18, rate: 52 },
+    ],
+    quantity: 1000, productionWastePercent: 3,
+    conversionSlabs: DEFAULT_CONVERSION_SLABS,
+  }
+  const res = calculate(input)
+
+  it('productionPlan.N_w × N_l = boxesPerBig', () => {
+    const p = res.productionPlan
+    expect(p.N_w).toBe(4)
+    expect(p.N_l).toBe(2)
+    expect(p.boxesPerBig).toBe(8)
+  })
+  it('productionPlan quantity chain is consistent', () => {
+    const p = res.productionPlan
+    // Qm = ceil(1000×1.03) = 1030; bigSheets = ceil(1030/8)=129; actual=1032
+    expect(p.Qm).toBe(1030)
+    expect(p.bigSheets).toBe(129)
+    expect(p.actualBoxes).toBe(129 * 8)
+    expect(p.surplus).toBe(p.actualBoxes - p.Qm)
+  })
+  it('productionPlan corrugatorBigSheets = P × bigSheets', () => {
+    const p = res.productionPlan
+    expect(p.P).toBe(1)               // 3-ply → 1 corrugator pass
+    expect(p.corrugatorBigSheets).toBe(p.bigSheets)
+    expect(p.topLinerSheets).toBe(p.bigSheets)
+    expect(p.blankCount).toBe(p.actualBoxes)
+  })
+  it('N_l=1 for a box too long to nest in length', () => {
+    // blank length ≈ 5000mm > 2286 → 2-piece, N_l forced to 1
+    const r2 = calculate({ ...input, length: 1200, width: 400, height: 400 })
+    expect(r2.success).toBe(true)
+    expect(r2.construction.pieces).toBe(2)
+    expect(r2.reel.sheetsPerLength).toBe(1)
   })
 })
 

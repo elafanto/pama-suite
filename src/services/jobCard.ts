@@ -368,18 +368,15 @@ const JobCardGenerator = (function () {
     const f = data.form;
     const r = data.results;
     const jc = f.jobCard;
+    const plan = r.productionPlan;
 
-    // 2-ply requirement
-    const twoPlyCount = data.twoPlyCount; // 1 for 3-ply, 2 for 5-ply, 3 for 7-ply
-    const isMultiPly = twoPlyCount > 1;
-
-    // Build reels list
     const reelsHTML = r.reelOrders.map((order: any) => `
       <tr>
         <td>${order.name}</td>
         <td class="num">${order.gsm} / ${order.bf}</td>
         <td class="num">${r.reel.reelWidthMM} mm</td>
         <td class="num">${order.reelLengthM} m</td>
+        <td class="num">${fmtInt(order.runningM)} m run</td>
         <td class="num bold">${order.reelsToOrder} रील</td>
         <td class="num">${fmt(order.totalOrderKg, 0)} kg</td>
       </tr>
@@ -393,38 +390,40 @@ const JobCardGenerator = (function () {
         </div>
 
         <div class="info-box">
-          स्टोर से ये रील निकालें। अनुशंसित रील चौड़ाई: <span class="bold mono">${r.reel.reelWidthMM} mm</span>
-          (${r.reel.sheetsPerWidth} शीट प्रति चौड़ाई)
+          रील: <span class="bold mono">${r.reel.reelWidthMM} mm</span> चौड़ाई |
+          बड़ी शीट: <span class="bold mono">${fmtInt(plan.bigSheetLengthMM)} × ${r.reel.reelWidthMM} mm</span> |
+          <span class="bold">${plan.N_w}w × ${plan.N_l}l = ${plan.boxesPerBig} box/big sheet</span> |
+          कुल बड़ी शीट: <span class="bold mono">${plan.bigSheets}</span>
         </div>
 
         <table>
           <thead>
             <tr>
-              <th>लेयर (Layer)</th>
-              <th class="num">GSM / BF</th>
-              <th class="num">रील चौड़ाई</th>
+              <th>लेयर</th>
+              <th class="num">GSM/BF</th>
+              <th class="num">रील mm</th>
               <th class="num">रील लंबाई</th>
-              <th class="num">मात्रा</th>
-              <th class="num">कुल वजन</th>
+              <th class="num">Running m</th>
+              <th class="num">रीलें</th>
+              <th class="num">kg</th>
             </tr>
           </thead>
           <tbody>${reelsHTML}</tbody>
         </table>
 
-        ${isMultiPly ? `
+        ${plan.P > 1 ? `
         <div class="warn-box">
-          ⚠️ <span class="bold">${f.ply.toUpperCase()}</span> बॉक्स के लिए <span class="bold">${twoPlyCount} × 2-ply</span>
-          शीट चाहिए (corrugator से) + <span class="bold">1 × टॉप लाइनर</span> (पेस्टिंग के लिए)
+          ⚠️ <span class="bold">${f.ply.toUpperCase()}</span>: Corrugator को <span class="bold">${plan.P} × 2-ply passes</span>
+          चाहिए → <span class="bold">${plan.corrugatorBigSheets} 2-ply बड़ी शीट</span> + अलग से <span class="bold">${plan.topLinerSheets} टॉप लाइनर शीट</span>
         </div>
-        ` : ''}
+        ` : `
+        <div class="info-box smaller">
+          3-ply: Corrugator → ${plan.corrugatorBigSheets} 2-ply बड़ी शीट | Pasting पर अलग से ${plan.topLinerSheets} टॉप लाइनर
+        </div>`}
 
         <div class="row" style="margin-top: 3mm">
-          <div class="col">
-            <span class="label">कुल कागज वजन:</span> <span class="value bold mono">${fmt(r.order.paperWeightKg, 1)} kg</span>
-          </div>
-          <div class="col">
-            <span class="label">कुल रील जारी:</span> <span class="value bold">${r.reelOrders.reduce((s: number, o: any)=>s+o.reelsToOrder, 0)} रील</span>
-          </div>
+          <div class="col"><span class="label">कुल कागज वजन (order):</span> <span class="value bold mono">${fmt(r.order.paperWeightKg, 1)} kg</span></div>
+          <div class="col"><span class="label">कुल रील:</span> <span class="value bold">${r.reelOrders.reduce((s: number, o: any)=>s+o.reelsToOrder, 0)} रील</span></div>
         </div>
 
         <div class="signature-row">
@@ -439,11 +438,23 @@ const JobCardGenerator = (function () {
   // ============ CARD 3: CORRUGATOR (2-PLY) ============
   function corrugatorCard(data: JobCardData) {
     const f = data.form;
+    const r = data.results;
     const jc = f.jobCard;
+    const plan = r.productionPlan;
 
-    // Find liner and flute paper specs
-    const topLiner = f.layers[0];
-    const flute1 = f.layers[1];
+    // For multi-ply, show each 2-ply pass' liner+flute pair
+    const fluteIndices: number[] = []
+    f.layers.forEach((l: any, i: number) => { if (l.name?.toLowerCase().includes('flute')) fluteIndices.push(i) })
+
+    const passRowsHTML = fluteIndices.map((fi: number, pass: number) => {
+      const liner = f.layers[fi - 1] || f.layers[0]
+      const flute = f.layers[fi]
+      return `<tr>
+        <td class="center bold">Pass ${pass + 1}</td>
+        <td>${liner?.name || '-'}: <span class="bold">${liner?.gsm} GSM, ${liner?.bf} BF</span></td>
+        <td>${flute?.name || '-'}: <span class="bold">${flute?.gsm} GSM, ${flute?.bf} BF</span></td>
+      </tr>`
+    }).join('')
 
     return `
       <div class="card">
@@ -453,31 +464,40 @@ const JobCardGenerator = (function () {
         </div>
 
         <div class="info-box">
-          आउटपुट: <span class="bold">2-ply वेब</span> (1 लाइनर + 1 फ्लूट) — बाद में पेस्टिंग में जुड़ेगा
+          <span class="bold">${plan.P} × 2-ply pass</span> → कुल
+          <span class="bold mono">${plan.corrugatorBigSheets} बड़ी शीट</span> बनानी हैं |
+          Cut-off: <span class="bold mono">${fmtInt(plan.bigSheetLengthMM)} mm</span> |
+          Deckle: <span class="bold mono">${plan.bigSheetWidthMM} mm</span>
         </div>
 
-        <h3 class="section-title">रील लगाएं (Mount these reels)</h3>
-        <div class="row">
-          <div class="col">• <span class="label">लाइनर स्टैंड:</span> <span class="value">${topLiner.gsm} GSM, ${topLiner.bf} BF</span></div>
-          <div class="col">• <span class="label">फ्लूट स्टैंड:</span> <span class="value">${flute1.gsm} GSM, ${flute1.bf} BF</span></div>
-        </div>
+        <h3 class="section-title">रील लगाएं — प्रत्येक Pass</h3>
+        <table>
+          <thead><tr><th class="center">Pass</th><th>लाइनर स्टैंड</th><th>फ्लूट स्टैंड</th></tr></thead>
+          <tbody>${passRowsHTML}</tbody>
+        </table>
 
         <h3 class="section-title">मशीन सेटिंग</h3>
         <table>
           <tr><td><span class="label">फ्लूट रोल:</span></td><td class="bold">${f.flute}-Flute</td>
-              <td><span class="label">स्टीम टेम्प:</span></td><td class="bold">170-180°C</td></tr>
+              <td><span class="label">Cut-off length:</span></td><td class="bold mono">${fmtInt(plan.bigSheetLengthMM)} mm</td></tr>
           <tr><td><span class="label">गोंद GSM:</span></td><td class="bold">${f.starchGSM} gm/m²</td>
-              <td><span class="label">स्पीड:</span></td><td class="bold">80-100 m/min</td></tr>
+              <td><span class="label">स्टीम टेम्प:</span></td><td class="bold">170-180°C</td></tr>
+        </table>
+
+        <h3 class="section-title">उत्पादन लक्ष्य</h3>
+        <table>
+          <tr><td>प्रत्येक pass में 2-ply बड़ी शीट:</td><td class="num bold">${plan.bigSheets}</td></tr>
+          <tr><td>कुल 2-ply बड़ी शीट (${plan.P} pass × ${plan.bigSheets}):</td><td class="num bold">${plan.corrugatorBigSheets}</td></tr>
         </table>
 
         <h3 class="section-title">गुणवत्ता जांच</h3>
         <div class="checklist">
-          <span class="check-inline"><input type="checkbox" style="display:inline-block;width:3mm;height:3mm;border:1.5px solid #475569;vertical-align:middle;margin-right:1mm"> कैलिपर ~ ${fmt(data.results.caliper - 0.4, 1)} mm</span>
+          <span class="check-inline"><input type="checkbox" style="display:inline-block;width:3mm;height:3mm;border:1.5px solid #475569;vertical-align:middle;margin-right:1mm"> कैलिपर ~ ${fmt(r.caliper - 0.4, 1)} mm</span>
           <span class="check-inline"><input type="checkbox"> Flute peaks साफ</span>
           <span class="check-inline"><input type="checkbox"> Bond strength OK</span>
+          <span class="check-inline"><input type="checkbox"> Sheet length ${fmtInt(plan.bigSheetLengthMM)} ±3mm</span>
         </div>
 
-        <h3 class="section-title">⚠️ बर्बादी (Material Loss)</h3>
         <div class="row">
           <div class="col"><span class="label">Setup waste:</span> <span class="empty-box">${jc.materialLoss.corrugatorSetupKg || ''}</span> kg</div>
           <div class="col"><span class="label">Edge trim:</span> <span class="empty-box">${jc.materialLoss.corrugatorTrimKg || ''}</span> kg</div>
@@ -498,8 +518,7 @@ const JobCardGenerator = (function () {
     const f = data.form;
     const r = data.results;
     const jc = f.jobCard;
-    const sheetsNeeded = Math.ceil(f.quantity * (1 + f.productionWastePercent/100));
-    const twoPlyCount = data.twoPlyCount;
+    const plan = r.productionPlan;
 
     return `
       <div class="card">
@@ -509,30 +528,38 @@ const JobCardGenerator = (function () {
         </div>
 
         <div class="info-box">
-          इनपुट: कोरुगेटर से <span class="bold">2-ply वेब</span> | आउटपुट: 2-ply शीट (लंबाई कट)
-        </div>
-
-        <div class="row">
-          <div class="col"><span class="label">कट लंबाई:</span> <span class="value bold mono">${fmtInt(r.sheet.length)} mm</span></div>
-          <div class="col"><span class="label">शीट चौड़ाई (वेब):</span> <span class="value mono">${r.reel.reelWidthMM} mm</span></div>
+          Corrugator वेब → बड़ी शीट कट | Cut-off: <span class="bold mono">${fmtInt(plan.bigSheetLengthMM)} mm</span> |
+          Deckle (वेब चौड़ाई): <span class="bold mono">${plan.bigSheetWidthMM} mm</span>
         </div>
 
         <h3 class="section-title">उत्पादन लक्ष्य</h3>
         <table>
-          <tr><td>2-ply शीट चाहिए (${f.ply}):</td>
-              <td class="num bold">${sheetsNeeded * twoPlyCount} शीट</td></tr>
-          <tr><td>(${twoPlyCount} × ${sheetsNeeded} = ${twoPlyCount} 2-ply per ${f.ply} box)</td>
-              <td class="num smaller">${sheetsNeeded} बॉक्स × ${twoPlyCount}</td></tr>
-          <tr><td>प्रति cycle:</td><td class="num">1 शीट</td></tr>
-          <tr><td>अनुमानित समय:</td><td class="num">~${Math.ceil(sheetsNeeded * twoPlyCount / 20)} मिनट</td></tr>
+          <tr><th>सामग्री</th><th class="num">शीट संख्या</th><th class="num">Cut length</th><th class="num">Deckle</th></tr>
+          <tr>
+            <td>2-ply बड़ी शीट (corrugator से, ${plan.P} passes)</td>
+            <td class="num bold">${plan.corrugatorBigSheets}</td>
+            <td class="num mono">${fmtInt(plan.bigSheetLengthMM)} mm</td>
+            <td class="num mono">${plan.bigSheetWidthMM} mm</td>
+          </tr>
+          <tr>
+            <td>टॉप लाइनर बड़ी शीट (अलग रील, pasting के लिए)</td>
+            <td class="num bold">${plan.topLinerSheets}</td>
+            <td class="num mono">${fmtInt(plan.bigSheetLengthMM)} mm</td>
+            <td class="num mono">${plan.bigSheetWidthMM} mm</td>
+          </tr>
+          <tr style="background:#f1f5f9">
+            <td><span class="bold">कुल शीट काटनी हैं</span></td>
+            <td class="num bold">${plan.corrugatorBigSheets + plan.topLinerSheets}</td>
+            <td></td><td></td>
+          </tr>
         </table>
 
         <h3 class="section-title">गुणवत्ता जांच</h3>
         <div class="checklist">
-          <span class="check-inline"><input type="checkbox"> लंबाई ${fmtInt(r.sheet.length)} ± 2mm</span>
+          <span class="check-inline"><input type="checkbox"> Length ${fmtInt(plan.bigSheetLengthMM)} ±3mm</span>
           <span class="check-inline"><input type="checkbox"> Square corners</span>
           <span class="check-inline"><input type="checkbox"> कोई tear नहीं</span>
-          <span class="check-inline"><input type="checkbox"> Stack neatly</span>
+          <span class="check-inline"><input type="checkbox"> 2-ply और liner अलग stack</span>
         </div>
 
         <div class="row">
@@ -554,14 +581,13 @@ const JobCardGenerator = (function () {
     const r = data.results;
     const jc = f.jobCard;
     const cure = data.cureStatus;
-    const twoPlyCount = data.twoPlyCount;
-    const sheetsNeeded = Math.ceil(f.quantity * (1 + f.productionWastePercent/100));
+    const plan = r.productionPlan;
 
-    const layerSequence = twoPlyCount === 1
-      ? '<div>1. 2-ply शीट रखें (flute up)<br>2. गोंद लगाएं<br>3. टॉप लाइनर पेस्ट करें<br>= <span class="bold">3-ply तैयार</span></div>'
-      : twoPlyCount === 2
-      ? '<div>1. 2-ply शीट (flute down)<br>2. गोंद + 2-ply शीट (flute up)<br>3. गोंद + टॉप लाइनर<br>= <span class="bold">5-ply तैयार</span></div>'
-      : '<div>1-3. तीन 2-ply शीट stack करें<br>4. हर लेयर पर गोंद<br>5. टॉप लाइनर पेस्ट<br>= <span class="bold">7-ply तैयार</span></div>';
+    const layerSequence = plan.P === 1
+      ? '1. 2-ply बड़ी शीट रखें (flute up)<br>2. स्टार्च गोंद लगाएं<br>3. टॉप लाइनर पेस्ट करें → <span class="bold">3-ply बोर्ड</span>'
+      : plan.P === 2
+      ? '1. 2-ply (flute down) रखें<br>2. गोंद + 2-ply (flute up)<br>3. गोंद + टॉप लाइनर → <span class="bold">5-ply बोर्ड</span>'
+      : '1-3. तीन 2-ply शीट stack (गोंद प्रत्येक layer पर)<br>4. टॉप लाइनर → <span class="bold">7-ply बोर्ड</span>';
 
     return `
       <div class="card">
@@ -571,14 +597,10 @@ const JobCardGenerator = (function () {
         </div>
 
         <div class="info-box">
-          बनाना है: <span class="bold">${f.ply.toUpperCase()}</span> बोर्ड
-          (${twoPlyCount} × 2-ply + 1 टॉप लाइनर)
-        </div>
-
-        <h3 class="section-title">इनपुट सामग्री</h3>
-        <div class="row">
-          <div class="col">• 2-ply शीट: <span class="bold mono">${sheetsNeeded * twoPlyCount}</span></div>
-          <div class="col">• टॉप लाइनर: <span class="bold mono">${sheetsNeeded}</span> शीट</div>
+          <span class="bold">${f.ply.toUpperCase()}</span> बोर्ड बनाना है |
+          इनपुट → आउटपुट: <span class="bold mono">${plan.corrugatorBigSheets} 2-ply</span> +
+          <span class="bold mono">${plan.topLinerSheets} टॉप लाइनर</span> →
+          <span class="bold mono">${plan.pastedBoards} पूरे बोर्ड</span>
         </div>
 
         <h3 class="section-title">परत क्रम (Layer Sequence)</h3>
@@ -586,41 +608,33 @@ const JobCardGenerator = (function () {
           ${layerSequence}
         </div>
 
-        <h3 class="section-title">गोंद सेटिंग</h3>
+        <h3 class="section-title">गोंद + Cure</h3>
         <div class="row smaller">
           <div class="col">गोंद: <span class="bold">स्टार्च ~${f.starchGSM} gm/m²</span></div>
-          <div class="col">कुल गोंद: <span class="bold mono">${fmt(r.weight.starch * sheetsNeeded / 1000, 2)} kg</span></div>
+          <div class="col">कुल गोंद: <span class="bold mono">${fmt(r.weight.starch * plan.pastedBoards / 1000, 2)} kg</span></div>
         </div>
 
-        <h3 class="section-title">⏰ Cure Timer (बहुत जरूरी)</h3>
-        <div style="background:${cure.color === 'green' ? '#dcfce7' : cure.color === 'yellow' ? '#fef3c7' : '#f1f5f9'};padding:3mm;border-radius:2mm;border:1.5px solid ${cure.color === 'green' ? '#16a34a' : cure.color === 'yellow' ? '#ca8a04' : '#94a3b8'}">
+        <div style="background:${cure.color === 'green' ? '#dcfce7' : cure.color === 'yellow' ? '#fef3c7' : '#f1f5f9'};padding:3mm;border-radius:2mm;border:1.5px solid ${cure.color === 'green' ? '#16a34a' : cure.color === 'yellow' ? '#ca8a04' : '#94a3b8'};margin-top:2mm">
           <div class="row">
             <div class="col"><span class="label">पेस्ट किया गया:</span> <span class="mono">${jc.pastingTime ? new Date(jc.pastingTime).toLocaleString('en-IN') : '_____________'}</span></div>
-            <div class="col"><span class="label">Cure समय:</span> <span class="bold mono">${jc.cureDurationHours} घंटे</span></div>
+            <div class="col"><span class="label">Cure:</span> <span class="bold mono">${jc.cureDurationHours} hr</span> | तैयार: <span class="mono">${cure.readyAt || '_______________'}</span></div>
           </div>
-          <div class="row">
-            <div class="col"><span class="label">तैयार होगा:</span> <span class="mono">${cure.readyAt || '_____________'}</span></div>
-            <div class="col bold ${cure.color === 'green' ? 'green' : 'amber'}">${cure.message}</div>
-          </div>
+          <div class="bold ${cure.color === 'green' ? 'green' : 'amber'}">${cure.message}</div>
         </div>
-
-        <div class="warn-box smaller">
-          ⚠️ Cure पूरा होने से पहले स्लिटर स्कोरर पर ना भेजें!
-        </div>
+        <div class="warn-box smaller">⚠️ Cure पूरा हो तब ही Slitter पर भेजें!</div>
 
         <h3 class="section-title">गुणवत्ता जांच</h3>
         <div class="checklist">
           <span class="check-inline"><input type="checkbox"> कोई bubble नहीं</span>
           <span class="check-inline"><input type="checkbox"> Edges aligned</span>
           <span class="check-inline"><input type="checkbox"> Uniform glue</span>
-          <span class="check-inline"><input type="checkbox"> ${jc.cureDurationHours}hr cure complete</span>
+          <span class="check-inline"><input type="checkbox"> ${jc.cureDurationHours}hr cure OK</span>
         </div>
 
         <div class="row">
           <div class="col"><span class="label">⚠️ Reject:</span> <span class="empty-box">${jc.materialLoss.pastingRejectNos || ''}</span> शीट</div>
           <div class="col"><span class="label">कारण:</span> <span class="input-line lg">${safe(jc.materialLoss.pastingRejectReason, '')}</span></div>
         </div>
-
         <div class="signature-row">
           <div>ऑपरेटर: <span class="input-line">${safe(jc.operators.pasting, '_______________')}</span></div>
         </div>
@@ -634,8 +648,9 @@ const JobCardGenerator = (function () {
     const r = data.results;
     const jc = f.jobCard;
     const clearance = r.sheet?.clearanceMM ?? 6;
+    const plan = r.productionPlan;
 
-    // Slitter blades
+    // Width-direction slit blades
     const bladesHTML = r.machineSetup.slitterBlades.map((b: any) =>
       `<td class="num center">${fmtInt(b)}</td>`
     ).join('');
@@ -643,59 +658,68 @@ const JobCardGenerator = (function () {
       `<th class="num center">B${i+1}</th>`
     ).join('');
 
-    // Multi-sheet creases
+    // Scorer wheels per width-strip
     const creasesHTML = r.machineSetup.multiSheetCreases.map((c: any) => `
       <tr>
-        <td class="center bold">शीट ${c.sheetNumber}</td>
+        <td class="center bold">स्ट्रिप ${c.sheetNumber}</td>
         <td class="num">${fmtInt(c.sheetLeftEdge)}</td>
         <td class="num bold blue">${fmtInt(c.w1Machine)}</td>
         <td class="num bold blue">${fmtInt(c.w2Machine)}</td>
       </tr>
     `).join('');
 
+    // Length-direction cross-cut positions (N_l > 1)
+    const crossCutHTML = plan.N_l > 1 ? (() => {
+      const cuts: string[] = []
+      for (let i = 1; i < plan.N_l; i++) {
+        cuts.push(`<tr><td class="center bold">Cross-cut ${i}</td><td class="num bold red">${fmtInt(i * (r.sheet.length + 10))} mm</td><td>(${i} × blank+trim)</td></tr>`)
+      }
+      return cuts.join('')
+    })() : ''
+
     return `
       <div class="card">
         <div class="card-header">
-          <div class="card-title">✂️ स्लिटर स्कोरर — सेटअप</div>
+          <div class="card-title">✂️ Thin Blade Slitter Scorer — सेटअप</div>
           <div class="card-job">कार्य: <span class="mono">${safe(jc.jobNumber)}</span></div>
         </div>
 
         <div class="info-box">
-          इनपुट: ${f.ply} पेस्ट शीट | रील चौड़ाई: <span class="bold mono">${r.reel.reelWidthMM} mm</span>
-          | शीट चौड़ाई: <span class="bold mono">${fmtInt(r.sheet.width)} mm</span> × ${r.reel.sheetsPerWidth} शीट
+          इनपुट: <span class="bold mono">${plan.pastedBoards}</span> पेस्ट बोर्ड (${fmtInt(plan.bigSheetLengthMM)} × ${plan.bigSheetWidthMM} mm) →
+          आउटपुट: <span class="bold mono">${plan.blankCount}</span> blank
+          (<span class="bold">${plan.N_w}w × ${plan.N_l}l = ${plan.boxesPerBig} per board</span>)
         </div>
 
-        <h3 class="section-title">A) स्लिट ब्लेड पोज़िशन (रील के बायें किनारे से, mm में)</h3>
+        <h3 class="section-title">A) Width Slit ब्लेड (बायें किनारे से mm)</h3>
         <table>
           <thead><tr>${bladeHeadersHTML}</tr></thead>
           <tbody><tr>${bladesHTML}</tr></tbody>
         </table>
-        <div class="smaller" style="color:#64748b">
-          B1, B${r.machineSetup.slitterBlades.length} = ट्रिम कट | बीच के ब्लेड = शीट के बीच के कट
-        </div>
+        <div class="smaller" style="color:#64748b">B1 = left trim (${r.machineSetup.slitterBlades[0]}mm) | B${r.machineSetup.slitterBlades.length} = right edge | बीच = strip cuts</div>
 
-        <h3 class="section-title">B) स्कोरर व्हील पोज़िशन (क्रीज़) — महत्वपूर्ण!</h3>
+        <h3 class="section-title">B) Scorer व्हील (क्रीज़ — W1 और W2 per strip)</h3>
         <div class="warn-box smaller">
-          ⚠️ हर शीट के लिए स्कोरर पोज़िशन <span class="bold">स्लिट ब्लेड + क्रीज़ ऑफसेट</span> है।
-          W1 = sheet_left + ${fmtInt(r.machineSetup.creases.topCrease)}, W2 = sheet_left + ${fmtInt(r.machineSetup.creases.bottomCrease)}
+          W1 = strip_left + <span class="bold">${fmtInt(r.machineSetup.creases.topCrease)}</span> mm |
+          W2 = strip_left + <span class="bold">${fmtInt(r.machineSetup.creases.bottomCrease)}</span> mm
         </div>
-
         <table>
-          <thead>
-            <tr>
-              <th class="center">शीट #</th>
-              <th class="num">बायां किनारा</th>
-              <th class="num">W1 (टॉप क्रीज़)</th>
-              <th class="num">W2 (बॉटम क्रीज़)</th>
-            </tr>
-          </thead>
+          <thead><tr><th class="center">Strip #</th><th class="num">Strip बायां</th><th class="num">W1</th><th class="num">W2</th></tr></thead>
           <tbody>${creasesHTML}</tbody>
         </table>
-        <div class="smaller" style="color:#64748b">
-          कुल स्कोरर व्हील: ${r.machineSetup.multiSheetCreases.length * 2} (2 प्रति शीट × ${r.machineSetup.multiSheetCreases.length} शीट)
-        </div>
+        <div class="smaller" style="color:#64748b">कुल scorer: ${r.machineSetup.multiSheetCreases.length * 2} wheels</div>
 
-        <h3 class="section-title">C) शीट लेआउट</h3>
+        ${plan.N_l > 1 ? `
+        <h3 class="section-title">C) Length Cross-cut — ${plan.N_l} box/sheet के लिए ✂️</h3>
+        <div class="warn-box smaller">
+          <span class="bold">N_l = ${plan.N_l}</span> → बोर्ड को length में <span class="bold">${plan.N_l - 1} बार काटना है</span>
+          (blank ${fmtInt(r.sheet.length)}mm + 10mm trim = ${fmtInt(r.sheet.length + 10)}mm per box unit)
+        </div>
+        <table>
+          <thead><tr><th class="center">Cut #</th><th class="num">Position (बायें से)</th><th></th></tr></thead>
+          <tbody>${crossCutHTML}</tbody>
+        </table>` : ''}
+
+        <h3 class="section-title">D) Blank लेआउट (Width direction)</h3>
         <table class="smaller">
           <tr>
             <td class="center bold" style="background:#fef3c7">टॉप फ्लैप<br>${fmtInt(r.machineSetup.creases.topCrease)} mm</td>
@@ -707,13 +731,14 @@ const JobCardGenerator = (function () {
 
         <h3 class="section-title">गुणवत्ता + बर्बादी</h3>
         <div class="checklist smaller">
-          <span class="check-inline"><input type="checkbox"> ट्रिम साफ</span>
-          <span class="check-inline"><input type="checkbox"> शीट ${fmtInt(r.sheet.width)}±1mm</span>
-          <span class="check-inline"><input type="checkbox"> क्रीज़ साफ (cracked नहीं)</span>
+          <span class="check-inline"><input type="checkbox"> Trim साफ</span>
+          <span class="check-inline"><input type="checkbox"> Blank width ${fmtInt(r.sheet.width)}±1mm</span>
+          <span class="check-inline"><input type="checkbox"> Crease sharp</span>
+          ${plan.N_l > 1 ? `<span class="check-inline"><input type="checkbox"> Cross-cut ${fmtInt(r.sheet.length)}±2mm</span>` : ''}
         </div>
         <div class="row">
-          <div class="col"><span class="label">Trim:</span> <span class="empty-box">${jc.materialLoss.slitterTrimKg || ''}</span> kg</div>
-          <div class="col"><span class="label">Reject:</span> <span class="empty-box">${jc.materialLoss.slitterRejectNos || ''}</span> शीट</div>
+          <div class="col"><span class="label">Trim waste:</span> <span class="empty-box">${jc.materialLoss.slitterTrimKg || ''}</span> kg</div>
+          <div class="col"><span class="label">Reject:</span> <span class="empty-box">${jc.materialLoss.slitterRejectNos || ''}</span> blank</div>
           <div class="col"><span class="label">ऑपरेटर:</span> <span class="input-line">${safe(jc.operators.slitterScorer, '________')}</span></div>
         </div>
       </div>
@@ -725,6 +750,7 @@ const JobCardGenerator = (function () {
     const f = data.form;
     const r = data.results;
     const jc = f.jobCard;
+    const plan = r.productionPlan;
 
     const slotsHTML = r.machineSetup.slots.slots.map((s: any) =>
       `<td class="num center bold blue">${fmtInt(s)}</td>`
@@ -745,8 +771,8 @@ const JobCardGenerator = (function () {
         </div>
 
         <div class="info-box">
-          शीट साइज: <span class="bold mono">${fmtInt(r.sheet.length)} × ${fmtInt(r.sheet.width)} mm</span>
-          | फीड: <span class="bold">लंबाई पहले (${fmtInt(r.sheet.length)}mm)</span>
+          Blank: <span class="bold mono">${fmtInt(r.sheet.length)} × ${fmtInt(r.sheet.width)} mm</span> |
+          इनपुट: <span class="bold mono">${plan.blankCount}</span> blank → आउटपुट: <span class="bold mono">${plan.blankCount}</span> box
         </div>
 
         ${f.printType === 'non-printed' ? `
@@ -812,7 +838,9 @@ const JobCardGenerator = (function () {
     const f = data.form;
     const r = data.results;
     const jc = f.jobCard;
+    const plan = r.productionPlan;
     const method = f.joining.method;
+    const totalPins = r.pinInfo ? r.pinInfo.pins * plan.blankCount : 0
 
     return `
       <div class="card">
@@ -821,22 +849,24 @@ const JobCardGenerator = (function () {
           <div class="card-job">कार्य: <span class="mono">${safe(jc.jobNumber)}</span></div>
         </div>
 
+        <div class="info-box">
+          इनपुट: <span class="bold mono">${plan.blankCount}</span> blank →
+          आउटपुट: <span class="bold mono">${plan.blankCount}</span> बॉक्स
+          ${r.pinInfo ? `| <span class="bold">${r.pinInfo.pins} pin/box × ${plan.blankCount} = ${totalPins} pins कुल</span>` : ''}
+        </div>
+
         <div class="row">
           <div class="col"><span class="label">तरीका:</span> <span class="value bold">${method === 'stitching' ? 'तार स्टिचिंग' : method === 'fevicol' ? 'Fevicol CWP' : 'दोनों (Fevicol + Stitching)'}</span></div>
-          ${method !== 'fevicol' && r.pinInfo ? `<div class="col"><span class="label">पिन:</span> <span class="value bold">${r.pinInfo.pins} nos (${r.pinInfo.headType === 'double' ? 'डबल हेड' : 'सिंगल हेड'})</span></div>` : ''}
+          ${method !== 'fevicol' && r.pinInfo ? `<div class="col"><span class="label">पिन:</span> <span class="value bold">${r.pinInfo.pins} nos (${r.pinInfo.headType === 'double' ? 'डबल हेड' : 'सिंगल हेड'}), ${r.pinInfo.spacing}mm gap</span></div>` : ''}
         </div>
-        ${method !== 'fevicol' && r.pinInfo ? `<div class="row">
-          <div class="col"><span class="label">पिन गैप:</span> <span class="value">${r.pinInfo.spacing} mm apart</span></div>
-          <div class="col"><span class="label">कुल लंबाई:</span> <span class="value">${f.dimensionUnit === 'inch' ? (r.dimensions.outer.H / 25.4).toFixed(2) + '"' : Math.round(r.dimensions.outer.H) + ' mm'}</span></div>
-        </div>` : ''}
 
         <h3 class="section-title">प्रक्रिया</h3>
         <div class="smaller">
-          1. प्रिंट+स्लॉट शीट लें<br>
+          1. Printer-Slotter blank लें<br>
           2. वर्टिकल क्रीज़ पर मोड़ें (rectangle tube बनाएं)<br>
-          3. ग्लू फ्लैप (${r.glueFlap}mm) L1 पैनल पर अंदर overlap करें<br>
-          ${method === 'fevicol' || method === 'both' ? `4. Fevicol CWP bead (1.5-2mm) फ्लैप पर लगाएं<br>5. 20-30 min weight से दबाएं<br>` : ''}
-          ${method === 'stitching' || method === 'both' ? `${method === 'both' ? '6.' : '4.'} ${r.pinInfo ? r.pinInfo.pins : '—'} पिन लगाएं (${r.pinInfo ? r.pinInfo.headType === 'double' ? 'डबल हेड' : 'सिंगल हेड' : ''}, ${r.pinInfo ? r.pinInfo.spacing : '—'}mm gap)<br>` : ''}
+          3. ग्लू फ्लैप (${r.glueFlap}mm) L1 पैनल पर overlap करें<br>
+          ${method === 'fevicol' || method === 'both' ? `4. Fevicol CWP bead लगाएं, 20-30 min press करें<br>` : ''}
+          ${method === 'stitching' || method === 'both' ? `${method === 'both' ? '5.' : '4.'} ${r.pinInfo ? r.pinInfo.pins : '—'} पिन (${r.pinInfo ? r.pinInfo.headType === 'double' ? 'डबल हेड' : 'सिंगल हेड' : ''}, ${r.pinInfo ? r.pinInfo.spacing : '—'}mm gap)<br>` : ''}
         </div>
 
         <h3 class="section-title">गुणवत्ता जांच</h3>
@@ -865,6 +895,7 @@ const JobCardGenerator = (function () {
     const f = data.form;
     const r = data.results;
     const jc = f.jobCard;
+    const plan = r.productionPlan;
     const totalBundles = data.totalBundles;
 
     return `
@@ -874,8 +905,13 @@ const JobCardGenerator = (function () {
           <div class="card-job">कार्य: <span class="mono">${safe(jc.jobNumber)}</span></div>
         </div>
 
+        <div class="info-box">
+          बने: <span class="bold mono">${plan.actualBoxes}</span> बॉक्स (${plan.bigSheets} big sheet × ${plan.boxesPerBig}) |
+          Deliver: <span class="bold mono">${plan.Q}</span> | Surplus: ${plan.surplus}
+        </div>
+
         <div class="row">
-          <div class="col"><span class="label">मात्रा:</span> <span class="value bold">${f.quantity} बॉक्स</span></div>
+          <div class="col"><span class="label">Order मात्रा:</span> <span class="value bold">${plan.Q} बॉक्स</span></div>
           <div class="col"><span class="label">बंडल साइज:</span> <span class="value bold">${jc.bundleSize} बॉक्स</span></div>
           <div class="col"><span class="label">कुल बंडल:</span> <span class="value bold green">${totalBundles}</span></div>
         </div>
