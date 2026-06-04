@@ -28,10 +28,9 @@ defineEmits<{
 const diagramSvg = computed(() => getSheetDiagramSVG(props.results))
 
 const boxWeightKg = computed(() => (props.results?.weight?.boxTotal || 0) / 1000)
-/** Per-kg cost divisor matches calculator (layer paper weight, not finished box). */
-const costPerKgDivisor = computed(
-  () => props.results?.cost?.shippingPaperWeightKg ?? (props.results?.weight?.paperTotal || 0) / 1000,
-)
+/** Box-cost per-kg is per kg of FINISHED BOX, so the cost-breakdown Per-KG
+ *  column reconciles with the "Box ₹/kg" card (Selling Price ÷kg = boxRatePerKg). */
+const costPerKgDivisor = computed(() => boxWeightKg.value)
 
 // Use the calculator's own value so it reflects 2-D nesting (N_w × N_l).
 const bigSheetWeightGm = computed(() => props.results?.weight?.bigSheetWeight ?? 0)

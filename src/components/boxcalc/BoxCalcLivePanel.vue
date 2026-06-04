@@ -36,11 +36,12 @@ const mainRows = computed((): PricingRow[] => {
     { label: 'Shipping', perKg: p.perKg.shipping, perBox: p.perBox.shipping, bold: true },
     { label: 'Subtotal (M+C+S)', perKg: p.perKg.subtotal, perBox: p.perBox.subtotal },
   ]
-  const paperKg = c?.shippingPaperWeightKg ?? 0
+  // Box pricing per-kg is per kg of finished box (matches calculator).
+  const boxKg = (props.results?.weight?.boxTotal ?? 0) / 1000
   if (c?.printing) {
     rows.push({
       label: 'Printing',
-      perKg: paperKg > 0 ? c.printing / paperKg : 0,
+      perKg: boxKg > 0 ? c.printing / boxKg : 0,
       perBox: c.printing,
     })
   }

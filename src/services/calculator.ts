@@ -844,7 +844,11 @@ export function calculate(input: CalcInput) {
   const sheetKgRate = paperWeightKg > 0 ? (paperCostTotal / paperWeightKg) : 0
   const boxKgRate = boxWeightKg > 0 ? (sellingPrice / boxWeightKg) : 0
 
-  const perKgDivisor = paperWeightKg > 0 ? paperWeightKg : 1
+  // Box pricing per-kg is expressed per kg of FINISHED BOX (the rate a box is
+  // quoted at), so the Grand Total ÷kg equals boxRatePerKg. The "Sheet pricing"
+  // block below still divides by sheet weight; the "Sheet ₹/kg" card uses the
+  // paper-cost basis (sheetKgRate).
+  const perKgDivisor = boxWeightKg > 0 ? boxWeightKg : 1
 
   const toPerKg = (total: number, weightKg = perKgDivisor) =>
     weightKg > 0 ? total / weightKg : 0

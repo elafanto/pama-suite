@@ -140,6 +140,13 @@ describe('calculate — 3-ply RSC (inner dims)', () => {
     expect(res.strength.combinedBF).toBeCloseTo(14.4, 4)
   })
 
+  it('box pricing per-kg uses finished-box weight (Grand Total ÷kg = Box ₹/kg)', () => {
+    const boxKg = res.weight.boxTotal / 1000
+    expect(res.cost.pricing.perKg.grandTotal).toBeCloseTo(res.cost.sellingPrice / boxKg, 6)
+    // the cost-breakdown selling-price-per-kg now reconciles with the headline card
+    expect(res.cost.pricing.perKg.grandTotal).toBeCloseTo(res.cost.boxRatePerKg, 6)
+  })
+
   it('keeps debit/credit-free order totals consistent with quantity', () => {
     expect(res.order.quantity).toBe(1000)
     expect(res.order.totalValue).toBeCloseTo(res.cost.sellingPrice * 1000, 4)
