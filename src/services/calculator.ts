@@ -534,6 +534,12 @@ export function calculate(input: CalcInput) {
     }
   })
 
+  // Combined board burst: sum of each ply's BS (kg/cm²); BF is the GSM-weighted
+  // average bursting factor of the plies (= combinedBS × 1000 / Σgsm).
+  const combinedBS = layerStrengths.reduce((s, l) => s + l.bs, 0)
+  const combinedGsmRaw = layerStrengths.reduce((s, l) => s + l.gsm, 0)
+  const combinedBF = combinedGsmRaw > 0 ? (combinedBS * 1000) / combinedGsmRaw : 0
+
   // ECT = 0.0035 * sum(gsm * sqrt(bf) * takeUp)
   let ectSum = 0
   input.layers.forEach((l) => {
@@ -889,6 +895,8 @@ export function calculate(input: CalcInput) {
     pinInfo,
     strength: {
       layers: layerStrengths,
+      combinedBS,
+      combinedBF,
       ect,
       bct,
       safeStack,

@@ -177,6 +177,16 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
         <div class="text-xl font-bold mt-1">{{ fmtMoney(results?.cost?.boxRatePerKg) }}</div>
         <div class="text-xs opacity-90 mt-1">selling price basis</div>
       </div>
+      <div class="bg-gradient-to-br from-rose-500 to-rose-600 text-white rounded-xl p-4 shadow">
+        <div class="text-xs opacity-90">Sheet BS</div>
+        <div class="text-xl font-bold mt-1">{{ fmt(results?.strength?.combinedBS, 2) }}</div>
+        <div class="text-xs opacity-90 mt-1">kg/cm² combined</div>
+      </div>
+      <div class="bg-gradient-to-br from-lime-500 to-lime-600 text-white rounded-xl p-4 shadow">
+        <div class="text-xs opacity-90">Sheet BF</div>
+        <div class="text-xl font-bold mt-1">{{ fmtInt(results?.strength?.combinedBF) }}</div>
+        <div class="text-xs opacity-90 mt-1">wtd avg of plies</div>
+      </div>
     </div>
 
     <!-- Actions -->

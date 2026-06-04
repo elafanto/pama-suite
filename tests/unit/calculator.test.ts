@@ -128,6 +128,13 @@ describe('calculate — 3-ply RSC (inner dims)', () => {
     expect(res.cost.margin).toBeGreaterThan(0)
   })
 
+  it('reports combined sheet BS and BF', () => {
+    // 3 plies, each BS = 18×120/1000 = 2.16 → combined 6.48 kg/cm²
+    expect(res.strength.combinedBS).toBeCloseTo(6.48, 4)
+    // all plies BF 18 → GSM-weighted average BF = 18
+    expect(res.strength.combinedBF).toBeCloseTo(18, 6)
+  })
+
   it('keeps debit/credit-free order totals consistent with quantity', () => {
     expect(res.order.quantity).toBe(1000)
     expect(res.order.totalValue).toBeCloseTo(res.cost.sellingPrice * 1000, 4)

@@ -82,6 +82,14 @@ const sheetRows = computed((): PricingRow[] => {
           <div class="text-indigo-700 font-medium">Board GSM</div>
           <div class="text-lg font-bold text-indigo-900 font-mono">{{ fmt(results.weight?.boardGSM, 0) }}</div>
         </div>
+        <div class="bg-teal-50 border border-teal-200 rounded-lg p-2">
+          <div class="text-teal-700">Box weight</div>
+          <div class="font-bold text-teal-900 font-mono">{{ fmt(results.weight?.boxTotal, 1) }} gm</div>
+        </div>
+        <div class="bg-purple-50 border border-purple-200 rounded-lg p-2">
+          <div class="text-purple-700">Sheet BS / BF</div>
+          <div class="font-bold text-purple-900 font-mono">{{ fmt(results.strength?.combinedBS, 2) }} / {{ fmt(results.strength?.combinedBF, 0) }}</div>
+        </div>
         <div class="bg-blue-50 border border-blue-200 rounded-lg p-2">
           <div class="text-blue-700">Joining</div>
           <div class="font-bold text-blue-900">{{ joiningMethodLabel(form.joining.method) }}</div>
