@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
+import { RouterLink } from 'vue-router'
 import { db } from '@/data/db'
 import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
@@ -94,6 +95,12 @@ onMounted(async () => { await firm.load(); await loadDeleted() })
 
 <template>
   <div class="p-6 max-w-5xl mx-auto">
+    <RouterLink
+      to="/settings"
+      class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-accent no-underline mb-3"
+    >
+      ← Back to Settings
+    </RouterLink>
     <header class="mb-5">
       <h1 class="text-2xl font-bold text-navy">♻️ Recycle Bin</h1>
       <p class="text-sm text-slate-500">Deleted firms, parties, items, invoices &amp; purchases — restore anytime.</p>

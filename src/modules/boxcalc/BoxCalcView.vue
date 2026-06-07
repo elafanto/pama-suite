@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, RouterLink } from 'vue-router'
 import { useRecipeStore } from '@/stores/recipes'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
@@ -377,6 +377,16 @@ async function exportBoxcalcData() {
   }
 }
 
+function goToCalculator() {
+  activeTab.value = 'calculator'
+  nextTick(() => window.scrollTo({ top: 0, behavior: 'smooth' }))
+}
+
+function scrollToForm() {
+  activeTab.value = 'calculator'
+  nextTick(() => window.scrollTo({ top: 0, behavior: 'smooth' }))
+}
+
 function resetForm() {
   if (confirm('Form reset karna hai?')) {
     localStorage.removeItem('boxapp_lastform')
@@ -467,6 +477,13 @@ onMounted(async () => {
 
 <template>
   <div class="p-4 sm:p-6 max-w-[90rem] mx-auto pb-24 md:pb-8 hide-on-print">
+    <RouterLink
+      to="/dashboard"
+      class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-accent no-underline mb-3"
+    >
+      ← Back to Dashboard
+    </RouterLink>
+
     <header class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
       <div>
         <h1 class="text-2xl font-bold text-navy">BoxCalc Pro</h1>
@@ -783,6 +800,15 @@ onMounted(async () => {
         <BoxCalcLivePanel :form="form" :results="liveResults" :error="liveError" />
       </div>
 
+      <button
+        v-if="showResults && results"
+        type="button"
+        class="hide-on-print mt-4 pp-btn pp-btn-ghost w-full sm:w-auto text-sm"
+        @click="scrollToForm"
+      >
+        ← Back to Form
+      </button>
+
       <BoxCalcResults
         v-if="showResults && results"
         :form="form"
@@ -799,6 +825,13 @@ onMounted(async () => {
 
     <!-- SAVED -->
     <div v-if="activeTab === 'saved'" class="space-y-4 pb-4">
+      <button
+        type="button"
+        class="pp-btn pp-btn-ghost !py-2 text-sm w-full sm:w-auto"
+        @click="goToCalculator"
+      >
+        ← Back to Calculator
+      </button>
       <input v-model="search" class="pp-input w-full sm:max-w-xs" placeholder="Search recipes..." />
 
       <!-- Mobile: card list (table actions were clipped off-screen) -->
@@ -850,7 +883,15 @@ onMounted(async () => {
     </div>
 
     <!-- SETTINGS -->
-    <div v-if="activeTab === 'settings'" class="pp-card p-6 space-y-6">
+    <div v-if="activeTab === 'settings'" class="space-y-4">
+      <button
+        type="button"
+        class="pp-btn pp-btn-ghost !py-2 text-sm w-full sm:w-auto"
+        @click="goToCalculator"
+      >
+        ← Back to Calculator
+      </button>
+    <div class="pp-card p-6 space-y-6">
       <h2 class="text-lg font-bold text-navy">Settings & Data</h2>
       <p class="text-sm text-slate-600">Full suite backup is in global Settings. Here: BoxCalc stats and form reset.</p>
       <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -871,6 +912,7 @@ onMounted(async () => {
         <button type="button" class="pp-btn pp-btn-primary" @click="exportBoxcalcData">Export Suite Backup</button>
         <button type="button" class="pp-btn pp-btn-danger" @click="resetForm">Reset Form</button>
       </div>
+    </div>
     </div>
 
     <!-- Modals -->
@@ -914,11 +956,43 @@ onMounted(async () => {
     <!-- Mobile sticky bar -->
     <div class="md:hidden fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 z-30 shadow-lg">
       <div class="grid grid-cols-4">
-        <button type="button" class="py-2 text-xs" :class="activeTab === 'calculator' ? 'text-blue-600' : 'text-slate-500'" @click="activeTab = 'calculator'">Calc</button>
-        <button type="button" class="py-2 text-xs bg-blue-600 text-white font-bold" @click="runCostCalculation">Calculate</button>
+        <button
+          type="button"
+          class="py-2 text-xs font-medium"
+          :class="activeTab === 'calculator' ? 'text-blue-600' : 'text-slate-500'"
+          @click="goToCalculator"
+        >
+          {{ activeTab === 'calculator' ? 'Calc' : '← Back' }}
+        </button>
+        <button
+          v-if="activeTab === 'calculator'"
+          type="button"
+          class="py-2 text-xs bg-blue-600 text-white font-bold"
+          @click="runCostCalculation"
+        >
+          Calculate
+        </button>
+        <button
+          v-else
+          type="button"
+          class="py-2 text-xs bg-slate-600 text-white font-bold"
+          @click="goToCalculator"
+        >
+          Calculator
+        </button>
         <button type="button" class="py-2 text-xs" :class="activeTab === 'saved' ? 'text-blue-600' : 'text-slate-500'" @click="activeTab = 'saved'">Saved</button>
         <button type="button" class="py-2 text-xs" :class="activeTab === 'settings' ? 'text-blue-600' : 'text-slate-500'" @click="activeTab = 'settings'">Settings</button>
       </div>
     </div>
+
+    <!-- Mobile: float back to form when results are open -->
+    <button
+      v-if="showResults && results && activeTab === 'calculator'"
+      type="button"
+      class="md:hidden hide-on-print fixed bottom-14 right-3 z-40 pp-btn pp-btn-primary !py-2 !px-3 text-xs shadow-lg"
+      @click="scrollToForm"
+    >
+      ↑ Form
+    </button>
   </div>
 </template>
