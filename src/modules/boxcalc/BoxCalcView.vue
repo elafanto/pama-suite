@@ -165,7 +165,7 @@ function updateLayersForPly() {
         name,
         paperType,
         gsm: isFlute ? 120 : (isOuter ? 150 : 120),
-        bf: isFlute ? 16 : (isOuter ? 18 : 16),
+        bf: isFlute ? 18 : 18,
         rate: pLib?.typicalRate || 33,
         color: pLib?.defaultColor || 'Natural Brown',
         takeUp: isFlute ? getTakeUpForLayer(idx) : 1.0,

@@ -1,71 +1,48 @@
+// 16 BF only at 90/100 GSM; 18 BF at 90, 100, 120, 140, 150, 180 GSM
+const STANDARD_PAPER_PRESETS = [
+  { gsm: 90,  bf: 16, rate: 33 },
+  { gsm: 90,  bf: 18, rate: 33 },
+  { gsm: 100, bf: 16, rate: 33 },
+  { gsm: 100, bf: 18, rate: 33 },
+  { gsm: 120, bf: 18, rate: 33 },
+  { gsm: 140, bf: 18, rate: 33 },
+  { gsm: 150, bf: 18, rate: 33 },
+  { gsm: 180, bf: 18, rate: 33 },
+]
+
 // Indian Paper Library Presets
 export const PAPER_LIBRARY = {
   kraftLiner: {
     name: "Kraft Liner",
     typicalRate: 33,
     defaultColor: "Natural Brown",
-    presets: [
-      { gsm: 90,  bf: 16, rate: 33 },
-      { gsm: 100, bf: 16, rate: 33 },
-      { gsm: 120, bf: 16, rate: 33 },
-      { gsm: 120, bf: 18, rate: 33 },
-      { gsm: 140, bf: 18, rate: 33 },
-      { gsm: 150, bf: 18, rate: 33 },
-      { gsm: 150, bf: 20, rate: 33 },
-      { gsm: 180, bf: 20, rate: 33 },
-      { gsm: 180, bf: 22, rate: 33 },
-      { gsm: 200, bf: 22, rate: 33 },
-      { gsm: 200, bf: 24, rate: 33 },
-      { gsm: 230, bf: 24, rate: 33 },
-      { gsm: 250, bf: 26, rate: 33 },
-      { gsm: 300, bf: 28, rate: 33 },
-      { gsm: 300, bf: 32, rate: 33 }
-    ]
+    presets: [...STANDARD_PAPER_PRESETS],
   },
   testLiner: {
     name: "Test Liner",
     typicalRate: 33,
     defaultColor: "Natural Brown",
-    presets: [
-      { gsm: 90,  bf: 16, rate: 33 },
-      { gsm: 100, bf: 16, rate: 33 },
-      { gsm: 120, bf: 16, rate: 33 },
-      { gsm: 140, bf: 16, rate: 33 },
-      { gsm: 150, bf: 16, rate: 33 },
-      { gsm: 150, bf: 18, rate: 33 },
-      { gsm: 180, bf: 18, rate: 33 },
-      { gsm: 180, bf: 20, rate: 33 },
-      { gsm: 200, bf: 20, rate: 33 }
-    ]
+    presets: [...STANDARD_PAPER_PRESETS],
   },
   semiKraft: {
     name: "Semi Kraft",
     typicalRate: 33,
     defaultColor: "Natural Brown",
-    presets: [
-      { gsm: 90,  bf: 16, rate: 33 },
-      { gsm: 100, bf: 16, rate: 33 },
-      { gsm: 120, bf: 16, rate: 33 },
-      { gsm: 140, bf: 16, rate: 33 },
-      { gsm: 150, bf: 18, rate: 33 },
-      { gsm: 180, bf: 18, rate: 33 },
-      { gsm: 180, bf: 20, rate: 33 },
-      { gsm: 200, bf: 20, rate: 33 }
-    ]
+    presets: [...STANDARD_PAPER_PRESETS],
   },
   duplex: {
     name: "Duplex Board",
     typicalRate: 33,
     defaultColor: "White",
     presets: [
-      { gsm: 230, bf: 16, rate: 33 },
-      { gsm: 250, bf: 16, rate: 33 },
-      { gsm: 280, bf: 16, rate: 33 },
+      { gsm: 230, bf: 18, rate: 33 },
+      { gsm: 250, bf: 18, rate: 33 },
+      { gsm: 280, bf: 18, rate: 33 },
       { gsm: 300, bf: 18, rate: 33 },
       { gsm: 350, bf: 18, rate: 33 },
-      { gsm: 400, bf: 20, rate: 33 },
-      { gsm: 450, bf: 20, rate: 33 }
-    ]
+      { gsm: 400, bf: 18, rate: 33 },
+      { gsm: 450, bf: 18, rate: 33 },
+    ],
   },
   flutingMedium: {
     name: "Fluting Medium",
@@ -74,13 +51,13 @@ export const PAPER_LIBRARY = {
     presets: [
       { gsm: 90,  bf: 16, rate: 33 },
       { gsm: 100, bf: 16, rate: 33 },
-      { gsm: 105, bf: 16, rate: 33 },
-      { gsm: 110, bf: 16, rate: 33 },
-      { gsm: 120, bf: 16, rate: 33 },
+      { gsm: 105, bf: 18, rate: 33 },
+      { gsm: 110, bf: 18, rate: 33 },
       { gsm: 120, bf: 18, rate: 33 },
       { gsm: 140, bf: 18, rate: 33 },
-      { gsm: 150, bf: 18, rate: 33 }
-    ]
+      { gsm: 150, bf: 18, rate: 33 },
+      { gsm: 180, bf: 18, rate: 33 },
+    ],
   },
   highPerformance: {
     name: "High Performance Kraft",
@@ -101,14 +78,8 @@ export const PAPER_LIBRARY = {
     name: "Recycled Paper (RP)",
     typicalRate: 33,
     defaultColor: "Natural Brown",
-    presets: [
-      { gsm: 90,  bf: 16, rate: 33 },
-      { gsm: 100, bf: 16, rate: 33 },
-      { gsm: 120, bf: 16, rate: 33 },
-      { gsm: 150, bf: 16, rate: 33 },
-      { gsm: 180, bf: 16, rate: 33 }
-    ]
-  }
+    presets: [...STANDARD_PAPER_PRESETS],
+  },
 }
 
 // Caliper Lookup (Board Thickness)
