@@ -5,108 +5,108 @@ export const PAPER_LIBRARY = {
     typicalRate: 33,
     defaultColor: "Natural Brown",
     presets: [
-      { gsm: 90,  bf: 16, rate: 48 },
-      { gsm: 100, bf: 16, rate: 50 },
-      { gsm: 120, bf: 16, rate: 52 },
-      { gsm: 120, bf: 18, rate: 54 },
-      { gsm: 140, bf: 18, rate: 55 },
-      { gsm: 150, bf: 18, rate: 56 },
-      { gsm: 150, bf: 20, rate: 58 },
-      { gsm: 180, bf: 20, rate: 60 },
-      { gsm: 180, bf: 22, rate: 62 },
-      { gsm: 200, bf: 22, rate: 64 },
-      { gsm: 200, bf: 24, rate: 66 },
-      { gsm: 230, bf: 24, rate: 68 },
-      { gsm: 250, bf: 26, rate: 72 },
-      { gsm: 300, bf: 28, rate: 78 },
-      { gsm: 300, bf: 32, rate: 85 }
+      { gsm: 90,  bf: 16, rate: 33 },
+      { gsm: 100, bf: 16, rate: 33 },
+      { gsm: 120, bf: 16, rate: 33 },
+      { gsm: 120, bf: 18, rate: 33 },
+      { gsm: 140, bf: 18, rate: 33 },
+      { gsm: 150, bf: 18, rate: 33 },
+      { gsm: 150, bf: 20, rate: 33 },
+      { gsm: 180, bf: 20, rate: 33 },
+      { gsm: 180, bf: 22, rate: 33 },
+      { gsm: 200, bf: 22, rate: 33 },
+      { gsm: 200, bf: 24, rate: 33 },
+      { gsm: 230, bf: 24, rate: 33 },
+      { gsm: 250, bf: 26, rate: 33 },
+      { gsm: 300, bf: 28, rate: 33 },
+      { gsm: 300, bf: 32, rate: 33 }
     ]
   },
   testLiner: {
     name: "Test Liner",
-    typicalRate: 42,
+    typicalRate: 33,
     defaultColor: "Natural Brown",
     presets: [
-      { gsm: 90,  bf: 16, rate: 38 },
-      { gsm: 100, bf: 16, rate: 40 },
-      { gsm: 120, bf: 16, rate: 42 },
-      { gsm: 140, bf: 16, rate: 44 },
-      { gsm: 150, bf: 16, rate: 45 },
-      { gsm: 150, bf: 18, rate: 47 },
-      { gsm: 180, bf: 18, rate: 50 },
-      { gsm: 180, bf: 20, rate: 52 },
-      { gsm: 200, bf: 20, rate: 54 }
+      { gsm: 90,  bf: 16, rate: 33 },
+      { gsm: 100, bf: 16, rate: 33 },
+      { gsm: 120, bf: 16, rate: 33 },
+      { gsm: 140, bf: 16, rate: 33 },
+      { gsm: 150, bf: 16, rate: 33 },
+      { gsm: 150, bf: 18, rate: 33 },
+      { gsm: 180, bf: 18, rate: 33 },
+      { gsm: 180, bf: 20, rate: 33 },
+      { gsm: 200, bf: 20, rate: 33 }
     ]
   },
   semiKraft: {
     name: "Semi Kraft",
-    typicalRate: 48,
+    typicalRate: 33,
     defaultColor: "Natural Brown",
     presets: [
-      { gsm: 90,  bf: 16, rate: 42 },
-      { gsm: 100, bf: 16, rate: 44 },
-      { gsm: 120, bf: 16, rate: 45 },
-      { gsm: 140, bf: 16, rate: 47 },
-      { gsm: 150, bf: 18, rate: 50 },
-      { gsm: 180, bf: 18, rate: 52 },
-      { gsm: 180, bf: 20, rate: 55 },
-      { gsm: 200, bf: 20, rate: 57 }
+      { gsm: 90,  bf: 16, rate: 33 },
+      { gsm: 100, bf: 16, rate: 33 },
+      { gsm: 120, bf: 16, rate: 33 },
+      { gsm: 140, bf: 16, rate: 33 },
+      { gsm: 150, bf: 18, rate: 33 },
+      { gsm: 180, bf: 18, rate: 33 },
+      { gsm: 180, bf: 20, rate: 33 },
+      { gsm: 200, bf: 20, rate: 33 }
     ]
   },
   duplex: {
     name: "Duplex Board",
-    typicalRate: 50,
+    typicalRate: 33,
     defaultColor: "White",
     presets: [
-      { gsm: 230, bf: 16, rate: 68 },
-      { gsm: 250, bf: 16, rate: 72 },
-      { gsm: 280, bf: 16, rate: 76 },
-      { gsm: 300, bf: 18, rate: 80 },
-      { gsm: 350, bf: 18, rate: 88 },
-      { gsm: 400, bf: 20, rate: 95 },
-      { gsm: 450, bf: 20, rate: 105 }
+      { gsm: 230, bf: 16, rate: 33 },
+      { gsm: 250, bf: 16, rate: 33 },
+      { gsm: 280, bf: 16, rate: 33 },
+      { gsm: 300, bf: 18, rate: 33 },
+      { gsm: 350, bf: 18, rate: 33 },
+      { gsm: 400, bf: 20, rate: 33 },
+      { gsm: 450, bf: 20, rate: 33 }
     ]
   },
   flutingMedium: {
     name: "Fluting Medium",
-    typicalRate: 44,
+    typicalRate: 33,
     defaultColor: "Natural Brown",
     presets: [
-      { gsm: 90,  bf: 16, rate: 40 },
-      { gsm: 100, bf: 16, rate: 42 },
-      { gsm: 105, bf: 16, rate: 43 },
-      { gsm: 110, bf: 16, rate: 44 },
-      { gsm: 120, bf: 16, rate: 45 },
-      { gsm: 120, bf: 18, rate: 48 },
-      { gsm: 140, bf: 18, rate: 50 },
-      { gsm: 150, bf: 18, rate: 52 }
+      { gsm: 90,  bf: 16, rate: 33 },
+      { gsm: 100, bf: 16, rate: 33 },
+      { gsm: 105, bf: 16, rate: 33 },
+      { gsm: 110, bf: 16, rate: 33 },
+      { gsm: 120, bf: 16, rate: 33 },
+      { gsm: 120, bf: 18, rate: 33 },
+      { gsm: 140, bf: 18, rate: 33 },
+      { gsm: 150, bf: 18, rate: 33 }
     ]
   },
   highPerformance: {
     name: "High Performance Kraft",
-    typicalRate: 85,
+    typicalRate: 33,
     defaultColor: "Golden Yellow",
     presets: [
-      { gsm: 150, bf: 24, rate: 72 },
-      { gsm: 180, bf: 26, rate: 78 },
-      { gsm: 200, bf: 28, rate: 82 },
-      { gsm: 200, bf: 32, rate: 88 },
-      { gsm: 230, bf: 32, rate: 92 },
-      { gsm: 250, bf: 35, rate: 98 },
-      { gsm: 300, bf: 35, rate: 105 },
-      { gsm: 300, bf: 40, rate: 115 }
+      { gsm: 150, bf: 24, rate: 33 },
+      { gsm: 180, bf: 26, rate: 33 },
+      { gsm: 200, bf: 28, rate: 33 },
+      { gsm: 200, bf: 32, rate: 33 },
+      { gsm: 230, bf: 32, rate: 33 },
+      { gsm: 250, bf: 35, rate: 33 },
+      { gsm: 300, bf: 35, rate: 33 },
+      { gsm: 300, bf: 40, rate: 33 }
     ]
   },
   recycled: {
     name: "Recycled Paper (RP)",
-    typicalRate: 35,
+    typicalRate: 33,
     defaultColor: "Natural Brown",
     presets: [
-      { gsm: 90,  bf: 16, rate: 35 },
-      { gsm: 100, bf: 16, rate: 38 },
-      { gsm: 120, bf: 16, rate: 40 },
-      { gsm: 150, bf: 16, rate: 40 },
-      { gsm: 180, bf: 16, rate: 42 }
+      { gsm: 90,  bf: 16, rate: 33 },
+      { gsm: 100, bf: 16, rate: 33 },
+      { gsm: 120, bf: 16, rate: 33 },
+      { gsm: 150, bf: 16, rate: 33 },
+      { gsm: 180, bf: 16, rate: 33 }
     ]
   }
 }
@@ -331,8 +331,9 @@ export interface CalcInput {
   quantity?: number | string
   productionWastePercent?: number | string
   marginPercent?: number | string
-  priceMode?: 'auto' | 'custom'
+  priceMode?: 'auto' | 'custom' | 'customPerKg'
   customSellingPrice?: number | string | null
+  customSellingPricePerKg?: number | string | null
   printingCost?: number | string
   shippingCostPerKg?: number | string
   shippingCost?: number | string
@@ -720,7 +721,7 @@ export function calculate(input: CalcInput) {
   }))
 
   const paperCostTotal = layerCosts.reduce((sum, l) => sum + l.cost, 0)
-  const starchCost = (starchGm / 1000) * (input.starchRate || 30)
+  const starchCost = (starchGm / 1000) * (input.starchRate || 45)
 
   const printingCost = parseFloat(String(input.printingCost)) || 0
   const shippingPerKg = parseFloat(String(input.shippingCostPerKg ?? input.shippingCost)) || 0
@@ -752,8 +753,14 @@ export function calculate(input: CalcInput) {
   let marginPercent = (parseFloat(String(input.marginPercent)) || 15) / 100
   let effectiveMarginPercent = marginPercent * 100
 
+  const boxWeightKgForPrice = boxWeightGm / 1000
   if (priceMode === 'custom' && Number(input.customSellingPrice) > 0) {
     sellingPrice = parseFloat(String(input.customSellingPrice))
+    marginValue = sellingPrice - subTotal
+    effectiveMarginPercent = pricingSubtotal > 0 ? (marginValue / pricingSubtotal) * 100 : 0
+    marginPercent = effectiveMarginPercent / 100
+  } else if (priceMode === 'customPerKg' && Number(input.customSellingPricePerKg) > 0) {
+    sellingPrice = parseFloat(String(input.customSellingPricePerKg)) * boxWeightKgForPrice
     marginValue = sellingPrice - subTotal
     effectiveMarginPercent = pricingSubtotal > 0 ? (marginValue / pricingSubtotal) * 100 : 0
     marginPercent = effectiveMarginPercent / 100
@@ -1004,6 +1011,9 @@ export function calculate(input: CalcInput) {
       marginPercent: effectiveMarginPercent,
       sellingPrice,
       priceMode,
+      customSellingPricePerKg: priceMode === 'customPerKg' && Number(input.customSellingPricePerKg) > 0
+        ? parseFloat(String(input.customSellingPricePerKg))
+        : null,
       sheetRatePerKg: sheetKgRate,
       boxRatePerKg: boxKgRate,
       pricing,

@@ -75,7 +75,7 @@ function initialFormState(): BoxCalcForm {
     glueFlap: null,
     layers: [],
     starchGSM: 7,
-    starchRate: 30,
+    starchRate: 45,
     joining: {
       method: 'stitching',
       pinHeadType: '',
@@ -93,6 +93,7 @@ function initialFormState(): BoxCalcForm {
     scrapRate: 12,
     priceMode: 'auto',
     customSellingPrice: null,
+    customSellingPricePerKg: null,
     stackCheck: { enabled: false, stackCount: 10, contentWeight: 5 },
     stackingConditions: { storage: 'medium', humid: false, transport: false, cold: false },
     jobCard: defaultJobCard(firmStore.activeFirm?.name || 'My Box Plant'),
@@ -165,7 +166,7 @@ function updateLayersForPly() {
         paperType,
         gsm: isFlute ? 120 : (isOuter ? 150 : 120),
         bf: isFlute ? 16 : (isOuter ? 18 : 16),
-        rate: pLib?.typicalRate || 40,
+        rate: pLib?.typicalRate || 33,
         color: pLib?.defaultColor || 'Natural Brown',
         takeUp: isFlute ? getTakeUpForLayer(idx) : 1.0,
         reelLength: null,
@@ -306,17 +307,17 @@ function migrateCostFields(target: BoxCalcForm & { conversionCost?: number; ship
 }
 
 function loadRecipe(rec: Recipe) {
-  Object.assign(form, rec.form)
+  const savedForm = JSON.parse(JSON.stringify(rec.form ?? {})) as Partial<BoxCalcForm>
+  Object.assign(form, initialFormState(), savedForm)
   migrateCostFields(form as BoxCalcForm & { conversionCost?: number; shippingCost?: number })
   if (!form.jobCard) form.jobCard = defaultJobCard(firmStore.activeFirm?.name || 'My Box Plant')
-  // Recompute from the loaded form so older recipes pick up the current
-  // calculator logic (2-D nesting, productionPlan, deckle/length limits)
-  // instead of replaying stale saved output.
+  if (!form.layers?.length) updateLayersForPly()
+  errors.value = []
   const fresh = computeBoxCalcResults(form)
   results.value = fresh && !('error' in fresh) ? fresh : rec.results
   showResults.value = true
   activeTab.value = 'calculator'
-  updateLayersForPly()
+  nextTick(() => window.scrollTo({ top: 0, behavior: 'smooth' }))
 }
 
 async function deleteRecipe(rec: Recipe) {
@@ -691,18 +692,31 @@ onMounted(async () => {
             </h2>
             <div class="grid grid-cols-2 gap-2 mb-3">
               <div><label class="pp-label">Quantity</label><input v-model.number="form.quantity" type="number" class="pp-input" /></div>
-              <div><label class="pp-label">Margin %</label><input v-model.number="form.marginPercent" type="number" :disabled="form.priceMode === 'custom'" class="pp-input" /></div>
+              <div><label class="pp-label">Margin %</label><input v-model.number="form.marginPercent" type="number" :disabled="form.priceMode !== 'auto'" class="pp-input" /></div>
             </div>
             <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 mb-3">
               <label class="pp-label font-bold">Selling Price Mode</label>
-              <div class="grid grid-cols-2 gap-2 mt-1">
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-1">
                 <button type="button" :class="['py-2 rounded-lg text-sm', form.priceMode === 'auto' ? 'bg-emerald-600 text-white' : 'bg-white border']"
-                  @click="form.priceMode = 'auto'; form.customSellingPrice = null">Auto (Margin%)</button>
+                  @click="form.priceMode = 'auto'; form.customSellingPrice = null; form.customSellingPricePerKg = null">Auto (Margin%)</button>
                 <button type="button" :class="['py-2 rounded-lg text-sm', form.priceMode === 'custom' ? 'bg-orange-600 text-white' : 'bg-white border']"
-                  @click="form.priceMode = 'custom'">Custom Price</button>
+                  @click="form.priceMode = 'custom'; form.customSellingPricePerKg = null">Custom ₹/box</button>
+                <button type="button" :class="['py-2 rounded-lg text-sm', form.priceMode === 'customPerKg' ? 'bg-orange-600 text-white' : 'bg-white border']"
+                  @click="form.priceMode = 'customPerKg'; form.customSellingPrice = null">Custom ₹/kg</button>
               </div>
               <div v-if="form.priceMode === 'custom'" class="mt-2">
+                <label class="pp-label">Selling price per box</label>
                 <input v-model.number="form.customSellingPrice" type="number" step="0.01" class="pp-input font-bold" placeholder="₹/box" />
+              </div>
+              <div v-if="form.priceMode === 'customPerKg'" class="mt-2 space-y-2">
+                <div>
+                  <label class="pp-label">Selling price per kg</label>
+                  <input v-model.number="form.customSellingPricePerKg" type="number" step="0.01" class="pp-input font-bold" placeholder="₹/kg" />
+                </div>
+                <div v-if="liveResults?.cost?.sellingPrice" class="text-xs bg-orange-100 border border-orange-200 rounded p-2 text-orange-900">
+                  Box price: <strong>{{ liveResults.cost.sellingPrice.toFixed(2) }}</strong>
+                  ({{ form.customSellingPricePerKg }} ₹/kg × {{ ((liveResults.weight?.boxTotal || 0) / 1000).toFixed(3) }} kg)
+                </div>
               </div>
             </div>
             <div class="grid grid-cols-2 gap-2">
@@ -784,10 +798,30 @@ onMounted(async () => {
     </div>
 
     <!-- SAVED -->
-    <div v-if="activeTab === 'saved'" class="space-y-4">
-      <input v-model="search" class="pp-input max-w-xs" placeholder="Search recipes..." />
-      <div class="pp-card overflow-hidden">
-        <table class="w-full text-sm">
+    <div v-if="activeTab === 'saved'" class="space-y-4 pb-4">
+      <input v-model="search" class="pp-input w-full sm:max-w-xs" placeholder="Search recipes..." />
+
+      <!-- Mobile: card list (table actions were clipped off-screen) -->
+      <div class="md:hidden space-y-3">
+        <p v-if="!filteredRecipes.length" class="text-center py-10 text-slate-400 text-sm">No saved recipes</p>
+        <div v-for="rec in filteredRecipes" :key="rec.id" class="pp-card p-4 border border-slate-200">
+          <div class="font-semibold text-navy leading-snug">{{ rec.name }}</div>
+          <div class="text-xs text-slate-500 mt-0.5">{{ rec.box_name }} · {{ rec.customer_name }}</div>
+          <div class="flex items-center justify-between mt-2 text-sm">
+            <span class="text-slate-600">{{ rec.ply }}/{{ rec.flute }}</span>
+            <span class="font-bold text-emerald-700">₹{{ rec.results?.cost?.sellingPrice?.toFixed(2) ?? '—' }}</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2 mt-3">
+            <button type="button" class="pp-btn pp-btn-success !py-2 text-xs" @click="loadRecipe(rec)">Load</button>
+            <button type="button" class="pp-btn pp-btn-ghost !py-2 text-xs" @click="printFromRecipe(rec)">Job Card</button>
+            <button type="button" class="pp-btn pp-btn-danger !py-2 text-xs" @click="deleteRecipe(rec)">Del</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Desktop: table -->
+      <div class="hidden md:block pp-card overflow-x-auto">
+        <table class="w-full text-sm min-w-[36rem]">
           <thead class="bg-slate-50 text-xs uppercase text-slate-500">
             <tr>
               <th class="text-left px-4 py-2">Recipe</th>
@@ -804,10 +838,10 @@ onMounted(async () => {
               <td class="px-4 py-2">{{ rec.customer_name }}</td>
               <td class="px-4 py-2 text-center">{{ rec.ply }}/{{ rec.flute }}</td>
               <td class="px-4 py-2 text-right font-bold">₹{{ rec.results?.cost?.sellingPrice?.toFixed(2) }}</td>
-              <td class="px-4 py-2 text-right space-x-1">
-                <button class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="Job Card" @click="printFromRecipe(rec)">Job Card</button>
-                <button class="pp-btn pp-btn-success !py-1 text-xs" @click="loadRecipe(rec)">Load</button>
-                <button class="pp-btn pp-btn-danger !px-2 !py-1 text-xs" @click="deleteRecipe(rec)">Del</button>
+              <td class="px-4 py-2 text-right space-x-1 whitespace-nowrap">
+                <button type="button" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="Job Card" @click="printFromRecipe(rec)">Job Card</button>
+                <button type="button" class="pp-btn pp-btn-success !py-1 text-xs" @click="loadRecipe(rec)">Load</button>
+                <button type="button" class="pp-btn pp-btn-danger !px-2 !py-1 text-xs" @click="deleteRecipe(rec)">Del</button>
               </td>
             </tr>
           </tbody>

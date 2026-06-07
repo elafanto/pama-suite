@@ -529,7 +529,7 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
               'border-b border-slate-100',
               row.bold && row.highlight !== 'sell' ? 'bg-slate-100' : '',
               row.marginNegative ? 'bg-red-50' : '',
-              row.highlight === 'sell' ? (results?.cost?.priceMode === 'custom' ? 'bg-orange-50' : 'bg-green-50') : '',
+              row.highlight === 'sell' ? (results?.cost?.priceMode !== 'auto' ? 'bg-orange-50' : 'bg-green-50') : '',
             ]"
           >
             <td

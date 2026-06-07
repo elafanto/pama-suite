@@ -73,8 +73,9 @@ export interface BoxCalcForm {
   /** Weight-based conversion slab rates (₹/kg × paper weight) */
   conversionSlabs: ConversionSlab[]
   scrapRate: number
-  priceMode: 'auto' | 'custom'
+  priceMode: 'auto' | 'custom' | 'customPerKg'
   customSellingPrice: number | null
+  customSellingPricePerKg: number | null
   stackCheck: { enabled: boolean; stackCount: number; contentWeight: number }
   stackingConditions: {
     storage: 'short' | 'medium' | 'long'
@@ -220,6 +221,7 @@ export function buildCalcInputs(form: BoxCalcForm) {
     marginPercent: parseFloat(String(form.marginPercent)),
     priceMode: form.priceMode,
     customSellingPrice: form.customSellingPrice,
+    customSellingPricePerKg: form.customSellingPricePerKg,
     printingCost: parseFloat(String(form.printingCost)),
     shippingCostPerKg: parseFloat(String(form.shippingCostPerKg ?? (form as { shippingCost?: number }).shippingCost)),
     conversionSlabs: form.conversionSlabs?.length
