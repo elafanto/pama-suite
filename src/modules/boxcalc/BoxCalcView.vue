@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue'
-import { useRouter, RouterLink } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
+import { useBrowserBack } from '@/composables/useBrowserBack'
 import { useRecipeStore } from '@/stores/recipes'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
@@ -43,6 +44,8 @@ import BoxCalcWhatsAppModal from '@/components/boxcalc/BoxCalcWhatsAppModal.vue'
 import type { Recipe } from '@/types/models'
 
 const router = useRouter()
+const route = useRoute()
+const { goBack: goBrowserBack } = useBrowserBack()
 const recipeStore = useRecipeStore()
 const partyStore = usePartyStore()
 const itemStore = useItemStore()
@@ -58,6 +61,27 @@ const recipeNameInput = ref('')
 const saveStatus = ref('')
 const vendorPhones = ref<VendorPhone[]>([])
 const savedBoxNames = ref<string[]>([])
+
+type BoxCalcTab = 'calculator' | 'saved' | 'settings'
+
+function tabFromQuery(tab: unknown): BoxCalcTab {
+  if (tab === 'saved' || tab === 'settings') return tab
+  return 'calculator'
+}
+
+function setActiveTab(tab: BoxCalcTab) {
+  if (activeTab.value === tab) return
+  activeTab.value = tab
+  const query = { ...route.query }
+  if (tab === 'calculator') delete query.tab
+  else query.tab = tab
+  router.push({ path: route.path, query })
+}
+
+watch(() => route.query.tab, (tab) => {
+  const next = tabFromQuery(tab)
+  if (activeTab.value !== next) activeTab.value = next
+})
 
 function initialFormState(): BoxCalcForm {
   return {
@@ -316,7 +340,7 @@ function loadRecipe(rec: Recipe) {
   const fresh = computeBoxCalcResults(form)
   results.value = fresh && !('error' in fresh) ? fresh : rec.results
   showResults.value = true
-  activeTab.value = 'calculator'
+  setActiveTab('calculator')
   nextTick(() => window.scrollTo({ top: 0, behavior: 'smooth' }))
 }
 
@@ -378,12 +402,12 @@ async function exportBoxcalcData() {
 }
 
 function goToCalculator() {
-  activeTab.value = 'calculator'
+  setActiveTab('calculator')
   nextTick(() => window.scrollTo({ top: 0, behavior: 'smooth' }))
 }
 
 function scrollToForm() {
-  activeTab.value = 'calculator'
+  setActiveTab('calculator')
   nextTick(() => window.scrollTo({ top: 0, behavior: 'smooth' }))
 }
 
@@ -457,6 +481,7 @@ const filteredRecipes = computed(() => {
 })
 
 onMounted(async () => {
+  activeTab.value = tabFromQuery(route.query.tab)
   await recipeStore.load()
   await partyStore.load()
   await itemStore.load()
@@ -477,12 +502,13 @@ onMounted(async () => {
 
 <template>
   <div class="p-4 sm:p-6 max-w-[90rem] mx-auto pb-24 md:pb-8 hide-on-print">
-    <RouterLink
-      to="/dashboard"
-      class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-accent no-underline mb-3"
+    <button
+      type="button"
+      class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-accent mb-3"
+      @click="goBrowserBack"
     >
-      ← Back to Dashboard
-    </RouterLink>
+      ← Back
+    </button>
 
     <header class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
       <div>
@@ -493,7 +519,7 @@ onMounted(async () => {
       <div class="flex bg-slate-200/80 p-1 rounded-lg self-start">
         <button v-for="tab in ['calculator', 'saved', 'settings'] as const" :key="tab"
           :class="['px-3 py-1.5 text-xs font-semibold rounded-md capitalize', activeTab === tab ? 'bg-white text-navy shadow-sm' : 'text-slate-600']"
-          @click="activeTab = tab">
+          @click="setActiveTab(tab)">
           {{ tab === 'calculator' ? 'Calculator' : tab === 'saved' ? `Saved (${recipeStore.list.length})` : 'Settings' }}
         </button>
       </div>
@@ -980,8 +1006,8 @@ onMounted(async () => {
         >
           Calculator
         </button>
-        <button type="button" class="py-2 text-xs" :class="activeTab === 'saved' ? 'text-blue-600' : 'text-slate-500'" @click="activeTab = 'saved'">Saved</button>
-        <button type="button" class="py-2 text-xs" :class="activeTab === 'settings' ? 'text-blue-600' : 'text-slate-500'" @click="activeTab = 'settings'">Settings</button>
+        <button type="button" class="py-2 text-xs" :class="activeTab === 'saved' ? 'text-blue-600' : 'text-slate-500'" @click="setActiveTab('saved')">Saved</button>
+        <button type="button" class="py-2 text-xs" :class="activeTab === 'settings' ? 'text-blue-600' : 'text-slate-500'" @click="setActiveTab('settings')">Settings</button>
       </div>
     </div>
 

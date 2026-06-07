@@ -6,8 +6,10 @@ import { useFirmStore } from '@/stores/firm'
 import { useAuthStore } from '@/stores/auth'
 import { runSync, startCloudRealtime, stopCloudRealtime } from '@/services/sync'
 import PwaInstallPrompt from '@/components/PwaInstallPrompt.vue'
+import { useBrowserBack } from '@/composables/useBrowserBack'
 
 const route = useRoute()
+const { showBackButton, goBack } = useBrowserBack()
 const auth = useAuthStore()
 const firmStore = useFirmStore()
 const sidebarOpen = ref(false)
@@ -136,6 +138,16 @@ onUnmounted(() => {
     <template v-else>
     <!-- Top navbar -->
     <header class="bg-navy text-white flex min-h-[52px] items-center gap-2 px-3 py-2 shadow-lg z-20 shrink-0 sm:gap-3 sm:px-4">
+      <button
+        v-if="showBackButton"
+        type="button"
+        class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/20 bg-white/10 text-lg hover:bg-white/20"
+        aria-label="Go back"
+        title="Back"
+        @click="goBack"
+      >
+        ←
+      </button>
       <button class="lg:hidden text-xl px-1" @click="sidebarOpen = !sidebarOpen" aria-label="Menu">☰</button>
       <RouterLink to="/dashboard" class="flex min-w-0 max-w-[42vw] items-center gap-2 no-underline sm:max-w-none sm:gap-2.5">
         <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-teal flex items-center justify-center text-lg shrink-0">🏭</div>
