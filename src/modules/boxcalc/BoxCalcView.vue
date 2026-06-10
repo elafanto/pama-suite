@@ -863,9 +863,9 @@ onMounted(async () => {
       <!-- Mobile: card list (table actions were clipped off-screen) -->
       <div class="md:hidden space-y-3">
         <p v-if="!filteredRecipes.length" class="text-center py-10 text-slate-400 text-sm">No saved recipes</p>
-        <div v-for="rec in filteredRecipes" :key="rec.id" class="pp-card p-4 border border-slate-200">
-          <div class="font-semibold text-navy leading-snug">{{ rec.name }}</div>
-          <div class="text-xs text-slate-500 mt-0.5">{{ rec.box_name }} · {{ rec.customer_name }}</div>
+        <div v-for="rec in filteredRecipes" :key="rec.id" class="pp-card p-4 border border-slate-200 min-w-0 overflow-hidden">
+          <div class="font-semibold text-navy leading-snug break-all">{{ rec.name }}</div>
+          <div class="text-xs text-slate-500 mt-0.5 break-words">{{ rec.box_name }} · {{ rec.customer_name }}</div>
           <div class="flex items-center justify-between mt-2 text-sm">
             <span class="text-slate-600">{{ rec.ply }}/{{ rec.flute }}</span>
             <span class="font-bold text-emerald-700">₹{{ rec.results?.cost?.sellingPrice?.toFixed(2) ?? '—' }}</span>
@@ -893,8 +893,8 @@ onMounted(async () => {
           <tbody>
             <tr v-if="!filteredRecipes.length"><td colspan="5" class="text-center py-10 text-slate-400">No saved recipes</td></tr>
             <tr v-for="rec in filteredRecipes" :key="rec.id" class="border-t border-slate-100 hover:bg-slate-50">
-              <td class="px-4 py-2"><strong>{{ rec.name }}</strong><span class="block text-xs text-slate-400">{{ rec.box_name }}</span></td>
-              <td class="px-4 py-2">{{ rec.customer_name }}</td>
+              <td class="px-4 py-2 max-w-[14rem] break-all"><strong>{{ rec.name }}</strong><span class="block text-xs text-slate-400 break-words">{{ rec.box_name }}</span></td>
+              <td class="px-4 py-2 break-words">{{ rec.customer_name }}</td>
               <td class="px-4 py-2 text-center">{{ rec.ply }}/{{ rec.flute }}</td>
               <td class="px-4 py-2 text-right font-bold">₹{{ rec.results?.cost?.sellingPrice?.toFixed(2) }}</td>
               <td class="px-4 py-2 text-right space-x-1 whitespace-nowrap">
