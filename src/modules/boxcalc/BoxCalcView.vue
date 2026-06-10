@@ -286,10 +286,26 @@ function openSaveModal() {
   showSaveModal.value = true
 }
 
+function formatSavedDate(iso?: string) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+}
+
 async function confirmSaveRecipe() {
   if (!recipeNameInput.value.trim()) return alert('Recipe name required')
+  const trimmedName = recipeNameInput.value.trim()
+  const existing = duplicateRecipeMatch.value
+  if (existing) {
+    const when = formatSavedDate(existing.created_at)
+    const ok = confirm(
+      `"${trimmedName}" naam ki recipe pehle se hai (${when} par save hui).\n\nPhir bhi nayi recipe save karein?`,
+    )
+    if (!ok) return
+  }
   const recipeData: Omit<Recipe, 'id' | 'firm_id' | 'created_at' | 'updated_at' | 'is_deleted' | '_dirty'> = {
-    name: recipeNameInput.value.trim(),
+    name: trimmedName,
     customer_name: form.customerName.trim(),
     box_name: form.boxName.trim(),
     print_type: form.printType,
@@ -472,12 +488,20 @@ function onWhatsAppCopied(msg: string) {
   setTimeout(() => { saveStatus.value = '' }, 3000)
 }
 
+const duplicateRecipeMatch = computed(() => {
+  const name = recipeNameInput.value.trim().toLowerCase()
+  if (!name) return null
+  return recipeStore.list.find((r) => r.name.trim().toLowerCase() === name) ?? null
+})
+
 const filteredRecipes = computed(() => {
   const q = search.value.toLowerCase().trim()
-  return recipeStore.list.filter((r) => {
-    if (!q) return true
-    return r.name.toLowerCase().includes(q) || r.customer_name.toLowerCase().includes(q) || r.box_name.toLowerCase().includes(q)
-  })
+  return recipeStore.list
+    .filter((r) => {
+      if (!q) return true
+      return r.name.toLowerCase().includes(q) || r.customer_name.toLowerCase().includes(q) || r.box_name.toLowerCase().includes(q)
+    })
+    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
 })
 
 onMounted(async () => {
@@ -866,6 +890,7 @@ onMounted(async () => {
         <div v-for="rec in filteredRecipes" :key="rec.id" class="pp-card p-4 border border-slate-200 min-w-0 overflow-hidden">
           <div class="font-semibold text-navy leading-snug break-all">{{ rec.name }}</div>
           <div class="text-xs text-slate-500 mt-0.5 break-words">{{ rec.box_name }} · {{ rec.customer_name }}</div>
+          <div class="text-xs text-slate-400 mt-1">Saved {{ formatSavedDate(rec.created_at) }}</div>
           <div class="flex items-center justify-between mt-2 text-sm">
             <span class="text-slate-600">{{ rec.ply }}/{{ rec.flute }}</span>
             <span class="font-bold text-emerald-700">₹{{ rec.results?.cost?.sellingPrice?.toFixed(2) ?? '—' }}</span>
@@ -884,6 +909,7 @@ onMounted(async () => {
           <thead class="bg-slate-50 text-xs uppercase text-slate-500">
             <tr>
               <th class="text-left px-4 py-2">Recipe</th>
+              <th class="text-left px-4 py-2">Saved</th>
               <th class="text-left px-4 py-2">Client</th>
               <th class="text-center px-4 py-2">Ply</th>
               <th class="text-right px-4 py-2">Rate</th>
@@ -891,9 +917,10 @@ onMounted(async () => {
             </tr>
           </thead>
           <tbody>
-            <tr v-if="!filteredRecipes.length"><td colspan="5" class="text-center py-10 text-slate-400">No saved recipes</td></tr>
+            <tr v-if="!filteredRecipes.length"><td colspan="6" class="text-center py-10 text-slate-400">No saved recipes</td></tr>
             <tr v-for="rec in filteredRecipes" :key="rec.id" class="border-t border-slate-100 hover:bg-slate-50">
               <td class="px-4 py-2 max-w-[14rem] break-all"><strong>{{ rec.name }}</strong><span class="block text-xs text-slate-400 break-words">{{ rec.box_name }}</span></td>
+              <td class="px-4 py-2 text-slate-500 whitespace-nowrap text-xs">{{ formatSavedDate(rec.created_at) }}</td>
               <td class="px-4 py-2 break-words">{{ rec.customer_name }}</td>
               <td class="px-4 py-2 text-center">{{ rec.ply }}/{{ rec.flute }}</td>
               <td class="px-4 py-2 text-right font-bold">₹{{ rec.results?.cost?.sellingPrice?.toFixed(2) }}</td>
@@ -951,6 +978,10 @@ onMounted(async () => {
           <label class="pp-label">Recipe Name</label>
           <textarea v-model="recipeNameInput" rows="2" class="pp-input font-mono" />
           <button type="button" class="text-xs text-blue-600 underline mt-1" @click="recipeNameInput = generateSaveName()">Re-generate</button>
+          <p v-if="duplicateRecipeMatch" class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 mt-2">
+            ⚠️ Is naam ki recipe pehle se hai ({{ formatSavedDate(duplicateRecipeMatch.created_at) }}).
+            Save karoge to duplicate ban jayegi.
+          </p>
         </div>
         <div class="flex justify-end gap-2">
           <button type="button" class="pp-btn pp-btn-ghost" @click="showSaveModal = false">Cancel</button>
