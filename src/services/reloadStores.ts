@@ -6,6 +6,7 @@ import { usePurchaseStore } from '@/stores/purchases'
 import { useRecipeStore } from '@/stores/recipes'
 import { useAccountingStore } from '@/stores/accounting'
 import { useProductionStore } from '@/stores/production'
+import { usePayrollStore } from '@/stores/payroll'
 
 /** Reload all Dexie-backed stores after cloud pull. */
 export async function reloadAllStores() {
@@ -19,5 +20,6 @@ export async function reloadAllStores() {
     useRecipeStore().load(),
     useAccountingStore().load(),
     useProductionStore().load(),
+    usePayrollStore().load(),
   ])
 }

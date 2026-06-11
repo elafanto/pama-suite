@@ -19,6 +19,7 @@ const DEFAULT_ACCOUNTS = [
   { code: '1005', name: 'CGST Input Credit', group: 'Current Assets', normal: 'Dr' },
   { code: '1006', name: 'SGST Input Credit', group: 'Current Assets', normal: 'Dr' },
   { code: '1007', name: 'IGST Input Credit', group: 'Current Assets', normal: 'Dr' },
+  { code: '1010', name: 'Staff Advances', group: 'Current Assets', normal: 'Dr' },
   { code: '1101', name: 'Plant & Machinery', group: 'Fixed Assets', normal: 'Dr' },
   { code: '1102', name: 'Furniture & Fixtures', group: 'Fixed Assets', normal: 'Dr' },
   { code: '1103', name: 'Vehicles', group: 'Fixed Assets', normal: 'Dr' },

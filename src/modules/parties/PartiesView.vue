@@ -6,7 +6,7 @@ import SegmentedFieldInput from '@/components/SegmentedFieldInput.vue'
 import { usePartyStore, type NewParty } from '@/stores/parties'
 import type { Party, PartyRole } from '@/types/models'
 import { validateGstinForForm, formatGstin } from '@/services/gst'
-import { fetchIfscDetails, isValidIfsc, toUpperTrim } from '@/services/partyLookup'
+import { fetchIfscDetails, findPartyBankDetails, isValidIfsc, toUpperTrim } from '@/services/partyLookup'
 
 const store = usePartyStore()
 const search = ref('')
@@ -53,6 +53,7 @@ function onUpperInput(field: UpperPartyField, e: Event) {
   const v = toUpperTrim((e.target as HTMLInputElement).value)
   form[field] = v
   if (field === 'ifsc') scheduleIfscLookup()
+  if (field === 'acno' && toUpperTrim(form.ifsc).length === 11) scheduleIfscLookup()
 }
 
 function onGstChange(value: string) {
@@ -92,8 +93,15 @@ async function lookupIfscNow() {
     ifscStatus.value = code.length >= 11 ? 'error' : 'idle'
     return
   }
+  const saved = findPartyBankDetails(code, store.list, form.acno)
+  if (saved) {
+    form.bank = saved.bankLine
+    ifscStatus.value = 'success'
+    return
+  }
+  form.bank = ''
   ifscStatus.value = 'fetching'
-  const details = await fetchIfscDetails(code)
+  const details = await fetchIfscDetails(code, { acno: form.acno, parties: store.list })
   if (details) {
     form.bank = details.bankLine
     ifscStatus.value = 'success'

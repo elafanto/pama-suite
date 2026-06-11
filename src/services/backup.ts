@@ -2,10 +2,17 @@ import { db } from '@/data/db'
 import { uid, nowISO } from '@/data/util'
 import { allocateBillNo, findDuplicateBillNoGroups, resolveNextSequence } from '@/services/invoiceNumber'
 import { normalizeGstType } from '@/services/gst'
+import {
+  applyImportedSignatureBackup,
+  collectSignatureBackup,
+  persistFirmSignature,
+  type FirmSignatureArchive,
+  type FirmSignatureBackupMap,
+} from '@/services/firmSignature'
 import type {
   Party, Firm, Item, Invoice, Purchase, Recipe, Account, Voucher, ActivityLog,
   ReelStock, ProductionJob, ProductionStageEntry, StockMovement, ItemStockMovement,
-  DashboardTodo,
+  DashboardTodo, Staff, StaffAdvance, PayrollRun,
 } from '@/types/models'
 
 export const BACKUP_FORMAT = 'pama_suite_backup'
@@ -55,6 +62,9 @@ export interface SuiteBackup {
   stock_movements?: StockMovement[]
   item_stock_movements?: ItemStockMovement[]
   dashboard_todos?: DashboardTodo[]
+  staff?: Staff[]
+  staff_advances?: StaffAdvance[]
+  payroll_runs?: PayrollRun[]
   settings?: {
     geminiKey?: string
     supabaseUrl?: string
@@ -63,6 +73,9 @@ export interface SuiteBackup {
     rtgsAccounts?: Record<string, string>
     activeFirmId?: string
     templates?: unknown[]
+    /** Always included — firm signatures are never treated as sensitive API keys. */
+    firmSignatures?: FirmSignatureBackupMap
+    signatureArchive?: FirmSignatureArchive
   }
 }
 
@@ -73,7 +86,7 @@ export async function exportAll(options: ExportOptions = {}): Promise<SuiteBacku
   const [
     firms, parties, items, invoices, purchases, recipes, accounts, vouchers, activity_log,
     reel_stocks, production_jobs, production_stages, stock_movements, item_stock_movements,
-    dashboard_todos,
+    dashboard_todos, staff, staff_advances, payroll_runs,
   ] = await Promise.all([
     db.firms.toArray(),
     db.parties.toArray(),
@@ -90,6 +103,9 @@ export async function exportAll(options: ExportOptions = {}): Promise<SuiteBacku
     db.stock_movements.toArray(),
     db.item_stock_movements.toArray(),
     db.dashboard_todos.toArray(),
+    db.staff.toArray(),
+    db.staff_advances.toArray(),
+    db.payroll_runs.toArray(),
   ])
 
   let templates: unknown[] = []
@@ -98,11 +114,14 @@ export async function exportAll(options: ExportOptions = {}): Promise<SuiteBacku
   let rtgsAccounts: Record<string, string> = {}
   try { rtgsAccounts = JSON.parse(localStorage.getItem('pama_rtgs_accounts') || '{}') } catch { /* */ }
 
+  const signatureBackup = collectSignatureBackup(firms)
   const settings: SuiteBackup['settings'] = {
     bankEmail: localStorage.getItem('pama_bank_email') || '',
     rtgsAccounts,
     activeFirmId: localStorage.getItem('pama_active_firm') || '',
     templates,
+    firmSignatures: signatureBackup.firmSignatures,
+    signatureArchive: signatureBackup.signatureArchive,
   }
 
   if (options.includeSensitiveSettings) {
@@ -117,7 +136,7 @@ export async function exportAll(options: ExportOptions = {}): Promise<SuiteBacku
     exportedAt: new Date().toISOString(),
     firms, parties, items, invoices, purchases, recipes, accounts, vouchers, activity_log,
     reel_stocks, production_jobs, production_stages, stock_movements, item_stock_movements,
-    dashboard_todos,
+    dashboard_todos, staff, staff_advances, payroll_runs,
     settings,
   }
 }
@@ -239,11 +258,15 @@ async function importSuiteBackup(data: any, mode: ImportMode, options: ImportOpt
     await upsertAll(db.stock_movements, data.stock_movements || [], 'stock_movements')
     await upsertAll(db.item_stock_movements, data.item_stock_movements || [], 'item_stock_movements')
     await upsertAll(db.dashboard_todos, data.dashboard_todos || [], 'dashboard_todos')
+    await upsertAll(db.staff, data.staff || [], 'staff')
+    await upsertAll(db.staff_advances, data.staff_advances || [], 'staff_advances')
+    await upsertAll(db.payroll_runs, data.payroll_runs || [], 'payroll_runs')
 
     await repairImportedInvoiceNumbers()
   })
 
   const skippedSensitiveSettings = applyImportedSettings(data.settings, options)
+  await applyImportedSignatureBackup(data.settings)
   return { counts, skipped, skippedSensitiveSettings }
 }
 
@@ -315,6 +338,7 @@ async function importLegacyUnified(data: any, mode: ImportMode, options: ImportO
   if (rtgs.bankEmail) localStorage.setItem('pama_bank_email', rtgs.bankEmail)
   if (rtgs.accounts) localStorage.setItem('pama_rtgs_accounts', JSON.stringify(rtgs.accounts))
   const skippedSensitiveSettings = applyImportedSettings(data.settings, options)
+  await applyImportedSignatureBackup(data.settings)
 
   if (skippedSensitiveSettings) result.skippedSensitiveSettings = true
   return result
@@ -343,6 +367,7 @@ async function importLegacyBilling(data: any, mode: ImportMode): Promise<ImportR
       signature: f.signature || undefined,
       created_at: f.createdAt || nowISO(), updated_at: nowISO(), is_deleted: !!f.isDeleted, _dirty: true,
     })
+    if (f.signature) persistFirmSignature(id, f.signature, f.name || '')
     counts.firms = (counts.firms || 0) + 1
   }
 
@@ -581,6 +606,9 @@ function suiteImportTables(data: any) {
     { key: 'stock_movements', table: db.stock_movements, rows: asArray<ImportableRecord>(data.stock_movements) },
     { key: 'item_stock_movements', table: db.item_stock_movements, rows: asArray<ImportableRecord>(data.item_stock_movements) },
     { key: 'dashboard_todos', table: db.dashboard_todos, rows: asArray<ImportableRecord>(data.dashboard_todos) },
+    { key: 'staff', table: db.staff, rows: asArray<ImportableRecord>(data.staff) },
+    { key: 'staff_advances', table: db.staff_advances, rows: asArray<ImportableRecord>(data.staff_advances) },
+    { key: 'payroll_runs', table: db.payroll_runs, rows: asArray<ImportableRecord>(data.payroll_runs) },
   ]
 }
 

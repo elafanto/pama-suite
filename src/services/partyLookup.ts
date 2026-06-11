@@ -1,9 +1,15 @@
 /** Shared party-form helpers: uppercase normalization, IFSC lookup (Razorpay). */
 
+import type { Party } from '@/types/models'
+
 const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/
 
 export function toUpperTrim(value: string): string {
   return value.toUpperCase().trim()
+}
+
+function normalizeAcno(acno: string): string {
+  return toUpperTrim(acno).replace(/\s/g, '')
 }
 
 export function isValidIfsc(ifsc: string): boolean {
@@ -17,10 +23,41 @@ export interface IfscLookupResult {
   bankLine: string
 }
 
-/** Razorpay public IFSC API — https://ifsc.razorpay.com/{IFSC} */
-export async function fetchIfscDetails(ifsc: string): Promise<IfscLookupResult | null> {
+type PartyBankFields = Pick<Party, 'bank' | 'ifsc' | 'acno'>
+
+/** Bank name already saved on a party with this IFSC (and account no when given). */
+export function findPartyBankDetails(
+  ifsc: string,
+  parties: PartyBankFields[],
+  acno?: string,
+): IfscLookupResult | null {
   const code = toUpperTrim(ifsc)
   if (!isValidIfsc(code)) return null
+
+  const matches = parties.filter((p) => toUpperTrim(p.ifsc) === code && (p.bank || '').trim())
+  if (!matches.length) return null
+
+  const ac = acno ? normalizeAcno(acno) : ''
+  const party = (ac ? matches.find((p) => normalizeAcno(p.acno) === ac) : null) || matches[0]
+  const bankLine = (party.bank || '').trim()
+  if (!bankLine) return null
+
+  return { bank: bankLine, branch: '', bankLine }
+}
+
+/** Razorpay public IFSC API — skips network if another party already has bank for this IFSC. */
+export async function fetchIfscDetails(
+  ifsc: string,
+  options?: { acno?: string; parties?: PartyBankFields[] },
+): Promise<IfscLookupResult | null> {
+  const code = toUpperTrim(ifsc)
+  if (!isValidIfsc(code)) return null
+
+  const fromParty = options?.parties?.length
+    ? findPartyBankDetails(code, options.parties, options.acno)
+    : null
+  if (fromParty) return fromParty
+
   try {
     const res = await fetch(`https://ifsc.razorpay.com/${code}`)
     if (!res.ok) return null

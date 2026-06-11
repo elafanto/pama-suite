@@ -12,6 +12,10 @@ import {
   pushPendingDocumentUploads,
   cacheRecentRemoteDocuments,
 } from '@/services/documentAttachments'
+import {
+  pullSignaturesFromCloud,
+  pushSignaturesToCloud,
+} from '@/services/firmSignatureCloud'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 
 type SyncTable =
@@ -30,6 +34,9 @@ type SyncTable =
   | 'item_stock_movements'
   | 'dashboard_todos'
   | 'document_attachments'
+  | 'staff'
+  | 'staff_advances'
+  | 'payroll_runs'
 
 const TABLE_MAP: Record<SyncTable, string> = {
   firms: 'firms',
@@ -47,6 +54,9 @@ const TABLE_MAP: Record<SyncTable, string> = {
   item_stock_movements: 'item_stock_movements',
   dashboard_todos: 'dashboard_todos',
   document_attachments: 'document_attachments',
+  staff: 'staff',
+  staff_advances: 'staff_advances',
+  payroll_runs: 'payroll_runs',
 }
 
 const PAYLOAD_TABLES: SyncTable[] = [
@@ -62,6 +72,9 @@ const PAYLOAD_TABLES: SyncTable[] = [
   'item_stock_movements',
   'dashboard_todos',
   'document_attachments',
+  'staff',
+  'staff_advances',
+  'payroll_runs',
 ]
 
 function isNewer(remote: string, local?: string): boolean {
@@ -82,6 +95,9 @@ const OPTIONAL_TABLE_MIGRATIONS: Partial<Record<SyncTable, string>> = {
   item_stock_movements: '006_item_stock_movements.sql',
   dashboard_todos: '008_dashboard_todos.sql',
   document_attachments: '009_document_attachments.sql',
+  staff: '011_payroll.sql',
+  staff_advances: '011_payroll.sql',
+  payroll_runs: '011_payroll.sql',
 }
 
 let syncInFlight: Promise<string> | null = null
@@ -562,22 +578,32 @@ export async function runSync(): Promise<string> {
       return message
     }
     const repaired = await repairLocalInvoiceNumberState()
+    const sigPull = await pullSignaturesFromCloud()
     const docUpload = await pushPendingDocumentUploads()
     const push = await pushDirtyToCloud()
+    const sigPush = await pushSignaturesToCloud()
     if (!push.ok) {
       const message = push.error || 'Sync failed'
       rememberSyncResult(message, message)
       return message
     }
     const docCached = await cacheRecentRemoteDocuments(8)
-    if (pull.pulled > 0) await reloadAllStores()
+    if (pull.pulled > 0 || sigPull.restored > 0) await reloadAllStores()
     const parts: string[] = []
     if (pull.pulled) parts.push(`pulled ${pull.pulled}`)
     if (repaired) parts.push(`repaired ${repaired}`)
     if (push.pushed) parts.push(`pushed ${push.pushed}`)
+    if (sigPull.restored) parts.push(`signatures pulled ${sigPull.restored}`)
+    if (sigPush.ok) parts.push('signatures backed up')
     if (docUpload.uploaded) parts.push(`docs uploaded ${docUpload.uploaded}`)
     if (docCached) parts.push(`docs cached ${docCached}`)
-    const warnings = uniqWarnings([...(pull.warnings || []), ...(push.warnings || [])])
+    const auth = useAuthStore()
+    const warnings = uniqWarnings([
+      ...(pull.warnings || []),
+      ...(push.warnings || []),
+      ...(sigPull.error ? [`Signature cloud pull: ${sigPull.error}`] : []),
+      ...(sigPush.error && auth.canSync ? [`Signature cloud: ${sigPush.error}`] : []),
+    ])
     const message = withWarnings(parts.length ? `Synced (${parts.join(', ')})` : 'Already up to date', warnings)
     rememberSyncResult(message, warnings.join(' '))
     return message

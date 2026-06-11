@@ -6,6 +6,7 @@ import { numberToWords } from '@/services/numberToWords'
 import { getPendingRTGS, clearPendingRTGS } from '@/services/rtgsBridge'
 import PpModal from '@/components/PpModal.vue'
 import { formatGstin } from '@/services/gst'
+import { fetchIfscDetails, findPartyBankDetails, isValidIfsc } from '@/services/partyLookup'
 
 interface SavedBene {
   name: string
@@ -264,17 +265,35 @@ function onIfscInput(idx: number) {
     return
   }
   if (row.ifsc.length > 11) return
+  if (!isValidIfsc(row.ifsc)) {
+    row.ifscStatus = 'error'
+    return
+  }
 
+  const saved = findPartyBankDetails(row.ifsc, partyStore.list, row.acno)
+  if (saved) {
+    row.bank = saved.bankLine
+    row.ifscStatus = 'success'
+    return
+  }
+
+  row.bank = ''
   row.ifscStatus = 'fetching'
   clearTimeout(ifscDebounceTimer.value[row.id])
   ifscDebounceTimer.value[row.id] = setTimeout(async () => {
-    try {
-      const res = await fetch(`https://ifsc.razorpay.com/${row.ifsc}`)
-      if (!res.ok) throw new Error('Invalid code')
-      const data = await res.json()
-      row.bank = `${data.BANK}, ${data.BRANCH}`
+    const details = await fetchIfscDetails(row.ifsc, { acno: row.acno, parties: partyStore.list })
+    if (details) {
+      row.bank = details.bankLine
       row.ifscStatus = 'success'
-    } catch (e) {
+      if (row.partyId && row.acno.trim()) {
+        void partyStore.update(row.partyId, {
+          bank: details.bankLine,
+          ifsc: row.ifsc,
+          acno: row.acno,
+          acname: row.acname || row.name,
+        })
+      }
+    } else {
       row.ifscStatus = 'error'
     }
   }, 400)

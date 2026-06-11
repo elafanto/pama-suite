@@ -4,6 +4,12 @@ import { db } from '@/data/db'
 import { uid, nowISO } from '@/data/util'
 import { resolveNextSequence } from '@/services/invoiceNumber'
 import { logActivity } from '@/services/activityLog'
+import {
+  archiveFirmSignature,
+  migrateLegacySignaturesToFirms,
+  persistFirmSignature,
+} from '@/services/firmSignature'
+import { syncSignatureToCloudIfReady } from '@/services/firmSignatureCloud'
 import type { Firm, Invoice } from '@/types/models'
 
 export type FirmLinkedCounts = { parties: number; invoices: number; purchases: number }
@@ -59,6 +65,15 @@ export const useFirmStore = defineStore('firm', () => {
       firms.value = (await db.firms.filter((x) => !x.is_deleted).toArray())
         .sort((a, b) => a.name.localeCompare(b.name))
     }
+
+    const migrated = await migrateLegacySignaturesToFirms(firms.value)
+    if (migrated > 0) {
+      firms.value = (await db.firms.filter((x) => !x.is_deleted).toArray())
+        .sort((a, b) => a.name.localeCompare(b.name))
+    }
+    for (const f of firms.value) {
+      if (f.signature) persistFirmSignature(f.id, f.signature, f.name)
+    }
   }
 
   function setActive(id: string) {
@@ -79,6 +94,10 @@ export const useFirmStore = defineStore('firm', () => {
       _dirty: true,
     }) as Firm
     await db.firms.add(rec)
+    if (rec.signature) {
+      persistFirmSignature(rec.id, rec.signature, rec.name)
+      void syncSignatureToCloudIfReady()
+    }
     await load()
     setActive(rec.id)
     return rec
@@ -87,7 +106,19 @@ export const useFirmStore = defineStore('firm', () => {
   async function update(id: string, patch: Partial<Firm>) {
     const existing = await db.firms.get(id)
     if (!existing) return
-    await db.firms.put(plain({ ...existing, ...patch, updated_at: nowISO(), _dirty: true }))
+    const next = plain({ ...existing, ...patch, updated_at: nowISO(), _dirty: true }) as Firm
+    await db.firms.put(next)
+    if ('signature' in patch) {
+      if (patch.signature) {
+        persistFirmSignature(id, patch.signature, next.name)
+      } else {
+        if (existing.signature) archiveFirmSignature(existing.id, existing.signature, existing.name)
+        persistFirmSignature(id, undefined, next.name)
+      }
+      void syncSignatureToCloudIfReady()
+    } else if (next.signature) {
+      persistFirmSignature(id, next.signature, next.name)
+    }
     await load()
   }
 

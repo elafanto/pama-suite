@@ -17,6 +17,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/boxcalc',   name: 'boxcalc',   component: () => import('@/modules/boxcalc/BoxCalcView.vue'),     meta: { title: 'BoxCalc', icon: '🧮', group: 'Tools' } },
 
   { path: '/accounting',name: 'accounting',component: () => import('@/modules/accounting/AccountingView.vue'),meta: { title: 'Accounting', icon: '📒', group: 'Finance' } },
+  { path: '/payroll',   name: 'payroll',   component: () => import('@/modules/payroll/PayrollView.vue'),     meta: { title: 'Payroll', icon: '💰', group: 'Finance' } },
   { path: '/reports',   name: 'reports',   component: () => import('@/modules/reports/ReportsView.vue'),   meta: { title: 'Reports', icon: '📈', group: 'Finance' } },
 
   { path: '/recycle-bin', name: 'recycle-bin', component: () => import('@/modules/recyclebin/RecycleBinView.vue'), meta: { title: 'Recycle Bin', icon: '♻️', group: 'System' } },

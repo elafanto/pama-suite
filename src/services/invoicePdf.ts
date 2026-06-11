@@ -8,6 +8,7 @@ import {
   resolvePartyById,
   type PartyLookup,
 } from '@/services/invoiceDisplay'
+import { resolveFirmSignature } from '@/services/firmSignature'
 import type { Firm, Invoice, Party } from '@/types/models'
 
 function n2(n: number) {
@@ -26,10 +27,7 @@ function firmBankText(f: Firm): string {
   return lines.length ? lines.join('\n') : '-'
 }
 
-export function resolveFirmSignature(firm: Firm): string {
-  if (firm.signature) return firm.signature
-  return localStorage.getItem(`pama_firm_signature_${firm.id}`) || ''
-}
+export { resolveFirmSignature }
 
 interface PdfFirm {
   name: string

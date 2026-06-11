@@ -364,6 +364,9 @@ onMounted(async () => {
     <section class="pp-card p-5 mb-5">
       <h2 class="font-bold text-navy mb-3">💾 Backup &amp; Import</h2>
       <p class="text-sm text-slate-500 mb-4">Export full suite JSON (including deleted records for restore) or import from PamaTools <code>pama_tools_live.json</code> / unified backup.</p>
+      <p class="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mb-4">
+        ✍️ Firm signatures <strong>hamesha backup me included</strong> hain (<code>firmSignatures</code> + archive), API keys checkbox se independent.
+      </p>
       <label class="flex items-start gap-2 text-sm text-slate-600 mb-3">
         <input v-model="includeSensitiveBackup" type="checkbox" class="mt-1" />
         <span>Include saved API keys (Gemini + Supabase local config). Use only for private encrypted storage.</span>
@@ -425,6 +428,9 @@ onMounted(async () => {
         <span v-else>
           Pehle neeche Supabase keys save karein (Vercel par bhi kaam karta hai — redeploy ki zaroorat nahi).
         </span>
+      </p>
+      <p class="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mb-3">
+        ✍️ Firm signatures <strong>online bhi backup</strong> hote hain — Sync Now par Supabase <code>org_settings</code> me save. Naye device par login + sync se wapas mil jayenge (migration <code>010</code> chahiye).
       </p>
 
       <div v-if="!auth.isConfigured || !auth.canSync" class="mb-4 p-4 rounded-lg border border-slate-200 bg-slate-50 space-y-3">

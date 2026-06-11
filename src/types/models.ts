@@ -228,6 +228,76 @@ export interface DashboardTodo extends BaseRecord {
   completed: boolean
 }
 
+/** Payroll — staff master, attendance, salary (Phase 1). */
+export type StaffPayType = 'monthly' | 'daily_wage'
+export type AttendanceMark = 'P' | 'A' | 'H' | 'L'
+export type PayrollRunStatus = 'draft' | 'finalized' | 'paid'
+export type PayrollPaymentMode = 'cash' | 'transfer'
+
+export interface Staff extends BaseRecord {
+  name: string
+  phone: string
+  designation: string
+  pay_type: StaffPayType
+  /** Monthly salary (monthly staff) or monthly equivalent for daily wage (÷26). */
+  monthly_amount: number
+  daily_wage: number
+  hourly_wage: number
+  bank: string
+  acno: string
+  ifsc: string
+  acname: string
+  is_active: boolean
+}
+
+export interface StaffAdvance extends BaseRecord {
+  staff_id: string
+  staff_name: string
+  date: string
+  amount: number
+  mode: PayrollPaymentMode
+  narration: string
+  /** Set when deducted from a salary run (YYYY-MM). */
+  applied_period?: string
+  voucher_id?: string
+}
+
+export interface PayrollLine {
+  staff_id: string
+  staff_name: string
+  pay_type: StaffPayType
+  monthly_amount: number
+  daily_wage: number
+  hourly_wage: number
+  /** Day key "01".."31" → attendance mark */
+  attendance: Record<string, AttendanceMark | ''>
+  days_present: number
+  days_half: number
+  days_absent: number
+  days_leave: number
+  ot_hours: number
+  earned: number
+  advance_deduction: number
+  other_deduction: number
+  net_pay: number
+}
+
+export interface PayrollRun extends BaseRecord {
+  period: string
+  year: number
+  month: number
+  lines: PayrollLine[]
+  total_earned: number
+  total_advance: number
+  total_other: number
+  total_net: number
+  status: PayrollRunStatus
+  payment_mode: PayrollPaymentMode
+  payment_date: string
+  voucher_id?: string
+  paid_at?: string
+}
+
 export type DocumentEntityType = 'purchase' | 'invoice' | 'voucher'
 export type DocumentUploadStatus = 'pending' | 'uploaded' | 'failed'
 

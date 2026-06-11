@@ -11,6 +11,7 @@ import { numberToWords } from '@/services/numberToWords'
 import { openStatementPrint } from '@/services/billingStatements'
 import { getEwayEligibility, downloadEwayJson } from '@/services/ewayBill'
 import { downloadInvoicePdf, bulkDownloadInvoicePdf } from '@/services/invoicePdf'
+import { resolveFirmSignature } from '@/services/firmSignature'
 import { resolveLivePartyDetails, resolveLiveShipDetails, type PartyLookup } from '@/services/invoiceDisplay'
 import { peekBillNo } from '@/services/invoiceNumber'
 import { listItemStockMovements } from '@/services/inventoryLedger'
@@ -605,8 +606,7 @@ function generateStatementPDF() {
 
 function firmSignatureUrl(): string {
   const f = firmStore.activeFirm
-  if (!f?.signature) return localStorage.getItem(`pama_firm_signature_${f?.id}`) || ''
-  return f.signature
+  return f ? resolveFirmSignature(f) : ''
 }
 
 // Duplicate bill check
