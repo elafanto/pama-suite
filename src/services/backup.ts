@@ -9,6 +9,7 @@ import {
   type FirmSignatureArchive,
   type FirmSignatureBackupMap,
 } from '@/services/firmSignature'
+import { applyImportedPayrollBackup, collectPayrollBackup } from '@/services/payrollBackup'
 import type {
   Party, Firm, Item, Invoice, Purchase, Recipe, Account, Voucher, ActivityLog,
   ReelStock, ProductionJob, ProductionStageEntry, StockMovement, ItemStockMovement,
@@ -76,6 +77,8 @@ export interface SuiteBackup {
     /** Always included — firm signatures are never treated as sensitive API keys. */
     firmSignatures?: FirmSignatureBackupMap
     signatureArchive?: FirmSignatureArchive
+    /** Always included — staff, advances, attendance & salary runs. */
+    payrollBackup?: Awaited<ReturnType<typeof collectPayrollBackup>>
   }
 }
 
@@ -115,6 +118,7 @@ export async function exportAll(options: ExportOptions = {}): Promise<SuiteBacku
   try { rtgsAccounts = JSON.parse(localStorage.getItem('pama_rtgs_accounts') || '{}') } catch { /* */ }
 
   const signatureBackup = collectSignatureBackup(firms)
+  const payrollBackup = await collectPayrollBackup()
   const settings: SuiteBackup['settings'] = {
     bankEmail: localStorage.getItem('pama_bank_email') || '',
     rtgsAccounts,
@@ -122,6 +126,7 @@ export async function exportAll(options: ExportOptions = {}): Promise<SuiteBacku
     templates,
     firmSignatures: signatureBackup.firmSignatures,
     signatureArchive: signatureBackup.signatureArchive,
+    payrollBackup,
   }
 
   if (options.includeSensitiveSettings) {
@@ -267,6 +272,7 @@ async function importSuiteBackup(data: any, mode: ImportMode, options: ImportOpt
 
   const skippedSensitiveSettings = applyImportedSettings(data.settings, options)
   await applyImportedSignatureBackup(data.settings)
+  await applyImportedPayrollBackup(data.settings?.payrollBackup, { skipDirtyLocal: false })
   return { counts, skipped, skippedSensitiveSettings }
 }
 

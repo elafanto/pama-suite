@@ -246,6 +246,9 @@ onMounted(async () => {
       <p class="text-xs sm:text-sm text-slate-500">
         Staff, attendance, salary &amp; advances — max {{ MAX_STAFF }} staff · monthly ÷ {{ PAYROLL_WORKING_DAYS }} daily wage
       </p>
+      <p class="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mt-2">
+        💾 Staff list, attendance, salary runs — <strong>JSON backup</strong> + <strong>Supabase cloud sync</strong> (Settings → Sync Now). Migrations <code>011</code> + <code>012</code> run karein.
+      </p>
     </header>
 
     <div class="flex flex-wrap items-center gap-2 mb-4">

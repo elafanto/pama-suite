@@ -364,8 +364,11 @@ onMounted(async () => {
     <section class="pp-card p-5 mb-5">
       <h2 class="font-bold text-navy mb-3">💾 Backup &amp; Import</h2>
       <p class="text-sm text-slate-500 mb-4">Export full suite JSON (including deleted records for restore) or import from PamaTools <code>pama_tools_live.json</code> / unified backup.</p>
-      <p class="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mb-4">
+      <p class="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mb-2">
         ✍️ Firm signatures <strong>hamesha backup me included</strong> hain (<code>firmSignatures</code> + archive), API keys checkbox se independent.
+      </p>
+      <p class="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mb-4">
+        💰 Payroll (<code>staff</code>, <code>staff_advances</code>, <code>payroll_runs</code> + attendance) <strong>hamesha JSON backup me</strong> — top-level arrays + <code>settings.payrollBackup</code> duplicate.
       </p>
       <label class="flex items-start gap-2 text-sm text-slate-600 mb-3">
         <input v-model="includeSensitiveBackup" type="checkbox" class="mt-1" />
@@ -429,8 +432,11 @@ onMounted(async () => {
           Pehle neeche Supabase keys save karein (Vercel par bhi kaam karta hai — redeploy ki zaroorat nahi).
         </span>
       </p>
+      <p class="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mb-2">
+        ✍️ Firm signatures <strong>online bhi backup</strong> hote hain — Sync Now par Supabase <code>org_settings</code> me save (migration <code>010</code>).
+      </p>
       <p class="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mb-3">
-        ✍️ Firm signatures <strong>online bhi backup</strong> hote hain — Sync Now par Supabase <code>org_settings</code> me save. Naye device par login + sync se wapas mil jayenge (migration <code>010</code> chahiye).
+        💰 Payroll staff + attendance + salary <strong>cloud sync</strong> — tables <code>staff</code>, <code>staff_advances</code>, <code>payroll_runs</code> (migration <code>011</code>) + extra snapshot <code>org_settings.payroll_backup</code> (migration <code>012</code>). Har save / Sync Now par backup.
       </p>
 
       <div v-if="!auth.isConfigured || !auth.canSync" class="mb-4 p-4 rounded-lg border border-slate-200 bg-slate-50 space-y-3">

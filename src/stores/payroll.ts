@@ -14,6 +14,7 @@ import {
   sumPayrollLines,
 } from '@/services/payrollCalc'
 import { postAdvanceVoucher, postSalaryVoucher } from '@/services/payrollVoucher'
+import { syncPayrollToCloudIfReady } from '@/services/payrollCloud'
 import type {
   PayrollLine,
   PayrollPaymentMode,
@@ -68,6 +69,7 @@ export const usePayrollStore = defineStore('payroll', () => {
     } as any)
     await logActivity(firm.activeFirmId, 'create', 'staff', rec.id, `Staff ${rec.name} added`)
     await load()
+    void syncPayrollToCloudIfReady()
     return rec
   }
 
@@ -82,6 +84,7 @@ export const usePayrollStore = defineStore('payroll', () => {
       hourly_wage: rates.hourly_wage,
     })
     await load()
+    void syncPayrollToCloudIfReady()
   }
 
   async function removeStaff(id: string) {
@@ -91,6 +94,7 @@ export const usePayrollStore = defineStore('payroll', () => {
       await logActivity(existing.firm_id, 'delete', 'staff', id, `Staff ${existing.name} removed`)
     }
     await load()
+    void syncPayrollToCloudIfReady()
   }
 
   async function recordAdvance(data: {
@@ -124,6 +128,7 @@ export const usePayrollStore = defineStore('payroll', () => {
 
     await logActivity(firm.activeFirmId, 'create', 'staff_advance', rec.id, `Advance ₹${amount} — ${staff.name}`)
     await load()
+    void syncPayrollToCloudIfReady()
     return (await advanceRepo.get(rec.id))!
   }
 
@@ -193,6 +198,7 @@ export const usePayrollStore = defineStore('payroll', () => {
       status: 'draft',
     })
     await load()
+    void syncPayrollToCloudIfReady()
     return { ok: true }
   }
 
@@ -215,6 +221,7 @@ export const usePayrollStore = defineStore('payroll', () => {
     const totals = sumPayrollLines(lines)
     await runRepo.update(run.id, { lines, ...totals, status: 'finalized' })
     await load()
+    void syncPayrollToCloudIfReady()
     return { ok: true }
   }
 
@@ -266,6 +273,7 @@ export const usePayrollStore = defineStore('payroll', () => {
       `Salary paid ${periodLabel(period)} — ₹${run.total_net}`,
     )
     await load()
+    void syncPayrollToCloudIfReady()
     return { ok: true, voucherId }
   }
 

@@ -16,6 +16,10 @@ import {
   pullSignaturesFromCloud,
   pushSignaturesToCloud,
 } from '@/services/firmSignatureCloud'
+import {
+  pullPayrollFromCloud,
+  pushPayrollToCloud,
+} from '@/services/payrollCloud'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 
 type SyncTable =
@@ -579,22 +583,26 @@ export async function runSync(): Promise<string> {
     }
     const repaired = await repairLocalInvoiceNumberState()
     const sigPull = await pullSignaturesFromCloud()
+    const payrollPull = await pullPayrollFromCloud()
     const docUpload = await pushPendingDocumentUploads()
     const push = await pushDirtyToCloud()
     const sigPush = await pushSignaturesToCloud()
+    const payrollPush = await pushPayrollToCloud()
     if (!push.ok) {
       const message = push.error || 'Sync failed'
       rememberSyncResult(message, message)
       return message
     }
     const docCached = await cacheRecentRemoteDocuments(8)
-    if (pull.pulled > 0 || sigPull.restored > 0) await reloadAllStores()
+    if (pull.pulled > 0 || sigPull.restored > 0 || payrollPull.restored > 0) await reloadAllStores()
     const parts: string[] = []
     if (pull.pulled) parts.push(`pulled ${pull.pulled}`)
     if (repaired) parts.push(`repaired ${repaired}`)
     if (push.pushed) parts.push(`pushed ${push.pushed}`)
     if (sigPull.restored) parts.push(`signatures pulled ${sigPull.restored}`)
     if (sigPush.ok) parts.push('signatures backed up')
+    if (payrollPull.restored) parts.push(`payroll pulled ${payrollPull.restored}`)
+    if (payrollPush.ok) parts.push('payroll backed up')
     if (docUpload.uploaded) parts.push(`docs uploaded ${docUpload.uploaded}`)
     if (docCached) parts.push(`docs cached ${docCached}`)
     const auth = useAuthStore()
@@ -603,6 +611,8 @@ export async function runSync(): Promise<string> {
       ...(push.warnings || []),
       ...(sigPull.error ? [`Signature cloud pull: ${sigPull.error}`] : []),
       ...(sigPush.error && auth.canSync ? [`Signature cloud: ${sigPush.error}`] : []),
+      ...(payrollPull.error ? [`Payroll cloud pull: ${payrollPull.error}`] : []),
+      ...(payrollPush.error && auth.canSync ? [`Payroll cloud: ${payrollPush.error}`] : []),
     ])
     const message = withWarnings(parts.length ? `Synced (${parts.join(', ')})` : 'Already up to date', warnings)
     rememberSyncResult(message, warnings.join(' '))
