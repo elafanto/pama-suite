@@ -39,7 +39,23 @@ export function currentPeriod(): string {
 }
 
 export function emptyDay(): DayAttendance {
-  return { duty_hours: null, off_paid: false, ot_hours: 0 }
+  return { duty_hours: null, off_paid: false, ot_hours: 0, kind: undefined }
+}
+
+export function isSunday(year: number, month: number, dayKey: string): boolean {
+  const day = Number(dayKey)
+  if (!day) return false
+  return new Date(year, month - 1, day).getDay() === 0
+}
+
+export function sundayDayKeys(year: number, month: number): string[] {
+  const dim = daysInMonth(year, month)
+  const keys: string[] = []
+  for (let d = 1; d <= dim; d++) {
+    const key = String(d).padStart(2, '0')
+    if (isSunday(year, month, key)) keys.push(key)
+  }
+  return keys
 }
 
 /** Off-duty hours when duty &lt; 8 (e.g. 6 hr duty → 2 hr off). */
@@ -49,11 +65,15 @@ export function calcOffDutyHours(dutyHours: number | null): number {
   return Math.max(0, PAYROLL_HOURS_PER_DAY - duty)
 }
 
-export function dayFromPreset(preset: 'full' | 'half' | 'absent' | 'leave'): DayAttendance {
-  if (preset === 'full') return { duty_hours: 8, off_paid: false, ot_hours: 0 }
-  if (preset === 'half') return { duty_hours: 4, off_paid: false, ot_hours: 0 }
-  if (preset === 'absent') return { duty_hours: 0, off_paid: false, ot_hours: 0 }
-  return { duty_hours: 0, off_paid: true, ot_hours: 0 }
+export type DayBulkPreset = 'full' | 'half' | 'absent' | 'leave' | 'holiday' | 'sunday'
+
+export function dayFromPreset(preset: DayBulkPreset): DayAttendance {
+  if (preset === 'full') return { duty_hours: 8, off_paid: false, ot_hours: 0, kind: 'work' }
+  if (preset === 'half') return { duty_hours: 4, off_paid: false, ot_hours: 0, kind: 'work' }
+  if (preset === 'absent') return { duty_hours: 0, off_paid: false, ot_hours: 0, kind: 'absent' }
+  if (preset === 'holiday') return { duty_hours: 0, off_paid: true, ot_hours: 0, kind: 'holiday' }
+  if (preset === 'sunday') return { duty_hours: 0, off_paid: true, ot_hours: 0, kind: 'sunday' }
+  return { duty_hours: 0, off_paid: true, ot_hours: 0, kind: 'leave' }
 }
 
 /** Legacy P/A/H/L → day_hours. */
@@ -140,7 +160,7 @@ export function summarizeDayHours(
     total_ot_hours += b.ot
     total_paid_hours += b.paid
 
-    if (day.duty_hours === 0 && day.off_paid) days_leave++
+    if (day.kind === 'holiday' || day.kind === 'sunday' || (day.duty_hours === 0 && day.off_paid)) days_leave++
     else if (day.duty_hours === 0) days_absent++
     else if (day.duty_hours >= PAYROLL_HOURS_PER_DAY) days_present++
     else if (day.duty_hours >= PAYROLL_HOURS_PER_DAY / 2) days_half++
@@ -237,6 +257,9 @@ export function sumPayrollLines(lines: PayrollLine[]) {
 /** Short label for attendance grid cell. */
 export function dayCellLabel(day: DayAttendance | undefined): string {
   if (!day || day.duty_hours === null) return '·'
+  if (day.kind === 'holiday') return 'H'
+  if (day.kind === 'sunday') return '☀'
+  if (day.duty_hours >= PAYROLL_HOURS_PER_DAY && !day.ot_hours && !calcOffDutyHours(day.duty_hours)) return '8'
   const off = calcOffDutyHours(day.duty_hours)
   const parts: string[] = [String(day.duty_hours)]
   if (off > 0) parts.push(day.off_paid ? '✓' : '−')
@@ -246,6 +269,8 @@ export function dayCellLabel(day: DayAttendance | undefined): string {
 
 export function dayCellClass(day: DayAttendance | undefined): string {
   if (!day || day.duty_hours === null) return 'bg-slate-100 text-slate-400'
+  if (day.kind === 'holiday') return 'bg-violet-500 text-white'
+  if (day.kind === 'sunday') return 'bg-indigo-400 text-white'
   if (day.duty_hours === 0 && day.off_paid) return 'bg-sky-500 text-white'
   if (day.duty_hours === 0) return 'bg-rose-500 text-white'
   if (day.duty_hours >= PAYROLL_HOURS_PER_DAY) return 'bg-emerald-500 text-white'

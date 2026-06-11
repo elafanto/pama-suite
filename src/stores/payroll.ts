@@ -8,6 +8,7 @@ import {
   MAX_STAFF,
   buildPayrollLine,
   currentPeriod,
+  dayFromPreset,
   deriveWageRates,
   normalizeDayHours,
   periodLabel,
@@ -16,6 +17,7 @@ import {
 import { postAdvanceVoucher, postSalaryVoucher } from '@/services/payrollVoucher'
 import { syncPayrollToCloudIfReady } from '@/services/payrollCloud'
 import type {
+  DayAttendance,
   PayrollLine,
   PayrollPaymentMode,
   PayrollRun,
@@ -169,6 +171,58 @@ export const usePayrollStore = defineStore('payroll', () => {
     return rec
   }
 
+  async function bulkMarkDays(
+    period: string,
+    days: string[],
+    preset: 'full' | 'holiday' | 'sunday',
+  ) {
+    const run = await ensureRun(period)
+    if (run.status === 'paid') return { error: 'Month already paid' }
+    if (!days.length) return { error: 'Select at least one day' }
+
+    const stamp = dayFromPreset(preset)
+    const staffById = new Map(activeStaff.value.map((s) => [s.id, s]))
+
+    const lines = run.lines.map((line) => {
+      const staff = staffById.get(line.staff_id)
+      if (!staff) return line
+      const day_hours = { ...normalizeDayHours(line) }
+      for (const d of days) day_hours[d] = { ...stamp }
+      return buildPayrollLine(
+        staff,
+        day_hours,
+        line.attendance,
+        run.year,
+        run.month,
+        openAdvanceTotal(line.staff_id),
+        line.other_deduction,
+      )
+    })
+
+    for (const staff of activeStaff.value) {
+      if (lines.some((l) => l.staff_id === staff.id)) continue
+      const day_hours: Record<string, DayAttendance> = {}
+      for (const d of days) day_hours[d] = { ...stamp }
+      lines.push(
+        buildPayrollLine(staff, day_hours, undefined, run.year, run.month, openAdvanceTotal(staff.id), 0),
+      )
+    }
+
+    const totals = sumPayrollLines(lines)
+    await runRepo.update(run.id, {
+      lines,
+      ...totals,
+      total_earned: totals.total_earned,
+      total_advance: totals.total_advance,
+      total_other: totals.total_other,
+      total_net: totals.total_net,
+      status: 'draft',
+    })
+    await load()
+    void syncPayrollToCloudIfReady()
+    return { ok: true }
+  }
+
   async function updateRunLine(
     period: string,
     staffId: string,
@@ -292,6 +346,7 @@ export const usePayrollStore = defineStore('payroll', () => {
     openAdvanceTotal,
     getRunForPeriod,
     ensureRun,
+    bulkMarkDays,
     updateRunLine,
     recalculateRun,
     payRun,

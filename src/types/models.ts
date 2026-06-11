@@ -233,6 +233,8 @@ export type StaffPayType = 'monthly' | 'daily_wage'
 export type AttendanceMark = 'P' | 'A' | 'H' | 'L'
 
 /** Per-day hours: duty (0–8+), off-duty below 8 hr paid/unpaid, overtime. */
+export type DayAttendanceKind = 'work' | 'holiday' | 'sunday' | 'leave' | 'absent'
+
 export interface DayAttendance {
   /** Hours on duty; null = day not marked. */
   duty_hours: number | null
@@ -240,6 +242,7 @@ export interface DayAttendance {
   off_paid: boolean
   /** Overtime hours (beyond 8 hr day). */
   ot_hours: number
+  kind?: DayAttendanceKind
 }
 export type PayrollRunStatus = 'draft' | 'finalized' | 'paid'
 export type PayrollPaymentMode = 'cash' | 'transfer'

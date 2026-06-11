@@ -16,8 +16,10 @@ import {
   daysInMonth,
   deriveWageRates,
   emptyDay,
+  isSunday,
   normalizeDayHours,
   periodLabel,
+  sundayDayKeys,
 } from '@/services/payrollCalc'
 
 const store = usePayrollStore()
@@ -75,6 +77,15 @@ const dim = computed(() => daysInMonth(selYear.value, selMonth.value))
 const dayCols = computed(() => Array.from({ length: dim.value }, (_, i) => String(i + 1).padStart(2, '0')))
 
 const currentRun = computed(() => store.runs.find((r) => r.period === period.value))
+const selectedBulkDays = ref<Set<string>>(new Set())
+const attendanceEditMode = ref(false)
+const showDayActionModal = ref(false)
+const dayActionStaffId = ref('')
+const dayActionDay = ref('')
+const dayActionStaffName = ref('')
+
+const sundaysThisMonth = computed(() => sundayDayKeys(selYear.value, selMonth.value))
+const selectedBulkCount = computed(() => selectedBulkDays.value.size)
 
 const tabs: { id: Tab; label: string; icon: string }[] = [
   { id: 'staff', label: 'Staff', icon: '👤' },
@@ -138,10 +149,111 @@ async function ensurePeriodRun() {
   await store.ensureRun(period.value)
 }
 
-watch(period, () => void ensurePeriodRun())
+watch(period, () => {
+  selectedBulkDays.value = new Set()
+  attendanceEditMode.value = false
+  void ensurePeriodRun()
+})
 watch(tab, (t) => {
+  if (t !== 'attendance') attendanceEditMode.value = false
   if (t === 'attendance' || t === 'salary') void ensurePeriodRun()
 })
+
+const canEditAttendance = computed(
+  () => attendanceEditMode.value && currentRun.value?.status !== 'paid',
+)
+
+function startAttendanceEdit() {
+  if (currentRun.value?.status === 'paid') return alert('Month paid — attendance locked.')
+  attendanceEditMode.value = true
+}
+
+function stopAttendanceEdit() {
+  attendanceEditMode.value = false
+  selectedBulkDays.value = new Set()
+  showDayActionModal.value = false
+}
+
+function toggleBulkDay(day: string) {
+  if (!canEditAttendance.value) return
+  const next = new Set(selectedBulkDays.value)
+  if (next.has(day)) next.delete(day)
+  else next.add(day)
+  selectedBulkDays.value = next
+}
+
+function isBulkDaySelected(day: string) {
+  return selectedBulkDays.value.has(day)
+}
+
+async function bulkPresentOneDay(day: string) {
+  if (!canEditAttendance.value) return
+  if (currentRun.value?.status === 'paid') return alert('Month already paid.')
+  if (!confirm(`Din ${Number(day)} — sab staff PRESENT (8 hr) mark karein?`)) return
+  const res = await store.bulkMarkDays(period.value, [day], 'full')
+  if (res && 'error' in res) alert(res.error)
+}
+
+async function bulkMarkSelected(preset: 'full' | 'holiday' | 'sunday') {
+  if (!canEditAttendance.value) return
+  if (currentRun.value?.status === 'paid') return alert('Month already paid.')
+  const days = [...selectedBulkDays.value]
+  if (!days.length) return alert('Pehle upar se din select karein (tap on date).')
+  const label = preset === 'full' ? 'SAB PRESENT (8 hr)' : preset === 'holiday' ? 'FACTORY HOLIDAY (paid)' : 'WEEKLY OFF / Sunday (paid)'
+  if (!confirm(`${days.length} din — sab staff ke liye ${label}?`)) return
+  const res = await store.bulkMarkDays(period.value, days, preset)
+  if (res && 'error' in res) alert(res.error)
+}
+
+async function bulkAllSundays() {
+  if (!canEditAttendance.value) return
+  if (currentRun.value?.status === 'paid') return alert('Month already paid.')
+  const days = sundaysThisMonth.value
+  if (!days.length) return alert('Is month me Sunday nahi hai.')
+  if (!confirm(`Sab ${days.length} Sundays — sab staff weekly off (paid) mark karein?`)) return
+  const res = await store.bulkMarkDays(period.value, days, 'sunday')
+  if (res && 'error' in res) alert(res.error)
+}
+
+function openDayActionMenu(staffId: string, day: string) {
+  if (!canEditAttendance.value) return
+  const staff = store.activeStaff.find((s) => s.id === staffId)
+  dayActionStaffId.value = staffId
+  dayActionDay.value = day
+  dayActionStaffName.value = staff?.name || ''
+  showDayActionModal.value = true
+}
+
+async function applyStaffDayPreset(preset: 'full' | 'absent' | 'holiday' | 'sunday' | 'clear') {
+  const staffId = dayActionStaffId.value
+  const day = dayActionDay.value
+  const line = lineFor(staffId)
+  const hours = line ? { ...normalizeDayHours(line) } : {}
+
+  if (preset === 'clear') {
+    if (!confirm(`${dayActionStaffName.value} — din ${Number(day)} clear karein?`)) return
+    delete hours[day]
+  } else {
+    const labels: Record<string, string> = {
+      full: 'PRESENT (8 hr)',
+      absent: 'ABSENT',
+      holiday: 'HOLIDAY (paid)',
+      sunday: 'WEEKLY OFF (paid)',
+    }
+    if (!confirm(`${dayActionStaffName.value} — ${Number(day)} → ${labels[preset]}?`)) return
+    hours[day] = { ...dayFromPreset(preset) }
+  }
+
+  await store.updateRunLine(period.value, staffId, { day_hours: hours })
+  showDayActionModal.value = false
+}
+
+function openPartialFromActionMenu() {
+  const staffId = dayActionStaffId.value
+  const day = dayActionDay.value
+  showDayActionModal.value = false
+  openDayModal(staffId, day)
+}
 
 function lineFor(staffId: string) {
   return currentRun.value?.lines.find((l) => l.staff_id === staffId)
@@ -172,10 +284,12 @@ function applyDayPreset(preset: 'full' | 'half' | 'absent' | 'leave') {
 async function saveDayModal() {
   const line = lineFor(dayModalStaffId.value)
   const hours = line ? { ...normalizeDayHours(line) } : {}
+  const duty = dayForm.duty_hours === null ? null : Math.max(0, Number(dayForm.duty_hours) || 0)
   hours[dayModalDay.value] = {
-    duty_hours: dayForm.duty_hours === null ? null : Math.max(0, Number(dayForm.duty_hours) || 0),
+    duty_hours: duty,
     off_paid: dayForm.off_paid,
     ot_hours: Math.max(0, Number(dayForm.ot_hours) || 0),
+    kind: duty === null ? undefined : duty >= PAYROLL_HOURS_PER_DAY && !dayForm.ot_hours ? 'work' : 'work',
   }
   await store.updateRunLine(period.value, dayModalStaffId.value, { day_hours: hours })
   showDayModal.value = false
@@ -309,32 +423,130 @@ onMounted(async () => {
 
     <!-- ATTENDANCE -->
     <section v-else-if="tab === 'attendance'" class="space-y-3">
-      <p class="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 leading-relaxed">
-        <strong>Tap day</strong> → duty hours (0–8), off-duty auto (e.g. 6 hr duty = 2 hr off), choose <strong>paid/unpaid</strong> off, + <strong>OT</strong>.
-        Cell: <span class="font-mono">6✓</span> = 6 hr + paid off · <span class="font-mono">6−</span> = unpaid off · <span class="font-mono">8+2</span> = OT
+      <div
+        class="rounded-lg border px-3 py-3 flex flex-wrap items-center justify-between gap-2"
+        :class="canEditAttendance ? 'bg-amber-50 border-amber-300' : 'bg-slate-50 border-slate-200'"
+      >
+        <div class="text-xs leading-relaxed" :class="canEditAttendance ? 'text-amber-900' : 'text-slate-600'">
+          <template v-if="currentRun?.status === 'paid'">
+            <strong>Locked</strong> — month paid, attendance change nahi hogi.
+          </template>
+          <template v-else-if="canEditAttendance">
+            <strong>Edit mode ON</strong> — cell tap = menu (confirm ke baad save). Miss-touch safe.
+          </template>
+          <template v-else>
+            <strong>View only</strong> — galat touch se kuchh change nahi hoga. Edit dabayein.
+          </template>
+        </div>
+        <button
+          v-if="currentRun?.status !== 'paid' && !canEditAttendance"
+          type="button"
+          class="pp-btn pp-btn-primary !py-2 shrink-0"
+          @click="startAttendanceEdit"
+        >
+          ✏️ Edit attendance
+        </button>
+        <button
+          v-else-if="canEditAttendance"
+          type="button"
+          class="pp-btn pp-btn-ghost !py-2 shrink-0 border-amber-400"
+          @click="stopAttendanceEdit"
+        >
+          ✓ Done editing
+        </button>
+      </div>
+
+      <p v-if="canEditAttendance" class="text-xs text-slate-500 px-1">
+        Date tap = bulk select · <strong>✓all</strong> = sab present · Cell tap = action menu (har change confirm)
       </p>
+
+      <div v-if="store.activeStaff.length > 0 && canEditAttendance" class="pp-card p-3 flex flex-wrap gap-2 items-center">
+        <span class="text-xs font-semibold text-slate-600 w-full sm:w-auto">Bulk (sab staff):</span>
+        <button
+          type="button"
+          class="pp-btn pp-btn-primary !py-1.5 !text-xs"
+          :disabled="!selectedBulkCount || currentRun?.status === 'paid'"
+          @click="bulkMarkSelected('full')"
+        >
+          ✓ Sab Present ({{ selectedBulkCount }} din)
+        </button>
+        <button
+          type="button"
+          class="pp-btn pp-btn-ghost !py-1.5 !text-xs border-violet-200 text-violet-800"
+          :disabled="!selectedBulkCount || currentRun?.status === 'paid'"
+          @click="bulkMarkSelected('holiday')"
+        >
+          🏭 Holiday ({{ selectedBulkCount }} din)
+        </button>
+        <button
+          type="button"
+          class="pp-btn pp-btn-ghost !py-1.5 !text-xs border-indigo-200 text-indigo-800"
+          :disabled="currentRun?.status === 'paid'"
+          @click="bulkAllSundays"
+        >
+          ☀ Sab Sundays ({{ sundaysThisMonth.length }})
+        </button>
+      </div>
+
       <div v-if="store.activeStaff.length === 0" class="pp-card p-6 text-center text-slate-400">Add staff first.</div>
       <div v-else class="overflow-x-auto -mx-4 px-4">
         <table class="text-xs border-collapse min-w-max">
           <thead>
             <tr>
               <th class="sticky left-0 z-10 bg-white border border-slate-200 px-2 py-2 text-left min-w-[100px]">Staff</th>
-              <th v-for="d in dayCols" :key="d" class="border border-slate-200 px-0.5 py-1 w-8 text-center text-slate-500">{{ Number(d) }}</th>
+              <th
+                v-for="d in dayCols"
+                :key="d"
+                class="border border-slate-200 px-0.5 py-1 min-w-[36px] text-center align-top"
+                :class="isSunday(selYear, selMonth, d) ? 'bg-indigo-50' : ''"
+              >
+                <button
+                  v-if="canEditAttendance"
+                  type="button"
+                  class="block w-full text-[10px] font-semibold rounded px-0.5 py-0.5"
+                  :class="isBulkDaySelected(d) ? 'bg-navy text-white' : 'text-slate-600 hover:bg-slate-100'"
+                  @click="toggleBulkDay(d)"
+                >
+                  {{ Number(d) }}
+                </button>
+                <span v-else class="block text-[10px] font-semibold text-slate-500 py-0.5">{{ Number(d) }}</span>
+                <button
+                  v-if="canEditAttendance"
+                  type="button"
+                  class="block w-full text-[9px] text-emerald-700 font-bold mt-0.5 hover:underline"
+                  title="Sab staff present"
+                  @click.stop="bulkPresentOneDay(d)"
+                >
+                  ✓all
+                </button>
+              </th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="s in store.activeStaff" :key="s.id">
               <td class="sticky left-0 z-10 bg-white border border-slate-200 px-2 py-2 font-semibold text-navy truncate max-w-[120px]">{{ s.name }}</td>
-              <td v-for="d in dayCols" :key="d" class="border border-slate-200 p-0.5">
+              <td
+                v-for="d in dayCols"
+                :key="d"
+                class="border border-slate-200 p-0.5"
+                :class="isSunday(selYear, selMonth, d) ? 'bg-indigo-50/50' : ''"
+              >
                 <button
+                  v-if="canEditAttendance"
                   type="button"
                   class="min-w-8 h-8 px-0.5 rounded text-[9px] font-bold flex items-center justify-center"
                   :class="dayCellClass(dayFor(s.id, d))"
-                  :disabled="currentRun?.status === 'paid'"
-                  @click="openDayModal(s.id, d)"
+                  @click="openDayActionMenu(s.id, d)"
                 >
                   {{ dayCellLabel(dayFor(s.id, d)) }}
                 </button>
+                <span
+                  v-else
+                  class="min-w-8 h-8 px-0.5 rounded text-[9px] font-bold flex items-center justify-center"
+                  :class="dayCellClass(dayFor(s.id, d))"
+                >
+                  {{ dayCellLabel(dayFor(s.id, d)) }}
+                </span>
               </td>
             </tr>
           </tbody>
@@ -530,6 +742,35 @@ onMounted(async () => {
           <button class="pp-btn pp-btn-ghost" @click="showStaffModal = false">Cancel</button>
           <button class="pp-btn pp-btn-primary" @click="saveStaff">Save</button>
         </div>
+      </div>
+    </PpModal>
+
+    <!-- Day action menu (confirm before save) -->
+    <PpModal
+      v-if="showDayActionModal"
+      :title="`${dayActionStaffName} — ${Number(dayActionDay)}`"
+      @close="showDayActionModal = false"
+    >
+      <p class="text-xs text-slate-500 mb-3">Kya mark karna hai? Har option par confirm aayega.</p>
+      <div class="grid grid-cols-1 gap-2">
+        <button type="button" class="pp-btn pp-btn-primary w-full justify-center" @click="applyStaffDayPreset('full')">
+          ✓ Present — 8 hr duty
+        </button>
+        <button type="button" class="pp-btn pp-btn-ghost w-full justify-center border-rose-200 text-rose-700" @click="applyStaffDayPreset('absent')">
+          ✗ Absent
+        </button>
+        <button type="button" class="pp-btn pp-btn-ghost w-full justify-center border-violet-200 text-violet-800" @click="applyStaffDayPreset('holiday')">
+          🏭 Holiday (paid)
+        </button>
+        <button type="button" class="pp-btn pp-btn-ghost w-full justify-center border-indigo-200 text-indigo-800" @click="applyStaffDayPreset('sunday')">
+          ☀ Weekly off (paid)
+        </button>
+        <button type="button" class="pp-btn pp-btn-ghost w-full justify-center" @click="openPartialFromActionMenu">
+          ⏱ Partial duty / OT…
+        </button>
+        <button type="button" class="pp-btn pp-btn-danger w-full justify-center !py-2" @click="applyStaffDayPreset('clear')">
+          Clear this day
+        </button>
       </div>
     </PpModal>
 
