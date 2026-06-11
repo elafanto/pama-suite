@@ -1,4 +1,10 @@
-import type { AttendanceMark, PayrollLine, Staff, StaffPayType } from '@/types/models'
+import type {
+  AttendanceMark,
+  DayAttendance,
+  PayrollLine,
+  Staff,
+  StaffPayType,
+} from '@/types/models'
 
 export const PAYROLL_WORKING_DAYS = 26
 export const PAYROLL_HOURS_PER_DAY = 8
@@ -32,77 +38,163 @@ export function currentPeriod(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
-export function cycleAttendanceMark(current: AttendanceMark | '' | undefined): AttendanceMark | '' {
-  const order: (AttendanceMark | '')[] = ['', 'P', 'A', 'H', 'L']
-  const idx = order.indexOf(current || '')
-  return order[(idx + 1) % order.length]
+export function emptyDay(): DayAttendance {
+  return { duty_hours: null, off_paid: false, ot_hours: 0 }
 }
 
-export function countAttendance(
-  attendance: Record<string, AttendanceMark | ''>,
+/** Off-duty hours when duty &lt; 8 (e.g. 6 hr duty → 2 hr off). */
+export function calcOffDutyHours(dutyHours: number | null): number {
+  if (dutyHours === null || dutyHours < 0) return 0
+  const duty = Math.min(PAYROLL_HOURS_PER_DAY, dutyHours)
+  return Math.max(0, PAYROLL_HOURS_PER_DAY - duty)
+}
+
+export function dayFromPreset(preset: 'full' | 'half' | 'absent' | 'leave'): DayAttendance {
+  if (preset === 'full') return { duty_hours: 8, off_paid: false, ot_hours: 0 }
+  if (preset === 'half') return { duty_hours: 4, off_paid: false, ot_hours: 0 }
+  if (preset === 'absent') return { duty_hours: 0, off_paid: false, ot_hours: 0 }
+  return { duty_hours: 0, off_paid: true, ot_hours: 0 }
+}
+
+/** Legacy P/A/H/L → day_hours. */
+export function markToDay(mark: AttendanceMark | '' | undefined): DayAttendance {
+  if (mark === 'P') return dayFromPreset('full')
+  if (mark === 'A') return dayFromPreset('absent')
+  if (mark === 'H') return dayFromPreset('half')
+  if (mark === 'L') return dayFromPreset('leave')
+  return emptyDay()
+}
+
+export function migrateMarksToDayHours(
+  marks: Record<string, AttendanceMark | ''> | undefined,
+): Record<string, DayAttendance> {
+  const out: Record<string, DayAttendance> = {}
+  if (!marks) return out
+  for (const [day, mark] of Object.entries(marks)) {
+    if (mark) out[day] = markToDay(mark)
+  }
+  return out
+}
+
+export function normalizeDayHours(line: Pick<PayrollLine, 'day_hours' | 'attendance'>): Record<string, DayAttendance> {
+  if (line.day_hours && Object.keys(line.day_hours).length > 0) return { ...line.day_hours }
+  return migrateMarksToDayHours(line.attendance)
+}
+
+export interface DayHourBreakdown {
+  paid: number
+  unpaid: number
+  duty: number
+  off: number
+  ot: number
+}
+
+export function breakdownDay(day: DayAttendance | undefined): DayHourBreakdown {
+  if (!day || day.duty_hours === null) {
+    return { paid: 0, unpaid: 0, duty: 0, off: 0, ot: 0 }
+  }
+
+  const dutyRaw = Math.max(0, Number(day.duty_hours) || 0)
+  const dutyRegular = Math.min(PAYROLL_HOURS_PER_DAY, dutyRaw)
+  const off = calcOffDutyHours(dutyRegular)
+  const offPaid = day.off_paid ? off : 0
+  const offUnpaid = day.off_paid ? 0 : off
+  const ot = Math.max(0, Number(day.ot_hours) || 0)
+
+  const paid = dutyRegular + offPaid + ot
+  const unpaid = offUnpaid
+
+  return { paid, unpaid, duty: dutyRegular, off, ot }
+}
+
+export function summarizeDayHours(
+  dayHours: Record<string, DayAttendance>,
   daysInPeriod: number,
-): { present: number; half: number; absent: number; leave: number; marked: number } {
-  let present = 0
-  let half = 0
-  let absent = 0
-  let leave = 0
-  let marked = 0
+): {
+  days_present: number
+  days_half: number
+  days_absent: number
+  days_leave: number
+  total_duty_hours: number
+  total_off_unpaid_hours: number
+  total_ot_hours: number
+  total_paid_hours: number
+} {
+  let days_present = 0
+  let days_half = 0
+  let days_absent = 0
+  let days_leave = 0
+  let total_duty_hours = 0
+  let total_off_unpaid_hours = 0
+  let total_ot_hours = 0
+  let total_paid_hours = 0
+
   for (let d = 1; d <= daysInPeriod; d++) {
     const key = String(d).padStart(2, '0')
-    const mark = attendance[key]
-    if (!mark) continue
-    marked++
-    if (mark === 'P') present++
-    else if (mark === 'H') half++
-    else if (mark === 'A') absent++
-    else if (mark === 'L') leave++
+    const day = dayHours[key]
+    if (!day || day.duty_hours === null) continue
+
+    const b = breakdownDay(day)
+    total_duty_hours += b.duty
+    total_off_unpaid_hours += b.unpaid
+    total_ot_hours += b.ot
+    total_paid_hours += b.paid
+
+    if (day.duty_hours === 0 && day.off_paid) days_leave++
+    else if (day.duty_hours === 0) days_absent++
+    else if (day.duty_hours >= PAYROLL_HOURS_PER_DAY) days_present++
+    else if (day.duty_hours >= PAYROLL_HOURS_PER_DAY / 2) days_half++
+    else days_half++
   }
-  return { present, half, absent, leave, marked }
+
+  return {
+    days_present,
+    days_half,
+    days_absent,
+    days_leave,
+    total_duty_hours,
+    total_off_unpaid_hours,
+    total_ot_hours,
+    total_paid_hours,
+  }
 }
 
-export function calcEarned(
+export function calcEarnedFromHours(
   payType: StaffPayType,
   monthlyAmount: number,
-  dailyWage: number,
   hourlyWage: number,
-  attendance: Record<string, AttendanceMark | ''>,
-  daysInPeriod: number,
-  otHours: number,
+  summary: ReturnType<typeof summarizeDayHours>,
 ): number {
-  const { present, half, leave } = countAttendance(attendance, daysInPeriod)
-  const dayUnits = present + leave + half * 0.5
-  const ot = Math.max(0, Number(otHours) || 0) * hourlyWage
+  const hourly = Math.max(0, hourlyWage)
+  const otPay = summary.total_ot_hours * hourly
+  const unpaidDeduction = summary.total_off_unpaid_hours * hourly
 
   if (payType === 'daily_wage') {
-    return ceilRupee(dayUnits * dailyWage + ot)
+    return ceilRupee(summary.total_paid_hours * hourly)
   }
 
-  const { absent, half: halfDays } = countAttendance(attendance, daysInPeriod)
   const base = Math.max(0, Number(monthlyAmount) || 0)
-  const deduction = absent * dailyWage + halfDays * dailyWage * 0.5
-  return Math.max(0, ceilRupee(base - deduction + ot))
+  const absentDeduction = summary.days_absent * ceilRupee(monthlyAmount / PAYROLL_WORKING_DAYS)
+  return Math.max(0, ceilRupee(base - absentDeduction - unpaidDeduction + otPay))
 }
 
 export function buildPayrollLine(
   staff: Staff,
-  attendance: Record<string, AttendanceMark | ''>,
+  dayHoursInput: Record<string, DayAttendance> | undefined,
+  legacyMarks: Record<string, AttendanceMark | ''> | undefined,
   year: number,
   month: number,
-  otHours: number,
   advanceDeduction: number,
   otherDeduction: number,
 ): PayrollLine {
   const dim = daysInMonth(year, month)
-  const counts = countAttendance(attendance, dim)
-  const earned = calcEarned(
-    staff.pay_type,
-    staff.monthly_amount,
-    staff.daily_wage,
-    staff.hourly_wage,
-    attendance,
-    dim,
-    otHours,
-  )
+  const day_hours =
+    dayHoursInput && Object.keys(dayHoursInput).length > 0
+      ? { ...dayHoursInput }
+      : migrateMarksToDayHours(legacyMarks)
+
+  const summary = summarizeDayHours(day_hours, dim)
+  const earned = calcEarnedFromHours(staff.pay_type, staff.monthly_amount, staff.hourly_wage, summary)
   const adv = Math.min(Math.max(0, advanceDeduction), earned)
   const other = Math.min(Math.max(0, otherDeduction), Math.max(0, earned - adv))
   const net = Math.max(0, earned - adv - other)
@@ -114,12 +206,15 @@ export function buildPayrollLine(
     monthly_amount: staff.monthly_amount,
     daily_wage: staff.daily_wage,
     hourly_wage: staff.hourly_wage,
-    attendance: { ...attendance },
-    days_present: counts.present + counts.leave,
-    days_half: counts.half,
-    days_absent: counts.absent,
-    days_leave: counts.leave,
-    ot_hours: Math.max(0, Number(otHours) || 0),
+    day_hours,
+    days_present: summary.days_present,
+    days_half: summary.days_half,
+    days_absent: summary.days_absent,
+    days_leave: summary.days_leave,
+    total_duty_hours: summary.total_duty_hours,
+    total_off_unpaid_hours: summary.total_off_unpaid_hours,
+    total_ot_hours: summary.total_ot_hours,
+    total_paid_hours: summary.total_paid_hours,
     earned,
     advance_deduction: adv,
     other_deduction: other,
@@ -137,4 +232,23 @@ export function sumPayrollLines(lines: PayrollLine[]) {
     }),
     { total_earned: 0, total_advance: 0, total_other: 0, total_net: 0 },
   )
+}
+
+/** Short label for attendance grid cell. */
+export function dayCellLabel(day: DayAttendance | undefined): string {
+  if (!day || day.duty_hours === null) return '·'
+  const off = calcOffDutyHours(day.duty_hours)
+  const parts: string[] = [String(day.duty_hours)]
+  if (off > 0) parts.push(day.off_paid ? '✓' : '−')
+  if (day.ot_hours > 0) parts.push(`+${day.ot_hours}`)
+  return parts.join('')
+}
+
+export function dayCellClass(day: DayAttendance | undefined): string {
+  if (!day || day.duty_hours === null) return 'bg-slate-100 text-slate-400'
+  if (day.duty_hours === 0 && day.off_paid) return 'bg-sky-500 text-white'
+  if (day.duty_hours === 0) return 'bg-rose-500 text-white'
+  if (day.duty_hours >= PAYROLL_HOURS_PER_DAY) return 'bg-emerald-500 text-white'
+  if (day.off_paid) return 'bg-teal-500 text-white'
+  return 'bg-amber-400 text-navy'
 }

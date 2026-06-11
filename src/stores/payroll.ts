@@ -9,6 +9,7 @@ import {
   buildPayrollLine,
   currentPeriod,
   deriveWageRates,
+  normalizeDayHours,
   periodLabel,
   sumPayrollLines,
 } from '@/services/payrollCalc'
@@ -141,7 +142,7 @@ export const usePayrollStore = defineStore('payroll', () => {
 
     const [y, m] = period.split('-').map(Number)
     const lines: PayrollLine[] = activeStaff.value.map((s) =>
-      buildPayrollLine(s, {}, y, m, 0, openAdvanceTotal(s.id), 0),
+      buildPayrollLine(s, {}, undefined, y, m, openAdvanceTotal(s.id), 0),
     )
     const totals = sumPayrollLines(lines)
     const rec = await runRepo.create({
@@ -166,7 +167,7 @@ export const usePayrollStore = defineStore('payroll', () => {
   async function updateRunLine(
     period: string,
     staffId: string,
-    patch: Partial<Pick<PayrollLine, 'attendance' | 'ot_hours' | 'other_deduction'>>,
+    patch: Partial<Pick<PayrollLine, 'day_hours' | 'other_deduction'>>,
   ) {
     const run = await ensureRun(period)
     if (run.status === 'paid') return { error: 'Month already paid' }
@@ -176,10 +177,9 @@ export const usePayrollStore = defineStore('payroll', () => {
 
     const lines = run.lines.map((line) => {
       if (line.staff_id !== staffId) return line
-      const attendance = patch.attendance ?? line.attendance
-      const ot = patch.ot_hours ?? line.ot_hours
+      const day_hours = patch.day_hours ?? normalizeDayHours(line)
       const other = patch.other_deduction ?? line.other_deduction
-      return buildPayrollLine(staff, attendance, run.year, run.month, ot, openAdvanceTotal(staffId), other)
+      return buildPayrollLine(staff, day_hours, line.attendance, run.year, run.month, openAdvanceTotal(staffId), other)
     })
 
     const totals = sumPayrollLines(lines)
@@ -204,10 +204,10 @@ export const usePayrollStore = defineStore('payroll', () => {
       const existing = run.lines.find((l) => l.staff_id === s.id)
       return buildPayrollLine(
         s,
-        existing?.attendance || {},
+        existing ? normalizeDayHours(existing) : {},
+        existing?.attendance,
         run.year,
         run.month,
-        existing?.ot_hours || 0,
         openAdvanceTotal(s.id),
         existing?.other_deduction || 0,
       )

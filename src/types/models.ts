@@ -231,6 +231,16 @@ export interface DashboardTodo extends BaseRecord {
 /** Payroll — staff master, attendance, salary (Phase 1). */
 export type StaffPayType = 'monthly' | 'daily_wage'
 export type AttendanceMark = 'P' | 'A' | 'H' | 'L'
+
+/** Per-day hours: duty (0–8+), off-duty below 8 hr paid/unpaid, overtime. */
+export interface DayAttendance {
+  /** Hours on duty; null = day not marked. */
+  duty_hours: number | null
+  /** Off-duty hours (8 − duty) — paid or unpaid. */
+  off_paid: boolean
+  /** Overtime hours (beyond 8 hr day). */
+  ot_hours: number
+}
 export type PayrollRunStatus = 'draft' | 'finalized' | 'paid'
 export type PayrollPaymentMode = 'cash' | 'transfer'
 
@@ -269,13 +279,18 @@ export interface PayrollLine {
   monthly_amount: number
   daily_wage: number
   hourly_wage: number
-  /** Day key "01".."31" → attendance mark */
-  attendance: Record<string, AttendanceMark | ''>
+  /** Day key "01".."31" → hour breakdown */
+  day_hours: Record<string, DayAttendance>
+  /** @deprecated legacy marks — migrated to day_hours on load */
+  attendance?: Record<string, AttendanceMark | ''>
   days_present: number
   days_half: number
   days_absent: number
   days_leave: number
-  ot_hours: number
+  total_duty_hours: number
+  total_off_unpaid_hours: number
+  total_ot_hours: number
+  total_paid_hours: number
   earned: number
   advance_deduction: number
   other_deduction: number

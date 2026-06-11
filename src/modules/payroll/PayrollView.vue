@@ -3,14 +3,20 @@ import { ref, computed, reactive, onMounted, watch } from 'vue'
 import PpModal from '@/components/PpModal.vue'
 import { usePayrollStore, type NewStaff } from '@/stores/payroll'
 import { useFirmStore } from '@/stores/firm'
-import type { AttendanceMark, PayrollPaymentMode, Staff, StaffPayType } from '@/types/models'
+import type { DayAttendance, PayrollPaymentMode, Staff, StaffPayType } from '@/types/models'
 import {
   MAX_STAFF,
+  PAYROLL_HOURS_PER_DAY,
   PAYROLL_WORKING_DAYS,
+  calcOffDutyHours,
   currentPeriod,
-  cycleAttendanceMark,
+  dayCellClass,
+  dayCellLabel,
+  dayFromPreset,
   daysInMonth,
   deriveWageRates,
+  emptyDay,
+  normalizeDayHours,
   periodLabel,
 } from '@/services/payrollCalc'
 
@@ -49,6 +55,17 @@ const advanceForm = reactive({
 const payslipStaffId = ref('')
 const paymentMode = ref<PayrollPaymentMode>('transfer')
 const paymentDate = ref(new Date().toISOString().slice(0, 10))
+
+const showDayModal = ref(false)
+const dayModalStaffId = ref('')
+const dayModalDay = ref('')
+const dayModalStaffName = ref('')
+const dayForm = reactive<DayAttendance>(emptyDay())
+
+const dayModalOffHours = computed(() => {
+  if (dayForm.duty_hours === null) return 0
+  return calcOffDutyHours(dayForm.duty_hours)
+})
 
 const wagePreview = computed(() => deriveWageRates(staffForm.monthly_amount))
 
@@ -130,29 +147,46 @@ function lineFor(staffId: string) {
   return currentRun.value?.lines.find((l) => l.staff_id === staffId)
 }
 
-async function tapAttendance(staffId: string, day: string) {
-  if (currentRun.value?.status === 'paid') return alert('Month already paid — attendance locked.')
+function dayFor(staffId: string, day: string): DayAttendance | undefined {
   const line = lineFor(staffId)
-  const att = { ...(line?.attendance || {}) }
-  att[day] = cycleAttendanceMark(att[day])
-  await store.updateRunLine(period.value, staffId, { attendance: att })
+  if (!line) return undefined
+  const hours = normalizeDayHours(line)
+  return hours[day]
 }
 
-function markClass(mark: AttendanceMark | '' | undefined): string {
-  if (mark === 'P') return 'bg-emerald-500 text-white'
-  if (mark === 'A') return 'bg-rose-500 text-white'
-  if (mark === 'H') return 'bg-amber-400 text-navy'
-  if (mark === 'L') return 'bg-sky-500 text-white'
-  return 'bg-slate-100 text-slate-400'
+function openDayModal(staffId: string, day: string) {
+  if (currentRun.value?.status === 'paid') return alert('Month already paid — attendance locked.')
+  const staff = store.activeStaff.find((s) => s.id === staffId)
+  const existing = dayFor(staffId, day)
+  dayModalStaffId.value = staffId
+  dayModalDay.value = day
+  dayModalStaffName.value = staff?.name || ''
+  Object.assign(dayForm, existing ? { ...existing } : emptyDay())
+  showDayModal.value = true
 }
 
-function markLabel(mark: AttendanceMark | '' | undefined): string {
-  return mark || '·'
+function applyDayPreset(preset: 'full' | 'half' | 'absent' | 'leave') {
+  Object.assign(dayForm, dayFromPreset(preset))
 }
 
-async function setOt(staffId: string, hours: number) {
-  if (currentRun.value?.status === 'paid') return
-  await store.updateRunLine(period.value, staffId, { ot_hours: Math.max(0, hours) })
+async function saveDayModal() {
+  const line = lineFor(dayModalStaffId.value)
+  const hours = line ? { ...normalizeDayHours(line) } : {}
+  hours[dayModalDay.value] = {
+    duty_hours: dayForm.duty_hours === null ? null : Math.max(0, Number(dayForm.duty_hours) || 0),
+    off_paid: dayForm.off_paid,
+    ot_hours: Math.max(0, Number(dayForm.ot_hours) || 0),
+  }
+  await store.updateRunLine(period.value, dayModalStaffId.value, { day_hours: hours })
+  showDayModal.value = false
+}
+
+async function clearDayModal() {
+  const line = lineFor(dayModalStaffId.value)
+  const hours = line ? { ...normalizeDayHours(line) } : {}
+  delete hours[dayModalDay.value]
+  await store.updateRunLine(period.value, dayModalStaffId.value, { day_hours: hours })
+  showDayModal.value = false
 }
 
 async function setOtherDeduction(staffId: string, amount: number) {
@@ -272,8 +306,9 @@ onMounted(async () => {
 
     <!-- ATTENDANCE -->
     <section v-else-if="tab === 'attendance'" class="space-y-3">
-      <p class="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-        Tap cell to cycle: <strong>P</strong> Present · <strong>A</strong> Absent · <strong>H</strong> Half · <strong>L</strong> Leave · clear
+      <p class="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 leading-relaxed">
+        <strong>Tap day</strong> → duty hours (0–8), off-duty auto (e.g. 6 hr duty = 2 hr off), choose <strong>paid/unpaid</strong> off, + <strong>OT</strong>.
+        Cell: <span class="font-mono">6✓</span> = 6 hr + paid off · <span class="font-mono">6−</span> = unpaid off · <span class="font-mono">8+2</span> = OT
       </p>
       <div v-if="store.activeStaff.length === 0" class="pp-card p-6 text-center text-slate-400">Add staff first.</div>
       <div v-else class="overflow-x-auto -mx-4 px-4">
@@ -290,12 +325,12 @@ onMounted(async () => {
               <td v-for="d in dayCols" :key="d" class="border border-slate-200 p-0.5">
                 <button
                   type="button"
-                  class="w-8 h-8 rounded text-[10px] font-bold flex items-center justify-center"
-                  :class="markClass(lineFor(s.id)?.attendance[d])"
+                  class="min-w-8 h-8 px-0.5 rounded text-[9px] font-bold flex items-center justify-center"
+                  :class="dayCellClass(dayFor(s.id, d))"
                   :disabled="currentRun?.status === 'paid'"
-                  @click="tapAttendance(s.id, d)"
+                  @click="openDayModal(s.id, d)"
                 >
-                  {{ markLabel(lineFor(s.id)?.attendance[d]) }}
+                  {{ dayCellLabel(dayFor(s.id, d)) }}
                 </button>
               </td>
             </tr>
@@ -335,8 +370,10 @@ onMounted(async () => {
             <thead class="bg-slate-50 text-xs text-slate-500 uppercase">
               <tr>
                 <th class="text-left px-3 py-2">Staff</th>
-                <th class="text-right px-2 py-2">Days</th>
+                <th class="text-right px-2 py-2">Duty h</th>
+                <th class="text-right px-2 py-2">Off unpaid</th>
                 <th class="text-right px-2 py-2">OT h</th>
+                <th class="text-right px-2 py-2">Paid h</th>
                 <th class="text-right px-2 py-2">Earned</th>
                 <th class="text-right px-2 py-2">Adv</th>
                 <th class="text-right px-2 py-2">Other</th>
@@ -346,18 +383,10 @@ onMounted(async () => {
             <tbody>
               <tr v-for="line in currentRun.lines" :key="line.staff_id" class="border-t border-slate-100">
                 <td class="px-3 py-2 font-semibold">{{ line.staff_name }}</td>
-                <td class="px-2 py-2 text-right text-xs">{{ line.days_present }}+{{ line.days_half }}½</td>
-                <td class="px-2 py-2 text-right">
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.5"
-                    class="pp-input !w-16 !py-1 !text-right text-xs"
-                    :value="line.ot_hours"
-                    :disabled="currentRun.status === 'paid'"
-                    @change="setOt(line.staff_id, Number(($event.target as HTMLInputElement).value))"
-                  />
-                </td>
+                <td class="px-2 py-2 text-right text-xs">{{ line.total_duty_hours ?? 0 }}</td>
+                <td class="px-2 py-2 text-right text-xs text-rose-600">{{ line.total_off_unpaid_hours ?? 0 }}</td>
+                <td class="px-2 py-2 text-right text-xs">{{ line.total_ot_hours ?? 0 }}</td>
+                <td class="px-2 py-2 text-right text-xs font-semibold">{{ line.total_paid_hours ?? 0 }}</td>
                 <td class="px-2 py-2 text-right">₹{{ line.earned.toLocaleString('en-IN') }}</td>
                 <td class="px-2 py-2 text-right text-amber-700">₹{{ line.advance_deduction.toLocaleString('en-IN') }}</td>
                 <td class="px-2 py-2 text-right">
@@ -434,8 +463,11 @@ onMounted(async () => {
         <div class="space-y-1 text-sm mb-4">
           <div><span class="text-slate-500">Employee:</span> <strong>{{ payslipLine.staff_name }}</strong></div>
           <div><span class="text-slate-500">Type:</span> {{ payslipLine.pay_type === 'monthly' ? 'Monthly' : 'Daily wage' }}</div>
-          <div><span class="text-slate-500">Present days:</span> {{ payslipLine.days_present }} (half: {{ payslipLine.days_half }}, absent: {{ payslipLine.days_absent }})</div>
-          <div v-if="payslipLine.ot_hours"><span class="text-slate-500">OT hours:</span> {{ payslipLine.ot_hours }}</div>
+          <div><span class="text-slate-500">Duty hours:</span> {{ payslipLine.total_duty_hours ?? 0 }}</div>
+          <div><span class="text-slate-500">Off unpaid:</span> {{ payslipLine.total_off_unpaid_hours ?? 0 }} hr</div>
+          <div><span class="text-slate-500">OT hours:</span> {{ payslipLine.total_ot_hours ?? 0 }}</div>
+          <div><span class="text-slate-500">Paid hours:</span> {{ payslipLine.total_paid_hours ?? 0 }}</div>
+          <div class="text-xs text-slate-400">Days: {{ payslipLine.days_present }} present · {{ payslipLine.days_half }} partial · {{ payslipLine.days_absent }} absent · {{ payslipLine.days_leave }} leave</div>
         </div>
         <table class="w-full text-sm border-t border-slate-200">
           <tbody>
@@ -494,6 +526,75 @@ onMounted(async () => {
         <div class="flex justify-end gap-2 pt-2">
           <button class="pp-btn pp-btn-ghost" @click="showStaffModal = false">Cancel</button>
           <button class="pp-btn pp-btn-primary" @click="saveStaff">Save</button>
+        </div>
+      </div>
+    </PpModal>
+
+    <!-- Day attendance modal -->
+    <PpModal
+      v-if="showDayModal"
+      :title="`${dayModalStaffName} — ${Number(dayModalDay)} ${periodLabel(period)}`"
+      @close="showDayModal = false"
+    >
+      <div class="space-y-4">
+        <div class="flex flex-wrap gap-2">
+          <button type="button" class="pp-btn pp-btn-ghost !py-1.5 text-xs" @click="applyDayPreset('full')">Full 8h</button>
+          <button type="button" class="pp-btn pp-btn-ghost !py-1.5 text-xs" @click="applyDayPreset('half')">Half 4h</button>
+          <button type="button" class="pp-btn pp-btn-ghost !py-1.5 text-xs" @click="applyDayPreset('absent')">Absent</button>
+          <button type="button" class="pp-btn pp-btn-ghost !py-1.5 text-xs" @click="applyDayPreset('leave')">Leave (paid)</button>
+        </div>
+
+        <div>
+          <label class="pp-label">Duty hours (0–{{ PAYROLL_HOURS_PER_DAY }}+)</label>
+          <input
+            v-model.number="dayForm.duty_hours"
+            type="number"
+            min="0"
+            max="16"
+            step="0.5"
+            class="pp-input text-lg font-bold"
+            placeholder="e.g. 6"
+          />
+          <p class="text-xs text-slate-500 mt-1">8 ghante standard din — jitni duty, utna yahan.</p>
+        </div>
+
+        <div
+          v-if="dayForm.duty_hours !== null && dayModalOffHours > 0"
+          class="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2"
+        >
+          <div class="text-sm">
+            <span class="text-slate-500">Off duty (auto):</span>
+            <strong class="text-navy ml-1">{{ dayModalOffHours }} hr</strong>
+            <span class="text-slate-400 text-xs ml-1">({{ PAYROLL_HOURS_PER_DAY }} − {{ dayForm.duty_hours }})</span>
+          </div>
+          <label class="flex items-center gap-3 cursor-pointer">
+            <input v-model="dayForm.off_paid" type="checkbox" class="w-5 h-5" />
+            <span class="text-sm">
+              <strong>Off-duty hours paid</strong>
+              <span class="block text-xs text-slate-500">Unchecked = unpaid (salary se cut)</span>
+            </span>
+          </label>
+        </div>
+
+        <div>
+          <label class="pp-label">Overtime (OT) hours</label>
+          <input
+            v-model.number="dayForm.ot_hours"
+            type="number"
+            min="0"
+            step="0.5"
+            class="pp-input"
+            placeholder="Extra beyond 8 hr day"
+          />
+          <p class="text-xs text-emerald-700 mt-1">OT hamesha paid — hourly rate se.</p>
+        </div>
+
+        <div class="flex justify-between gap-2 pt-2">
+          <button type="button" class="pp-btn pp-btn-danger !py-1.5" @click="clearDayModal">Clear day</button>
+          <div class="flex gap-2">
+            <button type="button" class="pp-btn pp-btn-ghost" @click="showDayModal = false">Cancel</button>
+            <button type="button" class="pp-btn pp-btn-primary" @click="saveDayModal">Save</button>
+          </div>
         </div>
       </div>
     </PpModal>
