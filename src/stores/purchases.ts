@@ -14,6 +14,10 @@ import {
   purchaseReelStockChanged,
   reversePurchaseReels,
 } from '@/services/production'
+import {
+  restoreAttachmentsForEntity,
+  softDeleteAttachmentsForEntity,
+} from '@/services/documentAttachments'
 import type { Purchase } from '@/types/models'
 
 const repo = createRepo<Purchase>(db.purchases)
@@ -87,6 +91,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
     if (existing) {
       await assertPurchaseReelsHaveNoConsumptionHistory(id, 'delete')
     }
+    await softDeleteAttachmentsForEntity('purchase', id, existing?.firm_id)
     await repo.remove(id)
     await reversePurchaseReels(id)
     const accounting = useAccountingStore()
@@ -141,6 +146,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
   async function restore(id: string) {
     const rec = await repo.restore(id)
     if (rec) {
+      await restoreAttachmentsForEntity('purchase', id, rec.firm_id)
       const accounting = useAccountingStore()
       await accounting.postPurchaseToLedger(rec)
       await syncPaymentVoucher(rec)

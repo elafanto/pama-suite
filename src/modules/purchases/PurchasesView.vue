@@ -10,6 +10,14 @@ import { useSettingsStore } from '@/stores/settings'
 import PpModal from '@/components/PpModal.vue'
 import AiScanPanel from '@/components/AiScanPanel.vue'
 import { fileToBase64, scanPurchaseBillsPdf, type ScanResult } from '@/services/aiScanner'
+import {
+  attachDocumentFromFile,
+  openEntityDocument,
+  downloadEntityDocument,
+  shareEntityDocumentWhatsApp,
+  getAttachmentForEntity,
+} from '@/services/documentAttachments'
+import { db } from '@/data/db'
 import type { GstType, PaperType, PayStatus, Purchase, PurchaseItemLine } from '@/types/models'
 
 // Stores
@@ -91,7 +99,13 @@ const BULK_SCAN_ACCEPT = 'application/pdf,.pdf,image/*'
 const paperTypes: PaperType[] = ['KRAFT', 'DUPLEX']
 
 const bulkRows = ref<BulkPurchaseRow[]>([])
-const scannedBills = ref<ScanResult[]>([])
+type ScannedBillWithFile = ScanResult & { _sourceFile?: File | null }
+const scannedBills = ref<ScannedBillWithFile[]>([])
+const pendingScanFile = ref<File | null>(null)
+const purchaseHasDoc = ref<Record<string, boolean>>({})
+const attachTargetPurchase = ref<Purchase | null>(null)
+const attachBusy = ref(false)
+const attachFileInput = ref<HTMLInputElement | null>(null)
 
 function newBulkRow(): BulkPurchaseRow {
   const today = new Date().toISOString().slice(0, 10)
@@ -165,11 +179,49 @@ function removeRow(idx: number) {
 
 function resetForm() {
   editingId.value = null
+  pendingScanFile.value = null
   Object.assign(form, initialFormState())
   addRow()
 }
 
-function applyScan(result: ScanResult) {
+async function loadPurchaseDocFlags() {
+  const firmId = firmStore.activeFirmId
+  const rows = await db.document_attachments
+    .where('firm_id')
+    .equals(firmId)
+    .filter((r) => !r.is_deleted && r.entity_type === 'purchase')
+    .toArray()
+  const map: Record<string, boolean> = {}
+  for (const row of rows) map[row.entity_id] = true
+  purchaseHasDoc.value = map
+}
+
+async function tryAttachPurchaseFile(
+  purchase: Purchase,
+  file: File | null | undefined,
+  reuseStoragePath?: string,
+): Promise<string | undefined> {
+  if (!file) return reuseStoragePath
+  const attached = await attachDocumentFromFile({
+    file,
+    entityType: 'purchase',
+    entityId: purchase.id,
+    partyName: purchase.supplier_name,
+    docNo: purchase.bill_no,
+    docDate: purchase.date,
+    firmId: purchase.firm_id,
+    reuseStoragePath,
+  })
+  if (attached) purchaseHasDoc.value[purchase.id] = true
+  return attached?.storage_path || reuseStoragePath
+}
+
+function onScanFailed() {
+  pendingScanFile.value = null
+}
+
+function applyScan(result: ScanResult, file: File) {
+  pendingScanFile.value = file
   if (result.supplierName) form.supplier_name = result.supplierName
   if (result.billNo) form.bill_no = result.billNo
   if (result.date) form.date = result.date
@@ -197,6 +249,7 @@ watch(() => firmStore.activeFirmId, () => {
   purchaseStore.load()
   partyStore.load()
   itemStore.load()
+  loadPurchaseDocFlags()
 })
 
 // Autocomplete supplier details
@@ -410,7 +463,7 @@ async function ensurePurchaseItemLine(it: NonNullable<ScanResult['items']>[numbe
   }
 }
 
-async function saveScannedBill(bill: ScanResult) {
+async function saveScannedBill(bill: ScannedBillWithFile, reuseStoragePath?: string): Promise<{ purchase: Purchase; storagePath?: string }> {
   const vendor = await partyStore.ensure((bill.supplierName || '').trim(), 'vendor', {
     gst: bill.gstin,
     addr: bill.address,
@@ -429,7 +482,7 @@ async function saveScannedBill(bill: ScanResult) {
   }
   if (items.length === 0) throw new Error(`No valid items in bill ${bill.billNo || ''}`)
   const totals = calcPurchaseTotals(items)
-  await purchaseStore.add({
+  const purchase = await purchaseStore.add({
     supplier_name: vendor.name,
     supplier_id: vendor.id,
     bill_no: (bill.billNo || '').trim(),
@@ -448,6 +501,8 @@ async function saveScannedBill(bill: ScanResult) {
     pay_status: 'UNPAID',
     notes: bill.grandTotal ? `AI scan total: ₹${bill.grandTotal}` : 'AI multi-bill import',
   })
+  const storagePath = await tryAttachPurchaseFile(purchase, bill._sourceFile, reuseStoragePath)
+  return { purchase, storagePath }
 }
 
 // Save purchase invoice
@@ -529,14 +584,19 @@ async function savePurchase() {
       await purchaseStore.update(editingId.value, purchaseData)
       alert('Purchase bill updated successfully!')
     } else {
-      await purchaseStore.add(purchaseData)
-      alert('Purchase bill saved successfully!')
+      const purchase = await purchaseStore.add(purchaseData)
+      const attached = await tryAttachPurchaseFile(purchase, pendingScanFile.value)
+      pendingScanFile.value = null
+      alert(attached
+        ? 'Purchase bill saved + document archived (compressed & cloud).'
+        : 'Purchase bill saved successfully!')
     }
 
     resetForm()
     activeTab.value = 'history'
   } catch (err: any) {
     alert(err?.message || 'Purchase bill save failed')
+    // pendingScanFile retained so user can fix form and retry attach on save
   }
 }
 
@@ -640,7 +700,7 @@ async function scanBulkPurchaseFiles(e: Event) {
     message: 'Waiting',
   }))
 
-  const extractedBills: ScanResult[] = []
+  const extractedBills: ScannedBillWithFile[] = []
   try {
     for (const [idx, file] of files.entries()) {
       bulkScanFileStatuses.value[idx] = {
@@ -655,7 +715,9 @@ async function scanBulkPurchaseFiles(e: Event) {
       try {
         const { base64, mime } = await fileToBase64(file, { allowImages: true, allowPdf: true })
         const result = await scanPurchaseBillsPdf(settingsStore.geminiKey, base64, mime)
-        const bills = (result.bills || []).filter((b) => b.supplierName || b.billNo || b.items?.length)
+        const bills = (result.bills || [])
+          .filter((b) => b.supplierName || b.billNo || b.items?.length)
+          .map((b) => ({ ...b, _sourceFile: file }))
         extractedBills.push(...bills)
         scannedBills.value = [...extractedBills]
         bulkScanFileStatuses.value[idx] = {
@@ -717,9 +779,15 @@ async function saveScannedBills() {
   }
 
   let saved = 0
+  const fileStoragePaths = new Map<File, string>()
   try {
     for (const bill of bills) {
-      await saveScannedBill(bill)
+      const sourceFile = bill._sourceFile || null
+      const reusePath = sourceFile ? fileStoragePaths.get(sourceFile) : undefined
+      const { storagePath } = await saveScannedBill(bill, reusePath)
+      if (sourceFile && storagePath && !fileStoragePaths.has(sourceFile)) {
+        fileStoragePaths.set(sourceFile, storagePath)
+      }
       saved++
     }
     scannedBills.value = []
@@ -754,10 +822,40 @@ function editPurchase(pur: Purchase) {
 }
 
 // Delete purchase bill
+function openAttachModal(pur: Purchase) {
+  attachTargetPurchase.value = pur
+  attachFileInput.value?.click()
+}
+
+async function onAttachFile(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  const pur = attachTargetPurchase.value
+  if (!file || !pur) return
+  attachBusy.value = true
+  try {
+    await tryAttachPurchaseFile(pur, file)
+    attachTargetPurchase.value = null
+    alert('Bill file attached (compressed + cloud queue).')
+  } catch (err: unknown) {
+    alert(err instanceof Error ? err.message : 'Attach failed')
+  } finally {
+    attachBusy.value = false
+    input.value = ''
+  }
+}
+
+async function showDocInfo(pur: Purchase) {
+  const rec = await getAttachmentForEntity('purchase', pur.id)
+  if (!rec) return
+  alert(`Stored: ${rec.stored_name}\nOriginal: ${rec.original_name}\nSize: ${Math.round(rec.size_bytes / 1024)} KB\nCloud: ${rec.upload_status}`)
+}
+
 async function deletePurchase(pur: Purchase) {
-  if (confirm(`Are you sure you want to delete purchase bill ${pur.bill_no}? This will also delete its accounting ledger entries and purchase stock movements.`)) {
+  if (confirm(`Delete purchase bill ${pur.bill_no}? Ledger/stock reverse hoga; scan file Recycle Bin me jayegi.`)) {
     try {
       await purchaseStore.remove(pur.id)
+      delete purchaseHasDoc.value[pur.id]
       alert('Purchase bill deleted.')
     } catch (err: any) {
       alert(err?.message || 'Purchase bill delete failed')
@@ -901,14 +999,14 @@ async function moveSelectedPurchases() {
   }
 }
 
-onMounted(() => {
-  firmStore.load()
-  purchaseStore.load()
-  partyStore.load()
-  itemStore.load()
+onMounted(async () => {
+  await firmStore.load()
+  await Promise.all([purchaseStore.load(), partyStore.load(), itemStore.load()])
+  await loadPurchaseDocFlags()
   if (form.items.length === 0) addRow()
   if (bulkRows.value.length === 0) addBulkRow()
 })
+
 </script>
 
 <template>
@@ -948,7 +1046,11 @@ onMounted(() => {
     <div v-if="activeTab === 'new'" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <!-- Main Form -->
       <div class="lg:col-span-2 space-y-6">
-        <AiScanPanel @scanned="applyScan" />
+        <AiScanPanel @scanned="applyScan" @scan-failed="onScanFailed" />
+        <input ref="attachFileInput" type="file" accept="image/*,application/pdf" class="sr-only" :disabled="attachBusy" @change="onAttachFile" />
+        <p v-if="pendingScanFile" class="text-xs text-emerald-700 -mt-2 mb-2">
+          📎 {{ pendingScanFile.name }} — bill save par auto-compress + Supabase par archive hogi
+        </p>
         <div class="pp-card p-6 space-y-4">
           <h2 class="text-md font-semibold text-slate-800 border-b pb-2 mb-4">Supplier & Document Details</h2>
           
@@ -1692,7 +1794,43 @@ onMounted(() => {
                 </span>
               </td>
               <td class="py-3 px-4 text-center">
-                <div class="flex justify-center gap-2">
+                <div class="flex justify-center gap-2 flex-wrap">
+                  <button
+                    v-if="!purchaseHasDoc[pur.id]"
+                    type="button"
+                    class="pp-btn pp-btn-ghost px-2 py-1 text-xs text-amber-700 border border-amber-200 bg-amber-50"
+                    title="Bill saved but file missing"
+                    :disabled="attachBusy"
+                    @click="openAttachModal(pur)"
+                  >📎 Attach now</button>
+                  <button
+                    v-if="purchaseHasDoc[pur.id]"
+                    type="button"
+                    class="pp-btn pp-btn-ghost px-2 py-1 text-xs"
+                    title="View saved bill file"
+                    @click="openEntityDocument('purchase', pur.id)"
+                  >📎 View</button>
+                  <button
+                    v-if="purchaseHasDoc[pur.id]"
+                    type="button"
+                    class="pp-btn pp-btn-ghost px-2 py-1 text-xs"
+                    title="Original filename & metadata"
+                    @click="showDocInfo(pur)"
+                  >ℹ️</button>
+                  <button
+                    v-if="purchaseHasDoc[pur.id]"
+                    type="button"
+                    class="pp-btn pp-btn-ghost px-2 py-1 text-xs"
+                    title="Download renamed bill file"
+                    @click="downloadEntityDocument('purchase', pur.id)"
+                  >⬇️</button>
+                  <button
+                    v-if="purchaseHasDoc[pur.id]"
+                    type="button"
+                    class="pp-btn pp-btn-ghost px-2 py-1 text-xs"
+                    title="WhatsApp share renamed file"
+                    @click="shareEntityDocumentWhatsApp('purchase', pur.id)"
+                  >📤</button>
                   <button
                     v-if="pur.pay_status !== 'PAID'"
                     @click="payVendorRtgs(pur)"

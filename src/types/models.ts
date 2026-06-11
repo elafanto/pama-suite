@@ -228,6 +228,27 @@ export interface DashboardTodo extends BaseRecord {
   completed: boolean
 }
 
+export type DocumentEntityType = 'purchase' | 'invoice' | 'voucher'
+export type DocumentUploadStatus = 'pending' | 'uploaded' | 'failed'
+
+export interface DocumentAttachment extends BaseRecord {
+  firm_id: string
+  entity_type: DocumentEntityType
+  entity_id: string
+  party_name: string
+  doc_no: string
+  doc_date: string
+  storage_path: string
+  stored_name: string
+  virtual_path: string
+  mime_type: string
+  size_bytes: number
+  original_name: string
+  upload_status: DocumentUploadStatus
+  upload_error?: string
+  has_local_blob?: boolean
+}
+
 export type ReelColor = 'NS' | 'GY' | 'NATURAL_BROWN' | string
 export type ReelStatus = 'active' | 'consumed'
 export type PaperType = 'KRAFT' | 'DUPLEX'

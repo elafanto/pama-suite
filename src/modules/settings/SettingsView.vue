@@ -11,6 +11,8 @@ import { getSyncDiagnostics, runSync, runFullPullFromCloud, runFullPushToCloud }
 import { usePwaInstall } from '@/composables/usePwaInstall'
 import type { Firm } from '@/types/models'
 import { formatGstin } from '@/services/gst'
+import { getDocumentStorageStats } from '@/services/documentAttachments'
+import { exportGstAuditZip, listRecentIndianFYLabels } from '@/services/documentAuditExport'
 
 const firmStore = useFirmStore()
 const auth = useAuthStore()
@@ -31,6 +33,11 @@ const supabaseKeyMsg = ref('')
 const supabaseKeyOk = ref(false)
 const includeSensitiveBackup = ref(false)
 const syncDiag = ref(getSyncDiagnostics())
+const docStats = ref({ attachmentCount: 0, localBytes: 0, pendingUploads: 0, shouldWarnMobile: false })
+const fyOptions = listRecentIndianFYLabels(6)
+const selectedFyLabel = ref(fyOptions[0].label)
+const auditExportBusy = ref(false)
+const auditExportMsg = ref('')
 
 const MAX_SIGNATURE_BYTES = 512 * 1024
 
@@ -273,12 +280,39 @@ async function doSignOut() {
   refreshSyncDiag()
 }
 
-onMounted(() => {
-  firmStore.load()
+function formatDocBytes(bytes: number) {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+async function refreshDocStats() {
+  docStats.value = await getDocumentStorageStats()
+}
+
+async function doGstAuditExport() {
+  auditExportBusy.value = true
+  auditExportMsg.value = ''
+  try {
+    const fy = fyOptions.find((f) => f.label === selectedFyLabel.value) || fyOptions[0]
+    const result = await exportGstAuditZip({
+      firmId: firmStore.activeFirmId,
+      fy,
+    })
+    auditExportMsg.value = result.ok
+      ? `ZIP download ho gaya (${result.fileCount} files, party + month folders).`
+      : (result.error || 'Export failed')
+  } finally {
+    auditExportBusy.value = false
+  }
+}
+
+onMounted(async () => {
+  await firmStore.load()
   const cfg = getSupabaseConfig()
   supabaseUrlInput.value = cfg.url
   supabaseAnonInput.value = cfg.anon
   refreshSyncDiag()
+  await refreshDocStats()
 })
 </script>
 
@@ -463,6 +497,49 @@ onMounted(() => {
         Purana PamaTools data: <strong>Import JSON</strong> → OK (Replace) → phir <strong>Full Push</strong>.
       </p>
       <p v-if="syncMsg" class="text-sm mt-2 text-slate-600">{{ syncMsg }}</p>
+    </section>
+
+    <!-- Bill documents -->
+    <section class="pp-card p-5 mb-5">
+      <h2 class="font-bold text-navy mb-2">📎 Bill Documents (Purchases &amp; Vouchers)</h2>
+      <p class="text-sm text-slate-500 mb-3">
+        Upload par auto-compress, rename, Supabase cloud sync. <code>original_name</code> audit trail me save hota hai.
+      </p>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+        <div class="bg-slate-50 rounded-lg p-3 text-center">
+          <div class="text-xs text-slate-500">Saved files</div>
+          <div class="text-xl font-bold">{{ docStats.attachmentCount }}</div>
+        </div>
+        <div class="bg-slate-50 rounded-lg p-3 text-center">
+          <div class="text-xs text-slate-500">Phone cache</div>
+          <div class="text-xl font-bold">{{ formatDocBytes(docStats.localBytes) }}</div>
+        </div>
+        <div class="bg-slate-50 rounded-lg p-3 text-center">
+          <div class="text-xs text-slate-500">Pending upload</div>
+          <div class="text-xl font-bold">{{ docStats.pendingUploads }}</div>
+        </div>
+        <div class="bg-slate-50 rounded-lg p-3 text-center">
+          <div class="text-xs text-slate-500">Max / file</div>
+          <div class="text-xl font-bold">10 MB</div>
+        </div>
+      </div>
+      <p v-if="docStats.shouldWarnMobile" class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 mb-3">
+        Phone par document cache 80 MB+ ho gaya. Purane bills ka GST ZIP export karke space manage karein.
+      </p>
+      <div class="flex flex-wrap items-end gap-2">
+        <div>
+          <label class="pp-label">GST Audit Pack (CA)</label>
+          <select v-model="selectedFyLabel" class="pp-input min-w-[10rem]">
+            <option v-for="fy in fyOptions" :key="fy.label" :value="fy.label">{{ fy.label }} (Apr–Mar)</option>
+          </select>
+        </div>
+        <button class="pp-btn pp-btn-primary" :disabled="auditExportBusy" @click="doGstAuditExport">
+          {{ auditExportBusy ? 'Building ZIP…' : 'Export FY ZIP' }}
+        </button>
+        <button type="button" class="pp-btn pp-btn-ghost" @click="refreshDocStats">Refresh</button>
+      </div>
+      <p v-if="auditExportMsg" class="text-sm mt-2" :class="auditExportMsg.includes('ho gaya') ? 'text-green-700' : 'text-slate-600'">{{ auditExportMsg }}</p>
+      <p class="text-xs text-slate-400 mt-2">ZIP layout: Purchases/Vouchers → Party → YYYY-MM → renamed file + manifest.csv (original filename included).</p>
     </section>
 
     <!-- Gemini -->

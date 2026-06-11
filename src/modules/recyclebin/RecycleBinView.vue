@@ -9,9 +9,10 @@ import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useInvoiceStore } from '@/stores/invoices'
 import { usePurchaseStore } from '@/stores/purchases'
+import { restoreAttachment } from '@/services/documentAttachments'
 
 interface DeletedRow {
-  type: 'party' | 'item' | 'invoice' | 'purchase' | 'firm'
+  type: 'party' | 'item' | 'invoice' | 'purchase' | 'firm' | 'document'
   id: string
   label: string
   sub: string
@@ -35,6 +36,7 @@ const TYPE_META: Record<DeletedRow['type'], { icon: string; label: string; cls: 
   invoice:  { icon: '🧾', label: 'Invoice',  cls: 'bg-emerald-100 text-emerald-700' },
   purchase: { icon: '📥', label: 'Purchase', cls: 'bg-blue-100 text-blue-700' },
   firm:     { icon: '🏢', label: 'Firm',     cls: 'bg-violet-100 text-violet-700' },
+  document: { icon: '📎', label: 'Document', cls: 'bg-slate-200 text-slate-700' },
 }
 
 const filtered = computed(() =>
@@ -47,12 +49,13 @@ async function loadDeleted() {
   const onlyDel = <T extends { is_deleted: boolean; firm_id: string }>(arr: T[]) =>
     arr.filter((r) => r.is_deleted && r.firm_id === fid)
 
-  const [dParties, dItems, dInvoices, dPurchases, dFirms] = await Promise.all([
+  const [dParties, dItems, dInvoices, dPurchases, dFirms, dDocs] = await Promise.all([
     db.parties.toArray(),
     db.items.toArray(),
     db.invoices.toArray(),
     db.purchases.toArray(),
     firm.deletedFirms(),
+    db.document_attachments.where('firm_id').equals(fid).filter((r) => r.is_deleted).toArray(),
   ])
 
   const out: DeletedRow[] = []
@@ -66,6 +69,14 @@ async function loadDeleted() {
     out.push({ type: 'purchase', id: pu.id, label: pu.bill_no || 'Purchase', sub: `${pu.supplier_name} · ₹${pu.grand_total}`, deletedAt: pu.updated_at })
   for (const f of dFirms)
     out.push({ type: 'firm', id: f.id, label: f.name, sub: `${f.gst || 'No GST'} · ${f.city || '—'}`, deletedAt: f.updated_at })
+  for (const doc of dDocs)
+    out.push({
+      type: 'document',
+      id: doc.id,
+      label: doc.stored_name,
+      sub: `${doc.entity_type} · ${doc.party_name} · orig: ${doc.original_name}`,
+      deletedAt: doc.updated_at,
+    })
 
   out.sort((a, b) => (b.deletedAt || '').localeCompare(a.deletedAt || ''))
   rows.value = out
@@ -80,6 +91,7 @@ async function restore(row: DeletedRow) {
     else if (row.type === 'invoice') await invoices.restore(row.id)
     else if (row.type === 'purchase') await purchases.restore(row.id)
     else if (row.type === 'firm') await firm.restore(row.id)
+    else if (row.type === 'document') await restoreAttachment(row.id)
     await loadDeleted()
   } finally {
     busyId.value = null
@@ -106,7 +118,7 @@ onMounted(async () => { await firm.load(); await loadDeleted() })
     </button>
     <header class="mb-5">
       <h1 class="text-2xl font-bold text-navy">♻️ Recycle Bin</h1>
-      <p class="text-sm text-slate-500">Deleted firms, parties, items, invoices &amp; purchases — restore anytime.</p>
+      <p class="text-sm text-slate-500">Deleted firms, parties, items, invoices, purchases &amp; bill scan files — restore anytime.</p>
     </header>
 
     <div class="flex gap-2 mb-4 flex-wrap">
@@ -116,49 +128,35 @@ onMounted(async () => { await firm.load(); await loadDeleted() })
         <option value="item">Items</option>
         <option value="invoice">Invoices</option>
         <option value="purchase">Purchases</option>
+        <option value="document">Bill files</option>
         <option value="firm">Firms</option>
       </select>
-      <span class="ml-auto self-center text-sm text-slate-400">{{ filtered.length }} deleted</span>
     </div>
 
-    <div v-if="loading" class="pp-card p-10 text-center text-slate-400">Loading…</div>
-
-    <div v-else class="pp-card overflow-x-auto">
-      <table class="w-full text-sm">
-        <thead class="bg-slate-50 text-slate-500 text-xs uppercase">
-          <tr>
-            <th class="text-left font-semibold px-4 py-2.5">Type</th>
-            <th class="text-left font-semibold px-4 py-2.5">Name</th>
-            <th class="text-left font-semibold px-4 py-2.5 hidden sm:table-cell">Details</th>
-            <th class="text-left font-semibold px-4 py-2.5 hidden md:table-cell">Deleted</th>
-            <th class="text-right font-semibold px-4 py-2.5">Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-if="filtered.length === 0">
-            <td colspan="5" class="text-center text-slate-400 py-10">
-              <div class="text-4xl mb-2">🗑️</div>Recycle Bin is empty.
-            </td>
-          </tr>
-          <tr v-for="r in filtered" :key="r.type + r.id" class="border-t border-slate-100 hover:bg-slate-50">
-            <td class="px-4 py-2.5">
-              <span :class="['pp-badge', TYPE_META[r.type].cls]">{{ TYPE_META[r.type].icon }} {{ TYPE_META[r.type].label }}</span>
-            </td>
-            <td class="px-4 py-2.5 font-semibold text-navy">{{ r.label }}</td>
-            <td class="px-4 py-2.5 hidden sm:table-cell text-slate-600">{{ r.sub }}</td>
-            <td class="px-4 py-2.5 hidden md:table-cell text-slate-500">{{ fmt(r.deletedAt) }}</td>
-            <td class="px-4 py-2.5 text-right">
-              <button class="pp-btn pp-btn-primary !py-1.5" :disabled="busyId === r.id" @click="restore(r)">
-                {{ busyId === r.id ? 'Restoring…' : '♻️ Restore' }}
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <div v-if="loading" class="text-center py-12 text-slate-400">Loading…</div>
+    <div v-else-if="!filtered.length" class="text-center py-12 text-slate-400">Recycle bin empty.</div>
+    <div v-else class="space-y-2">
+      <div
+        v-for="row in filtered"
+        :key="`${row.type}-${row.id}`"
+        class="pp-card p-4 flex flex-col sm:flex-row sm:items-center gap-3"
+      >
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-1">
+            <span :class="['pp-badge text-[10px]', TYPE_META[row.type].cls]">{{ TYPE_META[row.type].icon }} {{ TYPE_META[row.type].label }}</span>
+            <span class="text-xs text-slate-400">{{ fmt(row.deletedAt) }}</span>
+          </div>
+          <div class="font-semibold text-navy truncate">{{ row.label }}</div>
+          <div class="text-xs text-slate-500 truncate">{{ row.sub }}</div>
+        </div>
+        <button
+          class="pp-btn pp-btn-primary !py-1.5 shrink-0"
+          :disabled="busyId === row.id"
+          @click="restore(row)"
+        >
+          {{ busyId === row.id ? '…' : 'Restore' }}
+        </button>
+      </div>
     </div>
-
-    <p class="text-xs text-slate-400 mt-3">
-      Restoring an invoice/purchase also re-posts its accounting ledger entries.
-    </p>
   </div>
 </template>

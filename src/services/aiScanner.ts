@@ -5,7 +5,7 @@ const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta'
 const GEMINI_TIMEOUT_MS = 45_000
 const GEMINI_MAX_ATTEMPTS = 3
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
-const MAX_PDF_BYTES = 20 * 1024 * 1024
+const MAX_PDF_BYTES = 10 * 1024 * 1024
 
 const SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 const SUPPORTED_PDF_MIME_TYPES = new Set(['application/pdf'])

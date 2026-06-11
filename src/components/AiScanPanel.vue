@@ -3,7 +3,10 @@ import { onBeforeUnmount, ref } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import { scanInvoiceImage, fileToBase64, validateScanFile, type ScanResult } from '@/services/aiScanner'
 
-const emit = defineEmits<{ scanned: [result: ScanResult] }>()
+const emit = defineEmits<{
+  scanned: [result: ScanResult, file: File]
+  scanFailed: []
+}>()
 const settings = useSettingsStore()
 const status = ref('')
 const loading = ref(false)
@@ -30,9 +33,13 @@ async function onFile(e: Event) {
     const { base64, mime } = await fileToBase64(file)
     const result = await scanInvoiceImage(settings.geminiKey, base64, mime)
     status.value = 'Done — form filled'
-    emit('scanned', result)
+    emit('scanned', result, file)
   } catch (err: any) {
     status.value = err.message || 'Scan failed'
+    selectedFileName.value = ''
+    selectedFileType.value = ''
+    clearPreview()
+    emit('scanFailed')
   } finally {
     loading.value = false
   }

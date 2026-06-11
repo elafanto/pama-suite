@@ -4,7 +4,14 @@ import { getSupabase } from '@/services/supabase'
 import { reloadAllStores } from '@/services/reloadStores'
 import { useAuthStore } from '@/stores/auth'
 import { allocateBillNo, findDuplicateBillNoGroups, resolveNextSequence } from '@/services/invoiceNumber'
-import type { Firm, Party, Item, Invoice, Purchase, Recipe, Account, Voucher, ItemStockMovement, DashboardTodo } from '@/types/models'
+import type {
+  Firm, Party, Item, Invoice, Purchase, Recipe, Account, Voucher, ItemStockMovement, DashboardTodo,
+  DocumentAttachment,
+} from '@/types/models'
+import {
+  pushPendingDocumentUploads,
+  cacheRecentRemoteDocuments,
+} from '@/services/documentAttachments'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 
 type SyncTable =
@@ -22,6 +29,7 @@ type SyncTable =
   | 'stock_movements'
   | 'item_stock_movements'
   | 'dashboard_todos'
+  | 'document_attachments'
 
 const TABLE_MAP: Record<SyncTable, string> = {
   firms: 'firms',
@@ -38,6 +46,7 @@ const TABLE_MAP: Record<SyncTable, string> = {
   stock_movements: 'stock_movements',
   item_stock_movements: 'item_stock_movements',
   dashboard_todos: 'dashboard_todos',
+  document_attachments: 'document_attachments',
 }
 
 const PAYLOAD_TABLES: SyncTable[] = [
@@ -52,6 +61,7 @@ const PAYLOAD_TABLES: SyncTable[] = [
   'stock_movements',
   'item_stock_movements',
   'dashboard_todos',
+  'document_attachments',
 ]
 
 function isNewer(remote: string, local?: string): boolean {
@@ -71,6 +81,7 @@ const OPTIONAL_TABLE_MIGRATIONS: Partial<Record<SyncTable, string>> = {
   stock_movements: '005_production_tracking.sql',
   item_stock_movements: '006_item_stock_movements.sql',
   dashboard_todos: '008_dashboard_todos.sql',
+  document_attachments: '009_document_attachments.sql',
 }
 
 let syncInFlight: Promise<string> | null = null
@@ -483,7 +494,7 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
       }
       const table = (db as any)[name] as { get: (id: string) => Promise<any>; put: (r: any) => Promise<void> }
       for (const r of rows) {
-        const payload = r.payload as Invoice | Purchase | Recipe | Account | Voucher | ItemStockMovement | DashboardTodo
+        const payload = r.payload as Invoice | Purchase | Recipe | Account | Voucher | ItemStockMovement | DashboardTodo | DocumentAttachment
         const rec = {
           ...payload,
           id: r.id,
@@ -551,17 +562,21 @@ export async function runSync(): Promise<string> {
       return message
     }
     const repaired = await repairLocalInvoiceNumberState()
+    const docUpload = await pushPendingDocumentUploads()
     const push = await pushDirtyToCloud()
     if (!push.ok) {
       const message = push.error || 'Sync failed'
       rememberSyncResult(message, message)
       return message
     }
+    const docCached = await cacheRecentRemoteDocuments(8)
     if (pull.pulled > 0) await reloadAllStores()
     const parts: string[] = []
     if (pull.pulled) parts.push(`pulled ${pull.pulled}`)
     if (repaired) parts.push(`repaired ${repaired}`)
     if (push.pushed) parts.push(`pushed ${push.pushed}`)
+    if (docUpload.uploaded) parts.push(`docs uploaded ${docUpload.uploaded}`)
+    if (docCached) parts.push(`docs cached ${docCached}`)
     const warnings = uniqWarnings([...(pull.warnings || []), ...(push.warnings || [])])
     const message = withWarnings(parts.length ? `Synced (${parts.join(', ')})` : 'Already up to date', warnings)
     rememberSyncResult(message, warnings.join(' '))

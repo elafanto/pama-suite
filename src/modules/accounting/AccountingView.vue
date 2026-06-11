@@ -9,6 +9,13 @@ import { useSettingsStore } from '@/stores/settings'
 import { cashBookFromVouchers, customerReceivableSummary } from '@/services/reports'
 import { buildPartyLedger, partyLedgerOptions, type PartyLedgerMode, type PartyLedgerPartyOption } from '@/services/partyLedger'
 import { scanVoucherImage, fileToBase64, type VoucherScanResult } from '@/services/aiScanner'
+import {
+  attachDocumentFromFile,
+  openEntityDocument,
+  downloadEntityDocument,
+  shareEntityDocumentWhatsApp,
+} from '@/services/documentAttachments'
+import { db } from '@/data/db'
 import PpModal from '@/components/PpModal.vue'
 import type { Account, Voucher, LedgerEntry } from '@/types/models'
 
@@ -25,6 +32,8 @@ type TabType = 'reports' | 'ledger' | 'partyLedger' | 'debtors' | 'cashbook' | '
 const activeTab = ref<TabType>('reports')
 const voucherScanStatus = ref('')
 const voucherScanLoading = ref(false)
+const pendingVoucherScanFile = ref<File | null>(null)
+const voucherHasDoc = ref<Record<string, boolean>>({})
 
 // Report selection state
 type ReportType = 'trial' | 'pl' | 'bs'
@@ -198,6 +207,8 @@ async function removeAccount(acc: Account) {
 // Voucher form actions
 function openNewVoucher(type: VoucherFormType) {
   voucherFormType.value = type
+  pendingVoucherScanFile.value = null
+  voucherScanStatus.value = ''
   voucherForm.date = new Date().toISOString().slice(0, 10)
   voucherForm.narration = ''
   voucherForm.payeeName = ''
@@ -311,21 +322,42 @@ async function saveVoucher() {
     ? `${voucherForm.payeeName} | ${voucherForm.narration}` 
     : voucherForm.narration
 
-  await accountingStore.postVoucher(
+  const voucher = await accountingStore.postVoucher(
     voucherForm.date,
     calculatedType,
     completeNarration,
     ledgerEntries
   )
 
+  let docAttached = false
+  if (pendingVoucherScanFile.value) {
+    const partyName = voucherForm.payeeName?.trim()
+      || completeNarration.split('|')[0]?.trim()
+      || 'Voucher'
+    await attachDocumentFromFile({
+      file: pendingVoucherScanFile.value,
+      entityType: 'voucher',
+      entityId: voucher.id,
+      partyName,
+      docNo: voucher.voucher_no,
+      docDate: voucher.date,
+    })
+    voucherHasDoc.value[voucher.id] = true
+    docAttached = true
+    pendingVoucherScanFile.value = null
+  }
+
   showVoucherModal.value = false
-  alert('Voucher posted successfully!')
+  alert(docAttached
+    ? 'Voucher posted + scan file archived (compressed & cloud).'
+    : 'Voucher posted successfully!')
 }
 
 async function removeVoucher(id: string) {
-  if (confirm('Are you sure you want to delete this voucher? This will reverse its ledger postings.')) {
-    await accountingStore.reverseLedgerByRef(id)
-    alert('Voucher deleted and reversed.')
+  if (confirm('Are you sure you want to delete this voucher? Scan file Recycle Bin me jayegi.')) {
+    await accountingStore.deleteVoucherById(id)
+    await loadVoucherDocFlags()
+    alert('Voucher deleted.')
   }
 }
 
@@ -454,18 +486,33 @@ const cashBookRows = computed(() => cashBookFromVouchers(accountingStore.voucher
   accountIds: selectedCashBookAccountId.value ? [selectedCashBookAccountId.value] : undefined,
 }))
 
+async function loadVoucherDocFlags() {
+  const firmId = firmStore.activeFirmId
+  const rows = await db.document_attachments
+    .where('firm_id')
+    .equals(firmId)
+    .filter((r) => !r.is_deleted && r.entity_type === 'voucher')
+    .toArray()
+  const map: Record<string, boolean> = {}
+  for (const row of rows) map[row.entity_id] = true
+  voucherHasDoc.value = map
+}
+
 async function onVoucherScanFile(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
   voucherScanLoading.value = true
   voucherScanStatus.value = 'Scanning voucher…'
+  pendingVoucherScanFile.value = null
   try {
     const { base64, mime } = await fileToBase64(file, { allowImages: true, allowPdf: false })
     const r = await scanVoucherImage(settingsStore.geminiKey, base64, mime)
     applyVoucherScan(r)
-    voucherScanStatus.value = 'Done — fields filled'
+    pendingVoucherScanFile.value = file
+    voucherScanStatus.value = 'Done — fields filled (file bill save par archive hogi)'
   } catch (err: unknown) {
+    pendingVoucherScanFile.value = null
     voucherScanStatus.value = err instanceof Error ? err.message : 'Scan failed'
   } finally {
     voucherScanLoading.value = false
@@ -497,7 +544,10 @@ function applyVoucherScan(r: VoucherScanResult) {
 
 onMounted(async () => {
   await Promise.all([accountingStore.load(), invoiceStore.load(), partyStore.load(), purchaseStore.load()])
+  await loadVoucherDocFlags()
 })
+
+watch(() => firmStore.activeFirmId, () => { loadVoucherDocFlags() })
 </script>
 
 <template>
@@ -1128,7 +1178,28 @@ onMounted(async () => {
                   ₹{{ n2(v.entries.reduce((sum, e) => sum + e.debit, 0)) }}
                 </td>
                 <td class="py-3 px-4 text-center">
-                  <div class="flex justify-center gap-2">
+                  <div class="flex justify-center gap-2 flex-wrap">
+                    <button
+                      v-if="voucherHasDoc[v.id]"
+                      type="button"
+                      class="pp-btn pp-btn-ghost px-2 py-0.5 text-xs"
+                      title="View voucher scan"
+                      @click="openEntityDocument('voucher', v.id)"
+                    >📎 View</button>
+                    <button
+                      v-if="voucherHasDoc[v.id]"
+                      type="button"
+                      class="pp-btn pp-btn-ghost px-2 py-0.5 text-xs"
+                      title="Download voucher scan"
+                      @click="downloadEntityDocument('voucher', v.id)"
+                    >⬇️</button>
+                    <button
+                      v-if="voucherHasDoc[v.id]"
+                      type="button"
+                      class="pp-btn pp-btn-ghost px-2 py-0.5 text-xs"
+                      title="WhatsApp share"
+                      @click="shareEntityDocumentWhatsApp('voucher', v.id)"
+                    >📤</button>
                     <button @click="viewVoucherDetail(v)" class="pp-btn pp-btn-ghost px-2 py-0.5 text-xs">
                       👁️ Details
                     </button>
@@ -1273,6 +1344,9 @@ onMounted(async () => {
             <input type="file" accept="image/*" class="hidden" :disabled="voucherScanLoading" @change="onVoucherScanFile" />
           </label>
           <p v-if="voucherScanStatus" class="text-xs mt-2 text-slate-500">{{ voucherScanStatus }}</p>
+          <p v-if="pendingVoucherScanFile" class="text-xs mt-2 text-emerald-700">
+            📎 {{ pendingVoucherScanFile.name }} — post par auto-compress + Supabase par archive hogi
+          </p>
         </div>
         <div class="grid grid-cols-2 gap-4">
           <div>

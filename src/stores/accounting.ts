@@ -5,6 +5,7 @@ import { createRepo } from '@/data/repo'
 import { useFirmStore } from './firm'
 import { nowISO } from '@/data/util'
 import { isInterstateGst } from '@/services/gst'
+import { softDeleteAttachmentsForEntity } from '@/services/documentAttachments'
 import type { Voucher, Account, LedgerEntry, Invoice, Purchase } from '@/types/models'
 
 const vouchersRepo = createRepo<Voucher>(db.vouchers)
@@ -166,8 +167,17 @@ export const useAccountingStore = defineStore('accounting', () => {
       .toArray()
 
     for (const v of active) {
+      await softDeleteAttachmentsForEntity('voucher', v.id, v.firm_id)
       await vouchersRepo.remove(v.id)
     }
+    await load()
+  }
+
+  async function deleteVoucherById(id: string) {
+    const existing = await vouchersRepo.get(id)
+    if (!existing) return
+    await softDeleteAttachmentsForEntity('voucher', id, existing.firm_id)
+    await vouchersRepo.remove(id)
     await load()
   }
 
@@ -643,6 +653,7 @@ export const useAccountingStore = defineStore('accounting', () => {
     updateAccount,
     removeAccount,
     postVoucher,
+    deleteVoucherById,
     reverseLedgerByRef,
     postSaleToLedger,
     postPurchaseToLedger,
