@@ -18,7 +18,6 @@ import {
   getLayerBS,
   getLayerRCT,
   getPaperTypesForLayer,
-  getPresetsForLayer,
   getCureStatus,
   getTotalBundles,
   getTwoPlyCount,
@@ -674,15 +673,10 @@ onMounted(async () => {
               <select v-model="layer.paperType" class="pp-input !py-1 text-xs mb-2" @change="onPaperTypeChange(idx)">
                 <option v-for="(pd, key) in getPaperTypesForLayer(idx, form.layers)" :key="key" :value="key">{{ pd?.name ?? key }}</option>
               </select>
-              <div class="flex flex-wrap gap-1 mb-2">
-                <button v-for="preset in getPresetsForLayer(idx, form.layers).slice(0, 6)" :key="preset.gsm + '_' + preset.bf" type="button"
-                  :class="['px-2 py-0.5 rounded text-xs', layer.gsm === preset.gsm && layer.bf === preset.bf ? 'bg-blue-600 text-white' : 'bg-white border']"
-                  @click="applyPreset(idx, preset)">{{ preset.gsm }}/{{ preset.bf }}</button>
-              </div>
               <div class="grid grid-cols-3 gap-1 mb-2">
-                <div><label class="text-[10px]">GSM</label><input v-model.number="layer.gsm" type="number" class="pp-input !py-1 text-xs" /></div>
-                <div><label class="text-[10px]">BF</label><input v-model.number="layer.bf" type="number" class="pp-input !py-1 text-xs" /></div>
-                <div><label class="text-[10px]">Rate ₹/kg</label><input v-model.number="layer.rate" type="number" step="0.01" class="pp-input !py-1 text-xs" /></div>
+                <div><label class="text-[10px]">GSM</label><input v-model.number="layer.gsm" type="text" inputmode="numeric" class="pp-input !py-1 text-xs" /></div>
+                <div><label class="text-[10px]">BF</label><input v-model.number="layer.bf" type="text" inputmode="numeric" class="pp-input !py-1 text-xs" /></div>
+                <div><label class="text-[10px]">Rate ₹/kg</label><input v-model.number="layer.rate" type="text" inputmode="decimal" class="pp-input !py-1 text-xs" /></div>
               </div>
               <div class="mb-2">
                 <label class="text-[10px]">Color</label>
