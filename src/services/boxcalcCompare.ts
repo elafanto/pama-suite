@@ -12,9 +12,14 @@ export interface CompareScenario {
   enabled: boolean
   ply: string
   flute: string
+  /** Top liner */
   outerGsm: number
   outerBf: number
   outerRate: number
+  /** Bottom liner (defaults to top when unset in saved rows) */
+  bottomGsm?: number
+  bottomBf?: number
+  bottomRate?: number
   midGsm: number
   midBf: number
   midRate: number
@@ -62,9 +67,10 @@ function cloneForm(form: BoxCalcForm): BoxCalcForm {
   return JSON.parse(JSON.stringify(form)) as BoxCalcForm
 }
 
-function layerKind(idx: number, name: string, total: number): 'outer' | 'mid' | 'flute' {
+function layerKind(idx: number, name: string, total: number): 'top' | 'bottom' | 'mid' | 'flute' {
   if (name.toLowerCase().includes('flute')) return 'flute'
-  if (idx === 0 || idx === total - 1) return 'outer'
+  if (idx === 0) return 'top'
+  if (idx === total - 1) return 'bottom'
   return 'mid'
 }
 
@@ -89,67 +95,132 @@ function resolveFlute(ply: string, flute: string): string {
   return opts.includes(flute) ? flute : opts[0]
 }
 
+/** Fill bottom liner fields for rows saved before bottom liner was tracked. */
+export function normalizeScenario(scenario: CompareScenario): CompareScenario {
+  return {
+    ...scenario,
+    bottomGsm: scenario.bottomGsm ?? scenario.outerGsm,
+    bottomBf: scenario.bottomBf ?? scenario.outerBf,
+    bottomRate: scenario.bottomRate ?? scenario.outerRate,
+  }
+}
+
+function layerPaperSpec(
+  kind: ReturnType<typeof layerKind>,
+  scenario: CompareScenario,
+): { gsm: number; bf: number; rate: number } {
+  const s = normalizeScenario(scenario)
+  if (kind === 'flute') return { gsm: s.fluteGsm, bf: s.fluteBf, rate: s.fluteRate }
+  if (kind === 'mid') return { gsm: s.midGsm, bf: s.midBf, rate: s.midRate }
+  if (kind === 'bottom') return { gsm: s.bottomGsm!, bf: s.bottomBf!, rate: s.bottomRate! }
+  return { gsm: s.outerGsm, bf: s.outerBf, rate: s.outerRate }
+}
+
+function sameConstruction(
+  basePly: string,
+  baseFlute: string,
+  baseLayers: BoxCalcLayer[],
+  ply: string,
+  flute: string,
+): boolean {
+  const names = PLY_LAYER_NAMES[ply] || []
+  return (
+    basePly === ply
+    && resolveFlute(basePly, baseFlute) === resolveFlute(ply, flute)
+    && baseLayers.length === names.length
+    && baseLayers.every((l, i) => l.name === names[i])
+  )
+}
+
 function buildLayersForScenario(
   ply: string,
   flute: string,
   scenario: CompareScenario,
   seedLayers: BoxCalcLayer[],
+  basePly: string,
+  baseFlute: string,
 ): BoxCalcLayer[] {
   const names = PLY_LAYER_NAMES[ply] || PLY_LAYER_NAMES['3-ply']
+  const constructionChanged = !sameConstruction(basePly, baseFlute, seedLayers, ply, flute)
+
+  // Same ply/flute as calculator — patch paper only, keep takeUp/RCT/reel exactly.
+  if (!constructionChanged) {
+    return seedLayers.map((seed, idx) => {
+      const kind = layerKind(idx, seed.name, seedLayers.length)
+      const spec = layerPaperSpec(kind, scenario)
+      return {
+        ...seed,
+        gsm: spec.gsm,
+        bf: spec.bf,
+        rate: spec.rate,
+      }
+    })
+  }
+
+  const seedByName = new Map(seedLayers.map((l) => [l.name, l]))
   return names.map((name, idx) => {
     const kind = layerKind(idx, name, names.length)
-    const seed = seedLayers[idx]
+    const seed = seedByName.get(name)
     const isFlute = kind === 'flute'
-    const spec = kind === 'flute'
-      ? { gsm: scenario.fluteGsm, bf: scenario.fluteBf, rate: scenario.fluteRate }
-      : kind === 'outer'
-        ? { gsm: scenario.outerGsm, bf: scenario.outerBf, rate: scenario.outerRate }
-        : { gsm: scenario.midGsm, bf: scenario.midBf, rate: scenario.midRate }
+    const spec = layerPaperSpec(kind, scenario)
+
+    let takeUp = 1
+    if (isFlute) {
+      takeUp = seed?.takeUp && basePly === ply && resolveFlute(basePly, baseFlute) === resolveFlute(ply, flute)
+        ? seed.takeUp
+        : getTakeUpForLayer(ply, flute, idx)
+    } else if (seed?.takeUp) {
+      takeUp = seed.takeUp
+    }
 
     return {
       name,
-      paperType: seed?.paperType || (isFlute ? 'flutingMedium' : (kind === 'outer' ? 'kraftLiner' : 'testLiner')),
+      paperType: seed?.paperType || (isFlute ? 'flutingMedium' : (kind === 'mid' ? 'testLiner' : 'kraftLiner')),
       gsm: spec.gsm,
       bf: spec.bf,
       rate: spec.rate,
       color: seed?.color || 'Natural Brown',
-      takeUp: isFlute ? getTakeUpForLayer(ply, flute, idx) : 1,
-      reelLength: null,
-      rctOverride: null,
-      showAdvanced: false,
+      takeUp,
+      reelLength: seed?.reelLength ?? null,
+      rctOverride: seed?.rctOverride ?? null,
+      showAdvanced: seed?.showAdvanced ?? false,
     }
   })
 }
 
 export function scenarioFromForm(form: BoxCalcForm, label = 'Option'): CompareScenario {
   const layers = form.layers
-  const outer = layers[0]
+  const top = layers[0]
+  const bottom = layers[layers.length - 1]
   const mid = layers.find((l, i) => layerKind(i, l.name, layers.length) === 'mid')
   const flute = layers.find((l) => l.name.toLowerCase().includes('flute'))
 
-  return {
+  return normalizeScenario({
     id: uid(),
     label,
     enabled: true,
     ply: form.ply,
     flute: form.flute,
-    outerGsm: Number(outer?.gsm) || 150,
-    outerBf: Number(outer?.bf) || 18,
-    outerRate: Number(outer?.rate) || 33,
-    midGsm: Number(mid?.gsm) || Number(outer?.gsm) || 120,
-    midBf: Number(mid?.bf) || Number(outer?.bf) || 18,
-    midRate: Number(mid?.rate) || Number(outer?.rate) || 33,
+    outerGsm: Number(top?.gsm) || 150,
+    outerBf: Number(top?.bf) || 18,
+    outerRate: Number(top?.rate) || 33,
+    bottomGsm: Number(bottom?.gsm) || Number(top?.gsm) || 150,
+    bottomBf: Number(bottom?.bf) || Number(top?.bf) || 18,
+    bottomRate: Number(bottom?.rate) || Number(top?.rate) || 33,
+    midGsm: Number(mid?.gsm) || Number(top?.gsm) || 120,
+    midBf: Number(mid?.bf) || Number(top?.bf) || 18,
+    midRate: Number(mid?.rate) || Number(top?.rate) || 33,
     fluteGsm: Number(flute?.gsm) || 120,
     fluteBf: Number(flute?.bf) || 18,
     fluteRate: Number(flute?.rate) || 33,
     marginPercent: form.marginPercent,
     convRatePerKg: form.conversionSlabs?.[0]?.ratePerKg ?? null,
-  }
+  })
 }
 
 export function defaultCompareScenario(label: string, base?: BoxCalcForm): CompareScenario {
   if (base) return scenarioFromForm(base, label)
-  return {
+  return normalizeScenario({
     id: uid(),
     label,
     enabled: true,
@@ -166,16 +237,28 @@ export function defaultCompareScenario(label: string, base?: BoxCalcForm): Compa
     fluteRate: 33,
     marginPercent: 15,
     convRatePerKg: 14,
-  }
+  })
 }
 
 export function buildCompareForm(base: BoxCalcForm, scenario: CompareScenario): BoxCalcForm {
   const form = cloneForm(base)
+  const basePly = base.ply
+  const baseFlute = base.flute
+  const seedLayers = form.layers
+
   form.customerName = form.customerName || 'Compare'
   form.boxName = form.boxName || 'Compare'
   form.ply = scenario.ply || form.ply
   form.flute = resolveFlute(form.ply, scenario.flute || form.flute)
-  form.layers = buildLayersForScenario(form.ply, form.flute, scenario, form.layers)
+
+  const constructionChanged = !sameConstruction(basePly, baseFlute, seedLayers, form.ply, form.flute)
+  if (constructionChanged) {
+    form.caliperOverride = null
+    if (basePly !== form.ply) form.glueFlap = null
+  }
+
+  form.layers = buildLayersForScenario(form.ply, form.flute, scenario, seedLayers, basePly, baseFlute)
+
   if (scenario.marginPercent != null && Number.isFinite(scenario.marginPercent)) {
     form.marginPercent = scenario.marginPercent
     form.priceMode = 'auto'
@@ -191,17 +274,21 @@ export function buildCompareForm(base: BoxCalcForm, scenario: CompareScenario): 
 }
 
 export function comboLabel(scenario: CompareScenario): string {
-  const ply = scenario.ply || '3-ply'
-  const flute = scenario.flute || 'C'
-  const mid = ply !== '3-ply' ? ` M${scenario.midGsm}/${scenario.midBf}` : ''
-  return `${ply}/${flute} · L${scenario.outerGsm}/${scenario.outerBf} · F${scenario.fluteGsm}/${scenario.fluteBf}${mid}`
+  const s = normalizeScenario(scenario)
+  const ply = s.ply || '3-ply'
+  const flute = s.flute || 'C'
+  const mid = ply !== '3-ply' ? ` M${s.midGsm}/${s.midBf}` : ''
+  const bottomDiff = s.bottomGsm !== s.outerGsm || s.bottomBf !== s.outerBf
+  const bottom = bottomDiff ? ` B${s.bottomGsm}/${s.bottomBf}` : ''
+  return `${ply}/${flute} · T${s.outerGsm}/${s.outerBf}${bottom} · F${s.fluteGsm}/${s.fluteBf}${mid}`
 }
 
 export function computeCompareRow(base: BoxCalcForm, scenario: CompareScenario): CompareRowResult {
-  const combo = comboLabel(scenario)
-  if (!scenario.enabled) {
+  const normalized = normalizeScenario(scenario)
+  const combo = comboLabel(normalized)
+  if (!normalized.enabled) {
     return {
-      scenario,
+      scenario: normalized,
       comboLabel: combo,
       error: null,
       weightGm: null,
@@ -216,11 +303,11 @@ export function computeCompareRow(base: BoxCalcForm, scenario: CompareScenario):
     }
   }
 
-  const form = buildCompareForm(base, scenario)
+  const form = buildCompareForm(base, normalized)
   const res = computeBoxCalcResults(form)
   if (!res || 'error' in res) {
     return {
-      scenario,
+      scenario: normalized,
       comboLabel: combo,
       error: res && 'error' in res ? (res.error ?? 'Cannot calculate') : 'Cannot calculate',
       weightGm: null,
@@ -240,7 +327,7 @@ export function computeCompareRow(base: BoxCalcForm, scenario: CompareScenario):
   const boxKg = weightGm ? weightGm / 1000 : 0
 
   return {
-    scenario,
+    scenario: normalized,
     comboLabel: combo,
     error: null,
     weightGm,
@@ -256,7 +343,7 @@ export function computeCompareRow(base: BoxCalcForm, scenario: CompareScenario):
 }
 
 export function computeAllCompareRows(base: BoxCalcForm, scenarios: CompareScenario[]): CompareRowResult[] {
-  return scenarios.map((s) => computeCompareRow(base, s))
+  return scenarios.map((s) => computeCompareRow(base, normalizeScenario(s)))
 }
 
 export function loadCompareScenarios(base: BoxCalcForm): CompareScenario[] {
@@ -264,7 +351,9 @@ export function loadCompareScenarios(base: BoxCalcForm): CompareScenario[] {
     const raw = localStorage.getItem(COMPARE_STORAGE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed) && parsed.length) return parsed as CompareScenario[]
+      if (Array.isArray(parsed) && parsed.length) {
+        return parsed.map((s: CompareScenario) => normalizeScenario(s))
+      }
     }
   } catch { /* */ }
   return [
@@ -286,17 +375,26 @@ export function loadCompareScenarios(base: BoxCalcForm): CompareScenario[] {
 
 export function saveCompareScenarios(scenarios: CompareScenario[]): void {
   try {
-    localStorage.setItem(COMPARE_STORAGE_KEY, JSON.stringify(scenarios))
+    localStorage.setItem(COMPARE_STORAGE_KEY, JSON.stringify(scenarios.map(normalizeScenario)))
   } catch { /* */ }
 }
 
 export function applyScenarioToMainForm(form: BoxCalcForm, scenario: CompareScenario): void {
-  const built = buildCompareForm(form, scenario)
+  const built = buildCompareForm(form, normalizeScenario(scenario))
   form.ply = built.ply
   form.flute = built.flute
   form.layers = built.layers
+  form.caliperOverride = built.caliperOverride
+  form.glueFlap = built.glueFlap
   if (scenario.marginPercent != null) form.marginPercent = scenario.marginPercent
   if (scenario.convRatePerKg != null) {
     form.conversionSlabs = built.conversionSlabs
   }
+}
+
+/** Weight from calculator form — for parity check in Compare UI. */
+export function calcWeightFromBaseForm(form: BoxCalcForm): number | null {
+  const res = computeBoxCalcResults(form)
+  if (!res || 'error' in res) return null
+  return res.weight?.boxTotal ?? null
 }

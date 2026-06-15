@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, watchEffect } from 'vue'
 import {
   applyScenarioToMainForm,
+  calcWeightFromBaseForm,
   comboLabel,
   computeAllCompareRows,
   defaultCompareScenario,
@@ -47,6 +48,16 @@ watchEffect(() => {
   void base.joining.coverage
   void base.joining.cwpRate
   void base.stackCheck.enabled
+  void base.ply
+  void base.flute
+  void base.caliperOverride
+  void base.glueFlap
+  for (const layer of base.layers) {
+    void layer.gsm
+    void layer.bf
+    void layer.rate
+    void layer.takeUp
+  }
 
   const list = scenarios.value
   for (const s of list) {
@@ -56,6 +67,9 @@ watchEffect(() => {
     void s.outerGsm
     void s.outerBf
     void s.outerRate
+    void s.bottomGsm
+    void s.bottomBf
+    void s.bottomRate
     void s.midGsm
     void s.midBf
     void s.midRate
@@ -68,6 +82,15 @@ watchEffect(() => {
 
   rowResults.value = computeAllCompareRows(base, list)
 })
+
+const baseWeightGm = computed(() => calcWeightFromBaseForm(props.baseForm))
+
+function weightMatchesCalc(idx: number): boolean {
+  const rowWt = resultFor(idx)?.weightGm
+  const baseWt = baseWeightGm.value
+  if (rowWt == null || baseWt == null) return false
+  return Math.abs(rowWt - baseWt) < 0.05
+}
 
 function resultFor(idx: number): CompareRowResult | undefined {
   return rowResults.value[idx]
@@ -152,6 +175,10 @@ onMounted(() => {
             Same box base — alag paper combo, rate aur margin side-by-side. Calculator tab ka size/qty yahan base hai.
           </p>
           <p class="text-xs font-mono text-indigo-900 mt-2 bg-white/70 rounded px-2 py-1 inline-block">{{ baseSummary }}</p>
+          <p v-if="baseWeightGm != null" class="text-xs text-indigo-800 mt-1">
+            Calculator box weight: <strong>{{ fmt(baseWeightGm, 1) }} gm</strong>
+            <span class="text-indigo-600"> — same ply/paper hone par Compare me match hona chahiye</span>
+          </p>
         </div>
         <div class="flex flex-wrap gap-2 shrink-0">
           <button type="button" class="pp-btn pp-btn-ghost !py-1.5 text-xs" @click="syncFromCalculator">
@@ -173,7 +200,8 @@ onMounted(() => {
             <th class="text-left px-2 py-2 min-w-[7rem]">Label</th>
             <th class="text-left px-2 py-2">Ply</th>
             <th class="text-left px-2 py-2">Flute</th>
-            <th class="text-center px-2 py-2" colspan="3">Liner (G/BF/₹)</th>
+            <th class="text-center px-2 py-2" colspan="3">Top Liner</th>
+            <th class="text-center px-2 py-2" colspan="3">Bottom Liner</th>
             <th class="text-center px-2 py-2" colspan="3">Flute (G/BF/₹)</th>
             <th class="text-center px-2 py-2" colspan="3">Mid (G/BF/₹)</th>
             <th class="text-right px-2 py-2">Margin%</th>
@@ -216,6 +244,9 @@ onMounted(() => {
             <td class="px-1 py-1.5"><input v-model.number="scenario.outerGsm" type="number" class="pp-input !py-1 !text-xs w-14" /></td>
             <td class="px-1 py-1.5"><input v-model.number="scenario.outerBf" type="number" class="pp-input !py-1 !text-xs w-12" /></td>
             <td class="px-1 py-1.5"><input v-model.number="scenario.outerRate" type="number" step="0.01" class="pp-input !py-1 !text-xs w-14" /></td>
+            <td class="px-1 py-1.5"><input v-model.number="scenario.bottomGsm" type="number" class="pp-input !py-1 !text-xs w-14" /></td>
+            <td class="px-1 py-1.5"><input v-model.number="scenario.bottomBf" type="number" class="pp-input !py-1 !text-xs w-12" /></td>
+            <td class="px-1 py-1.5"><input v-model.number="scenario.bottomRate" type="number" step="0.01" class="pp-input !py-1 !text-xs w-14" /></td>
             <td class="px-1 py-1.5"><input v-model.number="scenario.fluteGsm" type="number" class="pp-input !py-1 !text-xs w-14" /></td>
             <td class="px-1 py-1.5"><input v-model.number="scenario.fluteBf" type="number" class="pp-input !py-1 !text-xs w-12" /></td>
             <td class="px-1 py-1.5"><input v-model.number="scenario.fluteRate" type="number" step="0.01" class="pp-input !py-1 !text-xs w-14" /></td>
@@ -234,7 +265,10 @@ onMounted(() => {
             <td class="px-2 py-1.5">
               <input v-model.number="scenario.convRatePerKg" type="number" step="0.01" class="pp-input !py-1 !text-xs w-14 text-right" />
             </td>
-            <td class="px-2 py-1.5 text-right font-mono">{{ resultFor(idx)?.weightGm ? Math.round(resultFor(idx)!.weightGm!) : '—' }}</td>
+            <td class="px-2 py-1.5 text-right font-mono">
+              {{ resultFor(idx)?.weightGm != null ? fmt(resultFor(idx)!.weightGm, 1) : '—' }}
+              <span v-if="weightMatchesCalc(idx)" class="block text-[9px] text-teal-600">= Calc</span>
+            </td>
             <td class="px-2 py-1.5 text-right font-mono">{{ resultFor(idx)?.material != null ? fmtNum(resultFor(idx)!.material) : '—' }}</td>
             <td class="px-2 py-1.5 text-right font-mono">{{ resultFor(idx)?.conversion != null ? fmtNum(resultFor(idx)!.conversion) : '—' }}</td>
             <td class="px-2 py-1.5 text-right font-bold text-emerald-700 font-mono">
@@ -306,11 +340,18 @@ onMounted(() => {
 
         <div v-if="expandedId === scenario.id" class="space-y-2 mb-2 text-xs bg-slate-50 rounded-lg p-2">
           <div class="grid grid-cols-3 gap-1">
-            <span class="font-semibold text-slate-600">Liner</span>
+            <span class="font-semibold text-slate-600">Top liner</span>
             <input v-model.number="scenario.outerGsm" type="number" placeholder="GSM" class="pp-input !py-1" />
             <input v-model.number="scenario.outerBf" type="number" placeholder="BF" class="pp-input !py-1" />
             <span />
             <input v-model.number="scenario.outerRate" type="number" step="0.01" placeholder="₹/kg" class="pp-input !py-1 col-span-2" />
+          </div>
+          <div class="grid grid-cols-3 gap-1">
+            <span class="font-semibold text-slate-600">Bottom liner</span>
+            <input v-model.number="scenario.bottomGsm" type="number" placeholder="GSM" class="pp-input !py-1" />
+            <input v-model.number="scenario.bottomBf" type="number" placeholder="BF" class="pp-input !py-1" />
+            <span />
+            <input v-model.number="scenario.bottomRate" type="number" step="0.01" placeholder="₹/kg" class="pp-input !py-1 col-span-2" />
           </div>
           <div class="grid grid-cols-3 gap-1">
             <span class="font-semibold text-slate-600">Flute</span>
@@ -329,7 +370,12 @@ onMounted(() => {
         </div>
 
         <div v-if="resultFor(idx)?.error" class="text-xs text-rose-600 mb-2">{{ resultFor(idx)!.error }}</div>
-        <div v-else class="grid grid-cols-3 gap-2 text-center mb-3">
+        <div v-else class="grid grid-cols-2 gap-2 text-center mb-2">
+          <div class="bg-white rounded border p-2">
+            <div class="text-[10px] text-slate-500">Wt gm</div>
+            <div class="font-bold font-mono">{{ resultFor(idx)?.weightGm != null ? fmt(resultFor(idx)!.weightGm, 1) : '—' }}</div>
+            <div v-if="weightMatchesCalc(idx)" class="text-[9px] text-teal-600">= Calculator</div>
+          </div>
           <div class="bg-white rounded border p-2">
             <div class="text-[10px] text-slate-500">Sell/box</div>
             <div class="font-bold text-emerald-700">{{ resultFor(idx)?.sellingPrice != null ? fmtMoney(resultFor(idx)!.sellingPrice) : '—' }}</div>
@@ -339,7 +385,7 @@ onMounted(() => {
             <div class="font-bold">{{ resultFor(idx)?.perKg != null ? fmt(resultFor(idx)!.perKg) : '—' }}</div>
           </div>
           <div class="bg-white rounded border p-2">
-            <div class="text-[10px] text-slate-500">Order</div>
+            <div class="text-[10px] text-slate-500">Order total</div>
             <div class="font-bold text-sm">{{ resultFor(idx)?.orderTotal != null ? fmtMoney(resultFor(idx)!.orderTotal) : '—' }}</div>
           </div>
         </div>
