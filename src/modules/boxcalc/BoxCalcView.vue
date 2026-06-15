@@ -37,6 +37,7 @@ import {
 import { openJobCardPrintWindow } from '@/services/jobCard'
 import { exportAll, downloadBackup } from '@/services/backup'
 import PpModal from '@/components/PpModal.vue'
+import BoxCalcComparePanel from '@/components/boxcalc/BoxCalcComparePanel.vue'
 import BoxCalcResults from '@/components/boxcalc/BoxCalcResults.vue'
 import BoxCalcLivePanel from '@/components/boxcalc/BoxCalcLivePanel.vue'
 import BoxCalcJobCardModal from '@/components/boxcalc/BoxCalcJobCardModal.vue'
@@ -51,7 +52,7 @@ const partyStore = usePartyStore()
 const itemStore = useItemStore()
 const firmStore = useFirmStore()
 
-const activeTab = ref<'calculator' | 'saved' | 'settings'>('calculator')
+const activeTab = ref<'calculator' | 'compare' | 'saved' | 'settings'>('calculator')
 const search = ref('')
 const showResults = ref(false)
 const showSaveModal = ref(false)
@@ -62,10 +63,10 @@ const saveStatus = ref('')
 const vendorPhones = ref<VendorPhone[]>([])
 const savedBoxNames = ref<string[]>([])
 
-type BoxCalcTab = 'calculator' | 'saved' | 'settings'
+type BoxCalcTab = 'calculator' | 'compare' | 'saved' | 'settings'
 
 function tabFromQuery(tab: unknown): BoxCalcTab {
-  if (tab === 'saved' || tab === 'settings') return tab
+  if (tab === 'compare' || tab === 'saved' || tab === 'settings') return tab
   return 'calculator'
 }
 
@@ -422,6 +423,10 @@ function goToCalculator() {
   nextTick(() => window.scrollTo({ top: 0, behavior: 'smooth' }))
 }
 
+function loadCompareToCalculator() {
+  goToCalculator()
+}
+
 function scrollToForm() {
   setActiveTab('calculator')
   nextTick(() => window.scrollTo({ top: 0, behavior: 'smooth' }))
@@ -540,11 +545,11 @@ onMounted(async () => {
         <p class="text-sm text-slate-500">Corrugated box calculator — full production & costing</p>
       </div>
       <div v-if="saveStatus" class="text-sm text-emerald-600 font-semibold">{{ saveStatus }}</div>
-      <div class="flex bg-slate-200/80 p-1 rounded-lg self-start">
-        <button v-for="tab in ['calculator', 'saved', 'settings'] as const" :key="tab"
+      <div class="flex bg-slate-200/80 p-1 rounded-lg self-start flex-wrap gap-0.5">
+        <button v-for="tab in ['calculator', 'compare', 'saved', 'settings'] as const" :key="tab"
           :class="['px-3 py-1.5 text-xs font-semibold rounded-md capitalize', activeTab === tab ? 'bg-white text-navy shadow-sm' : 'text-slate-600']"
           @click="setActiveTab(tab)">
-          {{ tab === 'calculator' ? 'Calculator' : tab === 'saved' ? `Saved (${recipeStore.list.length})` : 'Settings' }}
+          {{ tab === 'calculator' ? 'Calculator' : tab === 'compare' ? 'Compare' : tab === 'saved' ? `Saved (${recipeStore.list.length})` : 'Settings' }}
         </button>
       </div>
     </header>
@@ -873,6 +878,18 @@ onMounted(async () => {
       />
     </div>
 
+    <!-- COMPARE -->
+    <div v-if="activeTab === 'compare'">
+      <button
+        type="button"
+        class="pp-btn pp-btn-ghost !py-2 text-sm w-full sm:w-auto mb-4"
+        @click="goToCalculator"
+      >
+        ← Back to Calculator
+      </button>
+      <BoxCalcComparePanel :base-form="form" @load-to-calculator="loadCompareToCalculator" />
+    </div>
+
     <!-- SAVED -->
     <div v-if="activeTab === 'saved'" class="space-y-4 pb-4">
       <button
@@ -1012,33 +1029,41 @@ onMounted(async () => {
 
     <!-- Mobile sticky bar -->
     <div class="md:hidden fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 z-30 shadow-lg">
-      <div class="grid grid-cols-4">
+      <div class="grid grid-cols-5">
         <button
           type="button"
-          class="py-2 text-xs font-medium"
+          class="py-2 text-[10px] font-medium"
           :class="activeTab === 'calculator' ? 'text-blue-600' : 'text-slate-500'"
           @click="goToCalculator"
         >
-          {{ activeTab === 'calculator' ? 'Calc' : '← Back' }}
+          Calc
+        </button>
+        <button
+          type="button"
+          class="py-2 text-[10px] font-medium"
+          :class="activeTab === 'compare' ? 'text-violet-600' : 'text-slate-500'"
+          @click="setActiveTab('compare')"
+        >
+          Compare
         </button>
         <button
           v-if="activeTab === 'calculator'"
           type="button"
-          class="py-2 text-xs bg-blue-600 text-white font-bold"
+          class="py-2 text-[10px] bg-blue-600 text-white font-bold"
           @click="runCostCalculation"
         >
-          Calculate
+          Go
         </button>
         <button
           v-else
           type="button"
-          class="py-2 text-xs bg-slate-600 text-white font-bold"
+          class="py-2 text-[10px] bg-slate-600 text-white font-bold"
           @click="goToCalculator"
         >
-          Calculator
+          Calc
         </button>
-        <button type="button" class="py-2 text-xs" :class="activeTab === 'saved' ? 'text-blue-600' : 'text-slate-500'" @click="setActiveTab('saved')">Saved</button>
-        <button type="button" class="py-2 text-xs" :class="activeTab === 'settings' ? 'text-blue-600' : 'text-slate-500'" @click="setActiveTab('settings')">Settings</button>
+        <button type="button" class="py-2 text-[10px]" :class="activeTab === 'saved' ? 'text-blue-600' : 'text-slate-500'" @click="setActiveTab('saved')">Saved</button>
+        <button type="button" class="py-2 text-[10px]" :class="activeTab === 'settings' ? 'text-blue-600' : 'text-slate-500'" @click="setActiveTab('settings')">Set</button>
       </div>
     </div>
 
