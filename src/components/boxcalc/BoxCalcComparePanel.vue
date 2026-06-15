@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, watchEffect } from 'vue'
 import {
   applyScenarioToMainForm,
   comboLabel,
@@ -22,11 +22,60 @@ const emit = defineEmits<{
 }>()
 
 const scenarios = ref<CompareScenario[]>([])
+const rowResults = ref<CompareRowResult[]>([])
 const expandedId = ref<string | null>(null)
 
-const rows = computed(() => computeAllCompareRows(props.baseForm, scenarios.value))
+/** Re-run calculator whenever scenarios or base form inputs change. */
+watchEffect(() => {
+  const base = props.baseForm
+  // Track base dimensions/costs so Compare follows Calculator tab edits.
+  void base.length
+  void base.width
+  void base.height
+  void base.quantity
+  void base.dimensionUnit
+  void base.dimType
+  void base.starchGSM
+  void base.starchRate
+  void base.printingCost
+  void base.shippingCostPerKg
+  void base.productionWastePercent
+  void base.scrapRate
+  void base.joining.method
+  void base.joining.wireRate
+  void base.joining.cwpGSM
+  void base.joining.coverage
+  void base.joining.cwpRate
+  void base.stackCheck.enabled
 
-const enabledRows = computed(() => rows.value.filter((r) => r.scenario.enabled && !r.error && r.sellingPrice != null))
+  const list = scenarios.value
+  for (const s of list) {
+    void s.enabled
+    void s.ply
+    void s.flute
+    void s.outerGsm
+    void s.outerBf
+    void s.outerRate
+    void s.midGsm
+    void s.midBf
+    void s.midRate
+    void s.fluteGsm
+    void s.fluteBf
+    void s.fluteRate
+    void s.marginPercent
+    void s.convRatePerKg
+  }
+
+  rowResults.value = computeAllCompareRows(base, list)
+})
+
+function resultFor(idx: number): CompareRowResult | undefined {
+  return rowResults.value[idx]
+}
+
+const enabledRows = computed(() =>
+  rowResults.value.filter((r) => r.scenario.enabled && !r.error && r.sellingPrice != null),
+)
 
 const bestPriceId = computed(() => {
   if (!enabledRows.value.length) return null
@@ -70,8 +119,10 @@ function syncFromCalculator() {
   persist()
 }
 
-function loadRow(row: CompareRowResult) {
-  applyScenarioToMainForm(props.baseForm, row.scenario)
+function loadRow(idx: number) {
+  const scenario = scenarios.value[idx]
+  if (!scenario) return
+  applyScenarioToMainForm(props.baseForm, scenario)
   emit('loadToCalculator')
 }
 
@@ -138,65 +189,65 @@ onMounted(() => {
         </thead>
         <tbody>
           <tr
-            v-for="row in rows"
-            :key="row.scenario.id"
+            v-for="(scenario, idx) in scenarios"
+            :key="scenario.id"
             :class="[
               'border-t border-slate-100',
-              row.scenario.id === bestPriceId ? 'bg-emerald-50/80' : 'hover:bg-slate-50/80',
-              !row.scenario.enabled ? 'opacity-50' : '',
+              scenario.id === bestPriceId ? 'bg-emerald-50/80' : 'hover:bg-slate-50/80',
+              !scenario.enabled ? 'opacity-50' : '',
             ]"
           >
             <td class="px-2 py-1.5">
-              <input v-model="row.scenario.enabled" type="checkbox" class="rounded" />
+              <input v-model="scenario.enabled" type="checkbox" class="rounded" />
             </td>
             <td class="px-2 py-1.5">
-              <input v-model="row.scenario.label" class="pp-input !py-1 !text-xs w-full min-w-[6rem]" />
+              <input v-model="scenario.label" class="pp-input !py-1 !text-xs w-full min-w-[6rem]" />
             </td>
             <td class="px-2 py-1.5">
-              <select v-model="row.scenario.ply" class="pp-input !py-1 !text-xs w-20">
+              <select v-model="scenario.ply" class="pp-input !py-1 !text-xs w-20">
                 <option value="3-ply">3</option>
                 <option value="5-ply">5</option>
                 <option value="7-ply">7</option>
               </select>
             </td>
             <td class="px-2 py-1.5">
-              <input v-model="row.scenario.flute" class="pp-input !py-1 !text-xs w-14 font-mono" />
+              <input v-model="scenario.flute" class="pp-input !py-1 !text-xs w-14 font-mono" />
             </td>
-            <td class="px-1 py-1.5"><input v-model.number="row.scenario.outerGsm" type="number" class="pp-input !py-1 !text-xs w-14" /></td>
-            <td class="px-1 py-1.5"><input v-model.number="row.scenario.outerBf" type="number" class="pp-input !py-1 !text-xs w-12" /></td>
-            <td class="px-1 py-1.5"><input v-model.number="row.scenario.outerRate" type="number" step="0.01" class="pp-input !py-1 !text-xs w-14" /></td>
-            <td class="px-1 py-1.5"><input v-model.number="row.scenario.fluteGsm" type="number" class="pp-input !py-1 !text-xs w-14" /></td>
-            <td class="px-1 py-1.5"><input v-model.number="row.scenario.fluteBf" type="number" class="pp-input !py-1 !text-xs w-12" /></td>
-            <td class="px-1 py-1.5"><input v-model.number="row.scenario.fluteRate" type="number" step="0.01" class="pp-input !py-1 !text-xs w-14" /></td>
+            <td class="px-1 py-1.5"><input v-model.number="scenario.outerGsm" type="number" class="pp-input !py-1 !text-xs w-14" /></td>
+            <td class="px-1 py-1.5"><input v-model.number="scenario.outerBf" type="number" class="pp-input !py-1 !text-xs w-12" /></td>
+            <td class="px-1 py-1.5"><input v-model.number="scenario.outerRate" type="number" step="0.01" class="pp-input !py-1 !text-xs w-14" /></td>
+            <td class="px-1 py-1.5"><input v-model.number="scenario.fluteGsm" type="number" class="pp-input !py-1 !text-xs w-14" /></td>
+            <td class="px-1 py-1.5"><input v-model.number="scenario.fluteBf" type="number" class="pp-input !py-1 !text-xs w-12" /></td>
+            <td class="px-1 py-1.5"><input v-model.number="scenario.fluteRate" type="number" step="0.01" class="pp-input !py-1 !text-xs w-14" /></td>
             <td class="px-1 py-1.5">
-              <input v-model.number="row.scenario.midGsm" type="number" class="pp-input !py-1 !text-xs w-14" :disabled="row.scenario.ply === '3-ply'" />
-            </td>
-            <td class="px-1 py-1.5">
-              <input v-model.number="row.scenario.midBf" type="number" class="pp-input !py-1 !text-xs w-12" :disabled="row.scenario.ply === '3-ply'" />
+              <input v-model.number="scenario.midGsm" type="number" class="pp-input !py-1 !text-xs w-14" :disabled="scenario.ply === '3-ply'" />
             </td>
             <td class="px-1 py-1.5">
-              <input v-model.number="row.scenario.midRate" type="number" step="0.01" class="pp-input !py-1 !text-xs w-14" :disabled="row.scenario.ply === '3-ply'" />
+              <input v-model.number="scenario.midBf" type="number" class="pp-input !py-1 !text-xs w-12" :disabled="scenario.ply === '3-ply'" />
+            </td>
+            <td class="px-1 py-1.5">
+              <input v-model.number="scenario.midRate" type="number" step="0.01" class="pp-input !py-1 !text-xs w-14" :disabled="scenario.ply === '3-ply'" />
             </td>
             <td class="px-2 py-1.5">
-              <input v-model.number="row.scenario.marginPercent" type="number" class="pp-input !py-1 !text-xs w-14 text-right" />
+              <input v-model.number="scenario.marginPercent" type="number" class="pp-input !py-1 !text-xs w-14 text-right" />
             </td>
             <td class="px-2 py-1.5">
-              <input v-model.number="row.scenario.convRatePerKg" type="number" step="0.01" class="pp-input !py-1 !text-xs w-14 text-right" />
+              <input v-model.number="scenario.convRatePerKg" type="number" step="0.01" class="pp-input !py-1 !text-xs w-14 text-right" />
             </td>
-            <td class="px-2 py-1.5 text-right font-mono">{{ row.weightGm ? Math.round(row.weightGm) : '—' }}</td>
-            <td class="px-2 py-1.5 text-right font-mono">{{ row.material != null ? fmtNum(row.material) : '—' }}</td>
-            <td class="px-2 py-1.5 text-right font-mono">{{ row.conversion != null ? fmtNum(row.conversion) : '—' }}</td>
+            <td class="px-2 py-1.5 text-right font-mono">{{ resultFor(idx)?.weightGm ? Math.round(resultFor(idx)!.weightGm!) : '—' }}</td>
+            <td class="px-2 py-1.5 text-right font-mono">{{ resultFor(idx)?.material != null ? fmtNum(resultFor(idx)!.material) : '—' }}</td>
+            <td class="px-2 py-1.5 text-right font-mono">{{ resultFor(idx)?.conversion != null ? fmtNum(resultFor(idx)!.conversion) : '—' }}</td>
             <td class="px-2 py-1.5 text-right font-bold text-emerald-700 font-mono">
-              <span v-if="row.error" class="text-rose-600 text-[10px] font-normal">{{ row.error }}</span>
-              <span v-else>{{ row.sellingPrice != null ? fmtNum(row.sellingPrice) : '—' }}</span>
-              <span v-if="row.scenario.id === bestPriceId" class="block text-[9px] text-emerald-600 font-semibold">LOWEST</span>
+              <span v-if="resultFor(idx)?.error" class="text-rose-600 text-[10px] font-normal">{{ resultFor(idx)!.error }}</span>
+              <span v-else>{{ resultFor(idx)?.sellingPrice != null ? fmtNum(resultFor(idx)!.sellingPrice) : '—' }}</span>
+              <span v-if="scenario.id === bestPriceId" class="block text-[9px] text-emerald-600 font-semibold">LOWEST</span>
             </td>
-            <td class="px-2 py-1.5 text-right font-mono">{{ row.perKg != null ? fmtNum(row.perKg) : '—' }}</td>
-            <td class="px-2 py-1.5 text-right font-mono">{{ row.orderTotal != null ? fmtNum(row.orderTotal, 0) : '—' }}</td>
+            <td class="px-2 py-1.5 text-right font-mono">{{ resultFor(idx)?.perKg != null ? fmtNum(resultFor(idx)!.perKg) : '—' }}</td>
+            <td class="px-2 py-1.5 text-right font-mono">{{ resultFor(idx)?.orderTotal != null ? fmtNum(resultFor(idx)!.orderTotal, 0) : '—' }}</td>
             <td class="px-2 py-1.5 whitespace-nowrap">
-              <button type="button" class="text-indigo-600 underline text-[10px] mr-1" @click="loadRow(row)">Load</button>
-              <button type="button" class="text-slate-500 underline text-[10px] mr-1" @click="duplicateRow(row.scenario)">Dup</button>
-              <button type="button" class="text-rose-600 underline text-[10px]" @click="removeRow(row.scenario.id)">Del</button>
+              <button type="button" class="text-indigo-600 underline text-[10px] mr-1" @click="loadRow(idx)">Load</button>
+              <button type="button" class="text-slate-500 underline text-[10px] mr-1" @click="duplicateRow(scenario)">Dup</button>
+              <button type="button" class="text-rose-600 underline text-[10px]" @click="removeRow(scenario.id)">Del</button>
             </td>
           </tr>
         </tbody>
@@ -206,41 +257,41 @@ onMounted(() => {
     <!-- Mobile / tablet cards -->
     <div class="lg:hidden space-y-3">
       <div
-        v-for="row in rows"
-        :key="row.scenario.id"
+        v-for="(scenario, idx) in scenarios"
+        :key="scenario.id"
         :class="[
           'pp-card p-3 border',
-          row.scenario.id === bestPriceId ? 'border-emerald-400 bg-emerald-50/50' : 'border-slate-200',
-          !row.scenario.enabled ? 'opacity-60' : '',
+          scenario.id === bestPriceId ? 'border-emerald-400 bg-emerald-50/50' : 'border-slate-200',
+          !scenario.enabled ? 'opacity-60' : '',
         ]"
       >
         <div class="flex items-start justify-between gap-2 mb-2">
           <div class="flex items-center gap-2 min-w-0 flex-1">
-            <input v-model="row.scenario.enabled" type="checkbox" class="rounded shrink-0" />
-            <input v-model="row.scenario.label" class="pp-input !py-1 text-sm font-semibold flex-1 min-w-0" />
+            <input v-model="scenario.enabled" type="checkbox" class="rounded shrink-0" />
+            <input v-model="scenario.label" class="pp-input !py-1 text-sm font-semibold flex-1 min-w-0" />
           </div>
-          <div v-if="row.scenario.id === bestPriceId" class="text-[10px] font-bold text-emerald-700 shrink-0">LOWEST</div>
+          <div v-if="scenario.id === bestPriceId" class="text-[10px] font-bold text-emerald-700 shrink-0">LOWEST</div>
         </div>
 
-        <p class="text-[10px] text-slate-500 font-mono mb-2">{{ comboLabel(row.scenario) }}</p>
+        <p class="text-[10px] text-slate-500 font-mono mb-2">{{ comboLabel(scenario) }}</p>
 
         <div class="grid grid-cols-2 gap-2 text-xs mb-2">
           <div>
             <label class="text-[10px] text-slate-500">Ply / Flute</label>
             <div class="flex gap-1">
-              <select v-model="row.scenario.ply" class="pp-input !py-1 flex-1">
+              <select v-model="scenario.ply" class="pp-input !py-1 flex-1">
                 <option value="3-ply">3-Ply</option>
                 <option value="5-ply">5-Ply</option>
                 <option value="7-ply">7-Ply</option>
               </select>
-              <input v-model="row.scenario.flute" class="pp-input !py-1 w-14 font-mono" />
+              <input v-model="scenario.flute" class="pp-input !py-1 w-14 font-mono" />
             </div>
           </div>
           <div>
             <label class="text-[10px] text-slate-500">Margin % / Conv ₹/kg</label>
             <div class="flex gap-1">
-              <input v-model.number="row.scenario.marginPercent" type="number" class="pp-input !py-1 flex-1" />
-              <input v-model.number="row.scenario.convRatePerKg" type="number" class="pp-input !py-1 flex-1" />
+              <input v-model.number="scenario.marginPercent" type="number" class="pp-input !py-1 flex-1" />
+              <input v-model.number="scenario.convRatePerKg" type="number" class="pp-input !py-1 flex-1" />
             </div>
           </div>
         </div>
@@ -248,55 +299,55 @@ onMounted(() => {
         <button
           type="button"
           class="text-xs text-indigo-600 underline mb-2"
-          @click="toggleExpand(row.scenario.id)"
+          @click="toggleExpand(scenario.id)"
         >
-          {{ expandedId === row.scenario.id ? 'Hide paper rates ▲' : 'Paper GSM/BF/Rate ▼' }}
+          {{ expandedId === scenario.id ? 'Hide paper rates ▲' : 'Paper GSM/BF/Rate ▼' }}
         </button>
 
-        <div v-if="expandedId === row.scenario.id" class="space-y-2 mb-2 text-xs bg-slate-50 rounded-lg p-2">
+        <div v-if="expandedId === scenario.id" class="space-y-2 mb-2 text-xs bg-slate-50 rounded-lg p-2">
           <div class="grid grid-cols-3 gap-1">
             <span class="font-semibold text-slate-600">Liner</span>
-            <input v-model.number="row.scenario.outerGsm" type="number" placeholder="GSM" class="pp-input !py-1" />
-            <input v-model.number="row.scenario.outerBf" type="number" placeholder="BF" class="pp-input !py-1" />
+            <input v-model.number="scenario.outerGsm" type="number" placeholder="GSM" class="pp-input !py-1" />
+            <input v-model.number="scenario.outerBf" type="number" placeholder="BF" class="pp-input !py-1" />
             <span />
-            <input v-model.number="row.scenario.outerRate" type="number" step="0.01" placeholder="₹/kg" class="pp-input !py-1 col-span-2" />
+            <input v-model.number="scenario.outerRate" type="number" step="0.01" placeholder="₹/kg" class="pp-input !py-1 col-span-2" />
           </div>
           <div class="grid grid-cols-3 gap-1">
             <span class="font-semibold text-slate-600">Flute</span>
-            <input v-model.number="row.scenario.fluteGsm" type="number" class="pp-input !py-1" />
-            <input v-model.number="row.scenario.fluteBf" type="number" class="pp-input !py-1" />
+            <input v-model.number="scenario.fluteGsm" type="number" class="pp-input !py-1" />
+            <input v-model.number="scenario.fluteBf" type="number" class="pp-input !py-1" />
             <span />
-            <input v-model.number="row.scenario.fluteRate" type="number" step="0.01" class="pp-input !py-1 col-span-2" />
+            <input v-model.number="scenario.fluteRate" type="number" step="0.01" class="pp-input !py-1 col-span-2" />
           </div>
-          <div v-if="row.scenario.ply !== '3-ply'" class="grid grid-cols-3 gap-1">
+          <div v-if="scenario.ply !== '3-ply'" class="grid grid-cols-3 gap-1">
             <span class="font-semibold text-slate-600">Mid</span>
-            <input v-model.number="row.scenario.midGsm" type="number" class="pp-input !py-1" />
-            <input v-model.number="row.scenario.midBf" type="number" class="pp-input !py-1" />
+            <input v-model.number="scenario.midGsm" type="number" class="pp-input !py-1" />
+            <input v-model.number="scenario.midBf" type="number" class="pp-input !py-1" />
             <span />
-            <input v-model.number="row.scenario.midRate" type="number" step="0.01" class="pp-input !py-1 col-span-2" />
+            <input v-model.number="scenario.midRate" type="number" step="0.01" class="pp-input !py-1 col-span-2" />
           </div>
         </div>
 
-        <div v-if="row.error" class="text-xs text-rose-600 mb-2">{{ row.error }}</div>
+        <div v-if="resultFor(idx)?.error" class="text-xs text-rose-600 mb-2">{{ resultFor(idx)!.error }}</div>
         <div v-else class="grid grid-cols-3 gap-2 text-center mb-3">
           <div class="bg-white rounded border p-2">
             <div class="text-[10px] text-slate-500">Sell/box</div>
-            <div class="font-bold text-emerald-700">{{ row.sellingPrice != null ? fmtMoney(row.sellingPrice) : '—' }}</div>
+            <div class="font-bold text-emerald-700">{{ resultFor(idx)?.sellingPrice != null ? fmtMoney(resultFor(idx)!.sellingPrice) : '—' }}</div>
           </div>
           <div class="bg-white rounded border p-2">
             <div class="text-[10px] text-slate-500">₹/kg</div>
-            <div class="font-bold">{{ row.perKg != null ? fmt(row.perKg) : '—' }}</div>
+            <div class="font-bold">{{ resultFor(idx)?.perKg != null ? fmt(resultFor(idx)!.perKg) : '—' }}</div>
           </div>
           <div class="bg-white rounded border p-2">
             <div class="text-[10px] text-slate-500">Order</div>
-            <div class="font-bold text-sm">{{ row.orderTotal != null ? fmtMoney(row.orderTotal) : '—' }}</div>
+            <div class="font-bold text-sm">{{ resultFor(idx)?.orderTotal != null ? fmtMoney(resultFor(idx)!.orderTotal) : '—' }}</div>
           </div>
         </div>
 
         <div class="flex gap-2">
-          <button type="button" class="pp-btn pp-btn-primary !py-1.5 text-xs flex-1" @click="loadRow(row)">Load to Calc</button>
-          <button type="button" class="pp-btn pp-btn-ghost !py-1.5 text-xs" @click="duplicateRow(row.scenario)">Dup</button>
-          <button type="button" class="pp-btn pp-btn-danger !py-1.5 text-xs" @click="removeRow(row.scenario.id)">Del</button>
+          <button type="button" class="pp-btn pp-btn-primary !py-1.5 text-xs flex-1" @click="loadRow(idx)">Load to Calc</button>
+          <button type="button" class="pp-btn pp-btn-ghost !py-1.5 text-xs" @click="duplicateRow(scenario)">Dup</button>
+          <button type="button" class="pp-btn pp-btn-danger !py-1.5 text-xs" @click="removeRow(scenario.id)">Del</button>
         </div>
       </div>
     </div>
