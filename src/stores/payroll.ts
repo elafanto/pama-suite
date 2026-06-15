@@ -15,7 +15,8 @@ import {
   sumPayrollLines,
 } from '@/services/payrollCalc'
 import { postAdvanceVoucher, postSalaryVoucher } from '@/services/payrollVoucher'
-import { syncPayrollToCloudIfReady } from '@/services/payrollCloud'
+import { dedupeAllPayrollRuns, pickBestPayrollRun } from '@/services/payrollRuns'
+import { syncPayrollToCloudIfReady } from '@/services/sync'
 import type {
   DayAttendance,
   PayrollLine,
@@ -42,6 +43,7 @@ export const usePayrollStore = defineStore('payroll', () => {
   async function load() {
     const firm = useFirmStore()
     if (!firm.activeFirmId) return
+    await dedupeAllPayrollRuns(firm.activeFirmId)
     staffList.value = (await staffRepo.all(firm.activeFirmId)).sort((a, b) => a.name.localeCompare(b.name))
     advances.value = await advanceRepo.all(firm.activeFirmId)
     runs.value = (await runRepo.all(firm.activeFirmId)).sort((a, b) => b.period.localeCompare(a.period))
@@ -135,16 +137,25 @@ export const usePayrollStore = defineStore('payroll', () => {
   }
 
   async function getRunForPeriod(period: string): Promise<PayrollRun | undefined> {
-    return runs.value.find((r) => r.period === period && !r.is_deleted)
+    const firm = useFirmStore()
+    const matches = await db.payroll_runs
+      .where('[firm_id+period]')
+      .equals([firm.activeFirmId, period])
+      .filter((r) => !r.is_deleted)
+      .toArray()
+    if (!matches.length) return undefined
+    return pickBestPayrollRun(matches)
   }
 
   async function ensureRun(period: string): Promise<PayrollRun> {
     const firm = useFirmStore()
-    const existing = await db.payroll_runs
+    await dedupeAllPayrollRuns(firm.activeFirmId)
+    const matches = await db.payroll_runs
       .where('[firm_id+period]')
       .equals([firm.activeFirmId, period])
       .filter((r) => !r.is_deleted)
-      .first()
+      .toArray()
+    const existing = matches.length ? pickBestPayrollRun(matches) : undefined
     if (existing) return existing
 
     const [y, m] = period.split('-').map(Number)

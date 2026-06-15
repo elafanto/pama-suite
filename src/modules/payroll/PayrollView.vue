@@ -21,6 +21,7 @@ import {
   periodLabel,
   sundayDayKeys,
 } from '@/services/payrollCalc'
+import { pickBestPayrollRun } from '@/services/payrollRuns'
 
 const store = usePayrollStore()
 const firmStore = useFirmStore()
@@ -76,7 +77,10 @@ const selMonth = computed(() => Number(period.value.split('-')[1]) || 1)
 const dim = computed(() => daysInMonth(selYear.value, selMonth.value))
 const dayCols = computed(() => Array.from({ length: dim.value }, (_, i) => String(i + 1).padStart(2, '0')))
 
-const currentRun = computed(() => store.runs.find((r) => r.period === period.value))
+const currentRun = computed(() => {
+  const matches = store.runs.filter((r) => r.period === period.value && !r.is_deleted)
+  return matches.length ? pickBestPayrollRun(matches) : undefined
+})
 const selectedBulkDays = ref<Set<string>>(new Set())
 const attendanceEditMode = ref(false)
 const showDayActionModal = ref(false)

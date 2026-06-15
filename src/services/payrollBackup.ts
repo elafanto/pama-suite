@@ -1,5 +1,6 @@
 import { db } from '@/data/db'
 import { nowISO } from '@/data/util'
+import { attendanceScore, dedupeAllPayrollRuns } from '@/services/payrollRuns'
 import type { PayrollRun, Staff, StaffAdvance } from '@/types/models'
 
 export interface PayrollBackupBundle {
@@ -62,8 +63,27 @@ export async function applyImportedPayrollBackup(
     }
   }
 
+  const mergePayrollRuns = async (rows: PayrollRun[] | undefined) => {
+    if (!rows?.length) return
+    for (const row of rows) {
+      const existing = await db.payroll_runs.get(row.id)
+      if (skipDirty && existing?._dirty) {
+        if (attendanceScore(row) <= attendanceScore(existing)) continue
+      }
+      if (!existing || isNewer(row.updated_at, existing.updated_at)) {
+        await db.payroll_runs.put({
+          ...row,
+          _dirty: false,
+          updated_at: row.updated_at || nowISO(),
+        })
+        restored++
+      }
+    }
+  }
+
   await mergeRows(db.staff, incoming.staff)
   await mergeRows(db.staff_advances, incoming.staff_advances)
-  await mergeRows(db.payroll_runs, incoming.payroll_runs)
+  await mergePayrollRuns(incoming.payroll_runs)
+  if (incoming.payroll_runs?.length) await dedupeAllPayrollRuns()
   return restored
 }

@@ -72,13 +72,3 @@ export async function pullPayrollFromCloud(): Promise<{ restored: number; error?
   return { restored }
 }
 
-/** After local payroll save, push snapshot when cloud is ready. */
-export async function syncPayrollToCloudIfReady(): Promise<void> {
-  const auth = useAuthStore()
-  if (!auth.canSync) return
-  try {
-    await pushPayrollToCloud()
-  } catch {
-    /* non-blocking */
-  }
-}

@@ -20,6 +20,7 @@ import {
   pullPayrollFromCloud,
   pushPayrollToCloud,
 } from '@/services/payrollCloud'
+import { dedupeAllPayrollRuns } from '@/services/payrollRuns'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 
 type SyncTable =
@@ -62,6 +63,8 @@ const TABLE_MAP: Record<SyncTable, string> = {
   staff_advances: 'staff_advances',
   payroll_runs: 'payroll_runs',
 }
+
+const PAYROLL_SYNC_TABLES: SyncTable[] = ['staff', 'staff_advances', 'payroll_runs']
 
 const PAYLOAD_TABLES: SyncTable[] = [
   'invoices',
@@ -291,6 +294,47 @@ async function repairLocalInvoiceNumberState(): Promise<number> {
     }
   }
   return repaired
+}
+
+/** Push dirty payroll rows immediately after attendance save (multi-device sync). */
+export async function pushPayrollDirtyToCloud(): Promise<{ ok: boolean; pushed: number; error?: string }> {
+  const auth = useAuthStore()
+  const sb = getSupabase()
+  if (!sb || !auth.canSync || !auth.orgId) {
+    return { ok: false, pushed: 0, error: 'Login + Supabase required for cloud sync' }
+  }
+
+  let pushed = 0
+  const orgId = auth.orgId
+  const cloudUpdatedAt = nowISO()
+
+  for (const localName of PAYROLL_SYNC_TABLES) {
+    const remoteName = TABLE_MAP[localName]
+    const table = (db as any)[localName]
+    if (!table) continue
+    const dirty = await table.filter((r: any) => r._dirty === true).toArray()
+
+    for (const rec of dirty) {
+      const result = await upsertCloudRow(sb, orgId, localName, remoteName, rec, cloudUpdatedAt)
+      if (result.error) return { ok: false, pushed, error: result.error }
+      await table.update(rec.id, { _dirty: false, updated_at: cloudUpdatedAt })
+      pushed++
+    }
+  }
+
+  return { ok: true, pushed }
+}
+
+/** After local payroll save, push table rows + org_settings snapshot when cloud is ready. */
+export async function syncPayrollToCloudIfReady(): Promise<void> {
+  const auth = useAuthStore()
+  if (!auth.canSync) return
+  try {
+    await pushPayrollDirtyToCloud()
+    await pushPayrollToCloud()
+  } catch {
+    /* non-blocking */
+  }
 }
 
 /** Push all _dirty records to Supabase (jsonb payload tables). */
@@ -548,10 +592,14 @@ export async function runFullPullFromCloud(): Promise<string> {
       return message
     }
     const repaired = await repairLocalInvoiceNumberState()
-    if (pull.pulled > 0) await reloadAllStores()
+    const payrollPull = await pullPayrollFromCloud()
+    const deduped = await dedupeAllPayrollRuns()
+    if (pull.pulled > 0 || payrollPull.restored > 0 || deduped > 0) await reloadAllStores()
     const message = withWarnings(
-      pull.pulled || repaired ? `Full pull: ${pull.pulled} records${repaired ? `, repaired ${repaired}` : ''}` : 'Cloud has no data for this account',
-      pull.warnings,
+      pull.pulled || repaired || payrollPull.restored
+        ? `Full pull: ${pull.pulled} records${repaired ? `, repaired ${repaired}` : ''}${payrollPull.restored ? `, payroll ${payrollPull.restored}` : ''}${deduped ? `, deduped ${deduped}` : ''}`
+        : 'Cloud has no data for this account',
+      [...(pull.warnings || []), ...(payrollPull.error ? [`Payroll cloud pull: ${payrollPull.error}`] : [])],
     )
     rememberSyncResult(message, uniqWarnings(pull.warnings || []).join(' '))
     return message
@@ -584,6 +632,7 @@ export async function runSync(): Promise<string> {
     const repaired = await repairLocalInvoiceNumberState()
     const sigPull = await pullSignaturesFromCloud()
     const payrollPull = await pullPayrollFromCloud()
+    const deduped = await dedupeAllPayrollRuns()
     const docUpload = await pushPendingDocumentUploads()
     const push = await pushDirtyToCloud()
     const sigPush = await pushSignaturesToCloud()
@@ -594,7 +643,7 @@ export async function runSync(): Promise<string> {
       return message
     }
     const docCached = await cacheRecentRemoteDocuments(8)
-    if (pull.pulled > 0 || sigPull.restored > 0 || payrollPull.restored > 0) await reloadAllStores()
+    if (pull.pulled > 0 || sigPull.restored > 0 || payrollPull.restored > 0 || deduped > 0) await reloadAllStores()
     const parts: string[] = []
     if (pull.pulled) parts.push(`pulled ${pull.pulled}`)
     if (repaired) parts.push(`repaired ${repaired}`)
@@ -602,6 +651,7 @@ export async function runSync(): Promise<string> {
     if (sigPull.restored) parts.push(`signatures pulled ${sigPull.restored}`)
     if (sigPush.ok) parts.push('signatures backed up')
     if (payrollPull.restored) parts.push(`payroll pulled ${payrollPull.restored}`)
+    if (deduped) parts.push(`payroll deduped ${deduped}`)
     if (payrollPush.ok) parts.push('payroll backed up')
     if (docUpload.uploaded) parts.push(`docs uploaded ${docUpload.uploaded}`)
     if (docCached) parts.push(`docs cached ${docCached}`)
