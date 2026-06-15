@@ -23,6 +23,11 @@ import {
   sundayDayKeys,
 } from '@/services/payrollCalc'
 import { pickBestPayrollRun } from '@/services/payrollRuns'
+import {
+  generateStaffHoursMessage,
+  hasMarkedAttendance,
+  openStaffHoursWhatsApp,
+} from '@/services/payrollWhatsApp'
 
 const store = usePayrollStore()
 const firmStore = useFirmStore()
@@ -335,6 +340,41 @@ async function recalculate() {
   if (res && 'error' in res) alert(res.error)
 }
 
+function staffHoursMessage(staffId: string): string | null {
+  const staff = store.staffList.find((s) => s.id === staffId)
+  const line = lineFor(staffId)
+  if (!staff || !line) return null
+  const firmName = firmStore.activeFirm?.name || 'PAMA'
+  return generateStaffHoursMessage(firmName, staff, line, selYear.value, selMonth.value)
+}
+
+async function shareStaffHoursWhatsApp(staffId: string) {
+  await ensurePeriodRun()
+  const staff = store.staffList.find((s) => s.id === staffId)
+  const line = lineFor(staffId)
+  if (!staff || !line) return alert('Pehle attendance mark karein.')
+  if (!hasMarkedAttendance(line)) return alert(`${staff.name}: is month me koi din mark nahi.`)
+  const msg = staffHoursMessage(staffId)
+  if (!msg) return
+  if (!staff.phone?.trim()) {
+    if (!confirm(`${staff.name}: phone number nahi hai. WhatsApp bina number ke khulega — theek hai?`)) return
+  }
+  openStaffHoursWhatsApp(staff.phone, msg)
+}
+
+async function shareAllStaffHoursWhatsApp() {
+  await ensurePeriodRun()
+  const eligible = store.activeStaff.filter((s) => hasMarkedAttendance(lineFor(s.id)))
+  if (!eligible.length) return alert('Kisi staff ki attendance mark nahi hai.')
+  if (!confirm(`${eligible.length} staff — ek-ek karke WhatsApp khulega. Continue?`)) return
+  for (const s of eligible) {
+    if (!confirm(`WhatsApp bhejein: ${s.name}?`)) continue
+    const msg = staffHoursMessage(s.id)
+    if (!msg) continue
+    openStaffHoursWhatsApp(s.phone, msg)
+  }
+}
+
 async function paySalary() {
   if (!currentRun.value) return alert('Open attendance / salary for this month first.')
   if (currentRun.value.status === 'paid') return alert('Already paid.')
@@ -482,6 +522,16 @@ onMounted(async () => {
         Date tap = bulk select · <strong>✓all</strong> = sab present · Cell tap = action menu (har change confirm)
       </p>
 
+      <div v-if="store.activeStaff.length > 0 && currentRun" class="flex flex-wrap gap-2 px-1">
+        <button
+          type="button"
+          class="pp-btn pp-btn-success !py-1.5 !text-xs"
+          @click="shareAllStaffHoursWhatsApp"
+        >
+          💬 WhatsApp hours (sab staff)
+        </button>
+      </div>
+
       <div v-if="store.activeStaff.length > 0 && canEditAttendance" class="pp-card p-3 flex flex-wrap gap-2 items-center">
         <span class="text-xs font-semibold text-slate-600 w-full sm:w-auto">Bulk (sab staff):</span>
         <button
@@ -546,7 +596,19 @@ onMounted(async () => {
           </thead>
           <tbody>
             <tr v-for="s in store.activeStaff" :key="s.id">
-              <td class="sticky left-0 z-10 bg-white border border-slate-200 px-2 py-2 font-semibold text-navy truncate max-w-[120px]">{{ s.name }}</td>
+              <td class="sticky left-0 z-10 bg-white border border-slate-200 px-2 py-2 font-semibold text-navy max-w-[140px]">
+                <div class="flex items-center gap-1 min-w-0">
+                  <span class="truncate">{{ s.name }}</span>
+                  <button
+                    type="button"
+                    class="shrink-0 text-[10px] px-1 py-0.5 rounded bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
+                    title="WhatsApp par day-wise hours bhejein"
+                    @click="shareStaffHoursWhatsApp(s.id)"
+                  >
+                    💬
+                  </button>
+                </div>
+              </td>
               <td
                 v-for="d in dayCols"
                 :key="d"
@@ -613,6 +675,14 @@ onMounted(async () => {
     <section v-else-if="tab === 'salary'" class="space-y-4">
       <div class="flex flex-wrap gap-2">
         <button class="pp-btn pp-btn-ghost" :disabled="currentRun?.status === 'paid'" @click="recalculate">Recalculate</button>
+        <button
+          v-if="currentRun"
+          type="button"
+          class="pp-btn pp-btn-success !py-2"
+          @click="shareAllStaffHoursWhatsApp"
+        >
+          💬 WhatsApp hours (sab)
+        </button>
       </div>
       <div v-if="!currentRun" class="pp-card p-6 text-center text-slate-400">Select month &amp; mark attendance.</div>
       <template v-else>
@@ -652,7 +722,19 @@ onMounted(async () => {
             </thead>
             <tbody>
               <tr v-for="line in currentRun.lines" :key="line.staff_id" class="border-t border-slate-100">
-                <td class="px-3 py-2 font-semibold">{{ line.staff_name }}</td>
+                <td class="px-3 py-2 font-semibold">
+                  <div class="flex items-center gap-1">
+                    <span>{{ line.staff_name }}</span>
+                    <button
+                      type="button"
+                      class="text-[10px] px-1 py-0.5 rounded bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
+                      title="WhatsApp par hours bhejein"
+                      @click="shareStaffHoursWhatsApp(line.staff_id)"
+                    >
+                      💬
+                    </button>
+                  </div>
+                </td>
                 <td class="px-2 py-2 text-right text-xs">{{ line.total_duty_hours ?? 0 }}</td>
                 <td class="px-2 py-2 text-right text-xs text-rose-600">{{ line.total_off_unpaid_hours ?? 0 }}</td>
                 <td class="px-2 py-2 text-right text-xs">{{ line.total_ot_hours ?? 0 }}</td>
@@ -723,6 +805,14 @@ onMounted(async () => {
           <option v-for="s in store.activeStaff" :key="s.id" :value="s.id">{{ s.name }}</option>
         </select>
         <button class="pp-btn pp-btn-ghost" @click="printPayslip">Print payslip</button>
+        <button
+          v-if="payslipStaffId"
+          type="button"
+          class="pp-btn pp-btn-success"
+          @click="shareStaffHoursWhatsApp(payslipStaffId)"
+        >
+          💬 WhatsApp hours
+        </button>
       </div>
       <div v-if="!payslipLine" class="pp-card p-6 text-center text-slate-400">No salary data for this month.</div>
       <div v-else id="payslip-print" class="pp-card p-6 max-w-md mx-auto border-2 border-slate-200">
