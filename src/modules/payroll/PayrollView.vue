@@ -19,6 +19,7 @@ import {
   isSunday,
   normalizeDayHours,
   periodLabel,
+  sumDaySalaryExpense,
   sundayDayKeys,
 } from '@/services/payrollCalc'
 import { pickBestPayrollRun } from '@/services/payrollRuns'
@@ -90,6 +91,23 @@ const dayActionStaffName = ref('')
 
 const sundaysThisMonth = computed(() => sundayDayKeys(selYear.value, selMonth.value))
 const selectedBulkCount = computed(() => selectedBulkDays.value.size)
+
+const daySalaryExpense = computed(() => {
+  const map: Record<string, number> = {}
+  for (const d of dayCols.value) {
+    map[d] = sumDaySalaryExpense(d, store.activeStaff, currentRun.value?.lines)
+  }
+  return map
+})
+
+const attendanceSalaryExpenseTotal = computed(() =>
+  Object.values(daySalaryExpense.value).reduce((sum, n) => sum + n, 0),
+)
+
+function fmtDaySalaryExpense(amount: number): string {
+  if (amount <= 0) return '·'
+  return `₹${amount.toLocaleString('en-IN')}`
+}
 
 const tabs: { id: Tab; label: string; icon: string }[] = [
   { id: 'staff', label: 'Staff', icon: '👤' },
@@ -554,8 +572,41 @@ onMounted(async () => {
               </td>
             </tr>
           </tbody>
+          <tfoot>
+            <tr class="bg-emerald-50 border-t-2 border-emerald-200">
+              <td class="sticky left-0 z-10 bg-emerald-50 border border-slate-200 px-2 py-2 font-bold text-emerald-900 text-[10px] leading-tight">
+                Salary expense<br><span class="font-normal text-emerald-700">(per day)</span>
+              </td>
+              <td
+                v-for="d in dayCols"
+                :key="'exp-' + d"
+                class="border border-slate-200 px-0.5 py-1 text-center align-middle min-w-[36px]"
+                :class="isSunday(selYear, selMonth, d) ? 'bg-emerald-100/80' : ''"
+                :title="daySalaryExpense[d] > 0 ? `Din ${Number(d)} — sab staff: ₹${daySalaryExpense[d].toLocaleString('en-IN')}` : ''"
+              >
+                <span
+                  class="block text-[9px] font-bold leading-tight"
+                  :class="daySalaryExpense[d] > 0 ? 'text-emerald-800' : 'text-slate-300'"
+                >
+                  {{ fmtDaySalaryExpense(daySalaryExpense[d]) }}
+                </span>
+              </td>
+            </tr>
+          </tfoot>
         </table>
       </div>
+      <div
+        v-if="store.activeStaff.length > 0 && attendanceSalaryExpenseTotal > 0"
+        class="pp-card p-3 flex flex-wrap items-center justify-between gap-2 bg-emerald-50 border-emerald-200"
+      >
+        <span class="text-xs text-emerald-800">
+          Marked days ka total salary expense ({{ periodLabel(period) }})
+        </span>
+        <span class="font-bold text-emerald-900">₹{{ attendanceSalaryExpenseTotal.toLocaleString('en-IN') }}</span>
+      </div>
+      <p v-if="store.activeStaff.length > 0" class="text-[10px] text-slate-400 px-1">
+        Har din = sab staff ke paid hours × hourly wage (present, holiday, Sunday, OT included).
+      </p>
     </section>
 
     <!-- SALARY -->

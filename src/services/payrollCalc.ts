@@ -198,6 +198,34 @@ export function calcEarnedFromHours(
   return Math.max(0, ceilRupee(base - absentDeduction - unpaidDeduction + otPay))
 }
 
+/** Salary expense for one staff on one day (paid hours × hourly wage). */
+export function calcDaySalaryExpense(
+  staff: Pick<Staff, 'hourly_wage'>,
+  day: DayAttendance | undefined,
+): number {
+  if (!day || day.duty_hours === null) return 0
+  const hourly = Math.max(0, staff.hourly_wage)
+  const paidHours = breakdownDay(day).paid
+  if (paidHours <= 0) return 0
+  return ceilRupee(paidHours * hourly)
+}
+
+/** Total salary expense for all staff on one calendar day. */
+export function sumDaySalaryExpense(
+  dayKey: string,
+  staffList: Staff[],
+  lines: PayrollLine[] | undefined,
+): number {
+  const lineByStaff = new Map((lines ?? []).map((l) => [l.staff_id, l]))
+  let total = 0
+  for (const staff of staffList) {
+    const line = lineByStaff.get(staff.id)
+    const dayHours = line ? normalizeDayHours(line) : {}
+    total += calcDaySalaryExpense(staff, dayHours[dayKey])
+  }
+  return total
+}
+
 export function buildPayrollLine(
   staff: Staff,
   dayHoursInput: Record<string, DayAttendance> | undefined,
