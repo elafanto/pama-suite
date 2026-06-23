@@ -150,6 +150,81 @@ const initialFormState = () => ({
 
 const form = reactive(initialFormState())
 
+const editingInvoice = computed(() =>
+  editingId.value ? invoiceStore.list.find((i) => i.id === editingId.value) : undefined,
+)
+
+const formSelectedParty = computed(() => {
+  if (form.party_id) {
+    return partyStore.list.find((p) => !p.is_deleted && p.id === form.party_id)
+  }
+  const key = form.party_name.trim().toLowerCase()
+  if (!key) return undefined
+  return partyStore.list.find((p) => !p.is_deleted && p.name.toLowerCase() === key)
+})
+
+const formBuyerDisplay = computed(() => {
+  const p = formSelectedParty.value
+  if (p) {
+    const gst = formatGstin(p.gst)
+    return {
+      name: p.name,
+      addr: p.addr || '',
+      city: p.city || '',
+      pin: p.pin || '',
+      gst: p.is_consumer ? '' : gst,
+      state: p.state || getStateCode(gst) || '',
+      is_consumer: !!p.is_consumer,
+      phone: p.phone || '',
+      email: p.email || '',
+    }
+  }
+  const snap = editingInvoice.value?.party_snapshot
+  if (snap && form.party_name.trim()) {
+    const gst = formatGstin(snap.gst)
+    return {
+      name: form.party_name.trim(),
+      addr: snap.addr || '',
+      city: snap.city || '',
+      pin: snap.pin || '',
+      gst: snap.is_consumer ? '' : gst,
+      state: snap.state || getStateCode(gst) || '',
+      is_consumer: !!snap.is_consumer,
+      phone: snap.phone || '',
+      email: snap.email || '',
+    }
+  }
+  if (!form.party_name.trim()) return null
+  return {
+    name: form.party_name.trim(),
+    addr: '',
+    city: '',
+    pin: '',
+    gst: '',
+    state: '',
+    is_consumer: false,
+    phone: '',
+    email: '',
+  }
+})
+
+const formShipDisplay = computed(() => {
+  if (form.sameAsBuyer) return null
+  const s = form.ship
+  if (!s.addr?.trim() && !s.name?.trim()) return null
+  const gstin = formatGstin(s.gstin)
+  return {
+    name: s.name?.trim() || form.party_name.trim(),
+    addr: s.addr || '',
+    city: s.city || '',
+    pin: s.pin || '',
+    gstin,
+    state: s.state || getStateCode(gstin) || '',
+  }
+})
+
+const showFormAddresses = computed(() => !!formBuyerDisplay.value)
+
 // Helper functions
 const n2 = (val: number) => (val || 0).toFixed(2)
 
@@ -1121,6 +1196,49 @@ onMounted(async () => {
             <div>
               <label class="pp-label">Reference / PO No.</label>
               <input v-model="form.ref" class="pp-input" placeholder="PO-12345 (Optional)" />
+            </div>
+          </div>
+
+          <!-- Billing & shipping address preview -->
+          <div v-if="showFormAddresses" class="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-slate-100 pt-4">
+            <div class="p-3 rounded-xl border border-blue-200 bg-blue-50/60">
+              <h3 class="text-xs font-bold text-blue-900 uppercase tracking-wider mb-2">Bill To (Billing)</h3>
+              <p class="font-semibold text-navy text-sm">{{ formBuyerDisplay!.name }}</p>
+              <p v-if="formBuyerDisplay!.addr" class="text-xs text-slate-700 mt-1 whitespace-pre-wrap">{{ formBuyerDisplay!.addr }}</p>
+              <p v-if="formBuyerDisplay!.city || formBuyerDisplay!.pin" class="text-xs text-slate-600 mt-0.5">
+                {{ [formBuyerDisplay!.city, formBuyerDisplay!.pin].filter(Boolean).join(' - ') }}
+              </p>
+              <p v-if="formBuyerDisplay!.is_consumer" class="text-xs text-emerald-700 font-semibold mt-1">Consumer (B2C)</p>
+              <p v-else-if="formBuyerDisplay!.gst" class="text-xs font-mono font-semibold mt-1">GSTIN: {{ formBuyerDisplay!.gst }}</p>
+              <p v-if="formBuyerDisplay!.state" class="text-xs text-slate-500 mt-0.5">
+                {{ getStateName(formBuyerDisplay!.gst || formBuyerDisplay!.state) }} ({{ formBuyerDisplay!.state }})
+              </p>
+              <p v-if="!formBuyerDisplay!.addr" class="text-xs text-amber-700 mt-2">Address missing — Parties me edit karein</p>
+            </div>
+            <div class="p-3 rounded-xl border border-emerald-200 bg-emerald-50/60">
+              <h3 class="text-xs font-bold text-emerald-900 uppercase tracking-wider mb-2">Ship To (Consignee)</h3>
+              <template v-if="form.sameAsBuyer">
+                <p class="text-sm text-slate-600 italic mb-1">Same as billing address</p>
+                <p class="font-semibold text-navy text-sm">{{ formBuyerDisplay!.name }}</p>
+                <p v-if="formBuyerDisplay!.addr" class="text-xs text-slate-700 mt-1 whitespace-pre-wrap">{{ formBuyerDisplay!.addr }}</p>
+                <p v-if="formBuyerDisplay!.city || formBuyerDisplay!.pin" class="text-xs text-slate-600 mt-0.5">
+                  {{ [formBuyerDisplay!.city, formBuyerDisplay!.pin].filter(Boolean).join(' - ') }}
+                </p>
+              </template>
+              <template v-else-if="formShipDisplay">
+                <p class="font-semibold text-navy text-sm">{{ formShipDisplay.name }}</p>
+                <p v-if="formShipDisplay.addr" class="text-xs text-slate-700 mt-1 whitespace-pre-wrap">{{ formShipDisplay.addr }}</p>
+                <p v-if="formShipDisplay.city || formShipDisplay.pin" class="text-xs text-slate-600 mt-0.5">
+                  {{ [formShipDisplay.city, formShipDisplay.pin].filter(Boolean).join(' - ') }}
+                </p>
+                <p v-if="formShipDisplay.gstin" class="text-xs font-mono font-semibold mt-1">GSTIN: {{ formShipDisplay.gstin }}</p>
+                <p v-if="formShipDisplay.state" class="text-xs text-slate-500 mt-0.5">
+                  {{ getStateName(formShipDisplay.gstin || formShipDisplay.state) }} ({{ formShipDisplay.state }})
+                </p>
+              </template>
+              <template v-else>
+                <p class="text-sm text-amber-700">Alag consignee — neeche shipping details bharein</p>
+              </template>
             </div>
           </div>
 
