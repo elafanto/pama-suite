@@ -1,10 +1,11 @@
 import { getStateCode, isGstinValid } from '@/services/gst'
 import {
   resolveLivePartyDetails,
+  resolveLiveShipDetails,
   resolvePartyById,
   type PartyLookup,
 } from '@/services/invoiceDisplay'
-import type { Firm, Invoice, Party } from '@/types/models'
+import type { Firm, Invoice, Party, ShipDetails } from '@/types/models'
 
 const EWAY_THRESHOLD = 50000
 
@@ -92,6 +93,63 @@ function partyDetails(inv: Invoice, partyLookup?: PartyLookup): Partial<Party> {
   return resolveLivePartyDetails(inv, live)
 }
 
+function shipDetails(inv: Invoice, partyLookup?: PartyLookup): ShipDetails | null | undefined {
+  const live = resolvePartyById(partyLookup, inv.party_id)
+  return resolveLiveShipDetails(inv, live)
+}
+
+function parseStateCode(stateOrGst: string | undefined): number {
+  const fromGst = getStateCode(stateOrGst || '')
+  if (fromGst) return parseInt(fromGst, 10) || 0
+  const n = parseInt(String(stateOrGst || '').trim(), 10)
+  return Number.isFinite(n) ? n : 0
+}
+
+/** NIC: Bill-to = buyer GST/state; ship-to = consignee addr/PIN/actualToStateCode. */
+function ewayToParties(inv: Invoice, partyLookup?: PartyLookup) {
+  const cust = partyDetails(inv, partyLookup)
+  const ship = shipDetails(inv, partyLookup)
+  const hasShip = inv.sameAsBuyer === false && ship && ship.addr?.trim()
+
+  const buyerGst = cleanGstin(cust.gst || '')
+  const billToState = buyerGst !== 'URP'
+    ? parseStateCode(buyerGst) || parseStateCode(cust.state)
+    : parseStateCode(cust.state)
+
+  if (!hasShip) {
+    const pin = parseInt(String(cust.pin || '0'), 10) || 0
+    return {
+      hasShip: false,
+      transType: 1 as const,
+      toGstin: buyerGst,
+      toTrdName: inv.party_name || '',
+      toAddr1: cust.addr || '',
+      toAddr2: cust.city || '',
+      toPlace: cust.city || '',
+      toPincode: pin,
+      toStateCode: billToState,
+      actualToStateCode: billToState,
+    }
+  }
+
+  const shipGst = cleanGstin(ship.gstin || cust.gst || '')
+  const shipState = parseStateCode(ship.state) || parseStateCode(shipGst) || billToState
+  const shipPin = parseInt(String(ship.pin || '0'), 10) || 0
+
+  return {
+    hasShip: true,
+    transType: 4 as const,
+    toGstin: buyerGst,
+    toTrdName: inv.party_name || '',
+    toAddr1: ship.addr || '',
+    toAddr2: ship.city || '',
+    toPlace: ship.city || '',
+    toPincode: shipPin,
+    toStateCode: billToState,
+    actualToStateCode: shipState,
+  }
+}
+
 export function validateEwayInvoice(inv: Invoice, firm: Firm, partyLookup?: PartyLookup): string[] {
   const errors: string[] = []
   if (!isGstinValid(firm.gst)) errors.push('Firm GSTIN valid nahi hai')
@@ -102,16 +160,34 @@ export function validateEwayInvoice(inv: Invoice, firm: Firm, partyLookup?: Part
   if (!firmState) errors.push('Firm state code missing hai')
 
   if (!(inv.vehicle || '').trim()) errors.push(`${inv.bill_no}: vehicle number missing hai`)
+
+  const to = ewayToParties(inv, partyLookup)
   const cust = partyDetails(inv, partyLookup)
-  const hasShip = inv.sameAsBuyer === false && inv.ship && inv.ship.addr
-  const addr = cust.addr || (hasShip ? inv.ship?.addr : '')
-  const city = cust.city || (hasShip ? inv.ship?.city : '')
-  const pin = cust.pin || (hasShip ? inv.ship?.pin : '')
-  const state = cust.state || getStateCode(cust.gst || '') || (hasShip ? inv.ship?.state : '')
-  if (!addr?.trim()) errors.push(`${inv.bill_no}: buyer address missing hai`)
-  if (!city?.trim()) errors.push(`${inv.bill_no}: buyer city/place missing hai`)
-  if (!validPin(pin)) errors.push(`${inv.bill_no}: buyer PIN 6 digit hona chahiye`)
-  if (!parseInt(String(state || ''), 10)) errors.push(`${inv.bill_no}: buyer state code missing hai`)
+
+  if (!to.toAddr1?.trim()) {
+    errors.push(`${inv.bill_no}: ${to.hasShip ? 'consignee' : 'buyer'} address missing hai`)
+  }
+  if (!to.toPlace?.trim()) {
+    errors.push(`${inv.bill_no}: ${to.hasShip ? 'consignee' : 'buyer'} city/place missing hai`)
+  }
+  if (!validPin(to.toPincode)) {
+    errors.push(`${inv.bill_no}: ${to.hasShip ? 'consignee' : 'buyer'} PIN 6 digit hona chahiye`)
+  }
+  if (!to.toStateCode) {
+    errors.push(`${inv.bill_no}: buyer state code missing hai (GSTIN ya party master)`)
+  }
+  if (!to.actualToStateCode) {
+    errors.push(`${inv.bill_no}: ${to.hasShip ? 'consignee' : 'buyer'} state code missing hai`)
+  }
+  if (!to.hasShip && cust.gst) {
+    const gstState = parseStateCode(cust.gst)
+    if (gstState && cust.state && parseStateCode(cust.state) && parseStateCode(cust.state) !== gstState) {
+      errors.push(
+        `${inv.bill_no}: party state (${cust.state}) GSTIN state (${gstState}) se match nahi — Uttarakhand = 05, UP = 09`,
+      )
+    }
+  }
+
   for (const [idx, item] of (inv.items || []).entries()) {
     const gst = Number(item.gst)
     if (!Number.isFinite(gst)) errors.push(`${inv.bill_no}: line ${idx + 1} GST invalid hai`)
@@ -126,15 +202,7 @@ export function buildEwayJson(invoices: Invoice[], firm: Firm, partyLookup?: Par
 
   const billLists = invoices.map((b) => {
     const isInter = b.gst_type === 'inter' || b.gst_type === 'IGST'
-    const cust = partyDetails(b, partyLookup)
-    const buyerGst = cleanGstin(cust.gst || '')
-    const toGstin = buyerGst
-    const toSC = toGstin !== 'URP'
-      ? parseInt(getStateCode(toGstin) || cust.state || '0', 10)
-      : parseInt(String(cust.state || '0'), 10)
-
-    const hasShip = b.sameAsBuyer === false && b.ship && b.ship.addr
-    const transType = hasShip ? 4 : 1
+    const to = ewayToParties(b, partyLookup)
 
     const vehNo = (b.vehicle || '').toUpperCase().replace(/\s/g, '')
     const lrNo = b.lr || ''
@@ -155,7 +223,7 @@ export function buildEwayJson(invoices: Invoice[], firm: Firm, partyLookup?: Par
       docType: ewbDocType(b.doc_type),
       docNo: String(b.bill_no),
       docDate: fmtD(b.date),
-      transType,
+      transType: to.transType,
 
       fromGstin: fromGstn,
       fromTrdName: firm.name || '',
@@ -166,14 +234,14 @@ export function buildEwayJson(invoices: Invoice[], firm: Firm, partyLookup?: Par
       fromStateCode: fromSC,
       actualFromStateCode: fromSC,
 
-      toGstin,
-      toTrdName: b.party_name || '',
-      toAddr1: cust.addr || (hasShip ? b.ship?.addr : '') || '',
-      toAddr2: cust.city || (hasShip ? b.ship?.city : '') || '',
-      toPlace: cust.city || (hasShip ? b.ship?.city : '') || '',
-      toPincode: parseInt(String(cust.pin || (hasShip ? b.ship?.pin : '') || '0'), 10),
-      toStateCode: toSC,
-      actualToStateCode: toSC,
+      toGstin: to.toGstin,
+      toTrdName: to.toTrdName,
+      toAddr1: to.toAddr1,
+      toAddr2: to.toAddr2,
+      toPlace: to.toPlace,
+      toPincode: to.toPincode,
+      toStateCode: to.toStateCode,
+      actualToStateCode: to.actualToStateCode,
 
       totalValue: r2(b.sub),
       cgstValue: cgstVal,

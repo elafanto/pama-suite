@@ -75,7 +75,7 @@ export function isGstinValid(gstin: string | undefined): boolean {
   return GSTIN_RE.test(val)
 }
 
-/** 15th-character check digit per GSTIN encoding (GSTN). */
+/** 15th-character check digit per GSTIN encoding (GSTN — right-to-left, factor 2/1). */
 export function isGstinChecksumValid(gstin: string | undefined): boolean {
   if (!gstin) return false
   const val = gstin.trim().toUpperCase()
@@ -84,7 +84,7 @@ export function isGstinChecksumValid(gstin: string | undefined): boolean {
   let factor = 2
   let sum = 0
   const mod = charset.length
-  for (let i = 0; i < 14; i++) {
+  for (let i = 13; i >= 0; i--) {
     const codePoint = charset.indexOf(val[i])
     if (codePoint < 0) return false
     let digit = factor * codePoint

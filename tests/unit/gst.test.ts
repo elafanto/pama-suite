@@ -16,7 +16,7 @@ function gstinCheckChar(prefix14: string): string {
   const mod = charset.length
   let factor = 2
   let sum = 0
-  for (let i = 0; i < 14; i++) {
+  for (let i = 13; i >= 0; i--) {
     const cp = charset.indexOf(prefix14[i])
     let digit = factor * cp
     factor = factor === 2 ? 1 : 2
@@ -92,5 +92,10 @@ describe('validateGstinForForm', () => {
     const r = validateGstinForForm(VALID_GSTIN)
     expect(r.valid).toBe(true)
     expect(r.stateName).toBe('Maharashtra')
+  })
+  it('accepts a real GSTIN from GST portal (RTL checksum)', () => {
+    const r = validateGstinForForm('09BTIPJ8146C2ZK')
+    expect(r.valid).toBe(true)
+    expect(r.stateName).toBe('Uttar Pradesh')
   })
 })
