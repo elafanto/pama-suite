@@ -270,6 +270,7 @@ export function buildCompareForm(base: BoxCalcForm, scenario: CompareScenario): 
     form.conversionSlabs = (form.conversionSlabs?.length ? form.conversionSlabs : defaultConversionSlabs())
       .map((s) => ({ ...s, ratePerKg: rate }))
   }
+  form.calcMode = 'box'
   return form
 }
 

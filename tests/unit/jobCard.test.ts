@@ -13,6 +13,7 @@ function makeForm(over: Partial<BoxCalcForm> = {}): BoxCalcForm {
   return {
     customerName: 'Test Party',
     boxName: 'Test Box',
+    calcMode: 'box',
     printType: 'printed',
     dimensionUnit: 'mm',
     dimType: 'inner',

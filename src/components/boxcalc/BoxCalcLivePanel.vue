@@ -13,7 +13,12 @@ const props = defineProps<{
   error?: string | null
 }>()
 
-const hasResults = computed(() => props.results && !props.results.error && props.results.cost?.pricing)
+const hasResults = computed(() => {
+  if (!props.results || props.results.error) return false
+  if (props.results.calcMode === 'plainSheet') return (props.results.weight?.totalGm ?? 0) > 0
+  return !!props.results.cost?.pricing
+})
+const isPlainSheet = computed(() => props.results?.calcMode === 'plainSheet')
 const pricing = computed(() => props.results?.cost?.pricing)
 const cost = computed(() => props.results?.cost)
 
@@ -74,7 +79,57 @@ const sheetRows = computed((): PricingRow[] => {
     </h2>
 
     <p v-if="error" class="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded p-2 mb-3">{{ error }}</p>
-    <p v-else-if="!hasResults" class="text-xs text-slate-500 py-6 text-center">Enter dimensions and layers to see live pricing.</p>
+    <p v-else-if="!hasResults" class="text-xs text-slate-500 py-6 text-center">
+      {{ form.calcMode === 'plainSheet' ? 'Sheet size aur paper layers bharein.' : 'Enter dimensions and layers to see live pricing.' }}
+    </p>
+
+    <template v-else-if="isPlainSheet">
+      <div class="grid grid-cols-2 gap-2 mb-3 text-xs">
+        <div class="bg-teal-50 border border-teal-200 rounded-lg p-2 col-span-2">
+          <div class="text-teal-700 font-medium">Sheet size</div>
+          <div class="text-sm font-bold text-teal-900 font-mono">
+            {{ Math.round(results.sheet?.lengthMm ?? 0) }} × {{ Math.round(results.sheet?.widthMm ?? 0) }} mm
+          </div>
+          <div class="text-[10px] text-teal-700 mt-0.5">{{ fmt(results.sheet?.areaM2, 4) }} m²</div>
+        </div>
+        <div class="bg-indigo-50 border border-indigo-200 rounded-lg p-2">
+          <div class="text-indigo-700">Board GSM</div>
+          <div class="text-lg font-bold text-indigo-900 font-mono">{{ fmt(results.weight?.boardGSM, 0) }}</div>
+        </div>
+        <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-2">
+          <div class="text-emerald-700">Total weight</div>
+          <div class="text-lg font-bold text-emerald-900 font-mono">{{ fmt(results.weight?.totalGm, 1) }} gm</div>
+          <div class="text-[10px] text-emerald-700">{{ fmt(results.weight?.totalKg, 3) }} kg</div>
+        </div>
+      </div>
+      <div class="mb-2">
+        <div class="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1">Layer weights</div>
+        <div class="space-y-1 text-[11px]">
+          <div v-for="lw in results.weight?.layerWeights" :key="lw.name" class="flex justify-between text-slate-600">
+            <span>{{ lw.name }} ({{ fmt(lw.gsm, 0) }} gsm × {{ fmt(lw.takeUp, 2) }})</span>
+            <span class="font-mono">{{ fmt(lw.weightGm, 1) }} gm</span>
+          </div>
+          <div v-if="results.weight?.starchGm" class="flex justify-between text-slate-600">
+            <span>Starch</span>
+            <span class="font-mono">{{ fmt(results.weight.starchGm, 1) }} gm</span>
+          </div>
+          <div class="flex justify-between font-bold text-navy border-t border-slate-200 pt-1">
+            <span>Total</span>
+            <span class="font-mono">{{ fmt(results.weight?.totalGm, 1) }} gm</span>
+          </div>
+        </div>
+      </div>
+      <div v-if="results.cost?.materialCost" class="text-[11px] border-t border-slate-200 pt-2">
+        <div class="flex justify-between text-slate-600">
+          <span>Paper + starch cost</span>
+          <span class="font-mono font-semibold">{{ fmtMoney(results.cost.materialCost) }}</span>
+        </div>
+        <div class="flex justify-between text-slate-500 mt-0.5">
+          <span>₹/kg (material)</span>
+          <span class="font-mono">{{ fmtMoney(results.cost.sheetRatePerKg) }}</span>
+        </div>
+      </div>
+    </template>
 
     <template v-else>
       <!-- Header: GSM, joining, slab -->

@@ -123,6 +123,60 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
 
 <template>
   <div id="results-section" class="mt-6 space-y-4 print-section">
+    <!-- Plain sheet results -->
+    <div v-if="results?.calcMode === 'plainSheet'" class="space-y-4">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div class="bg-gradient-to-br from-teal-500 to-teal-600 text-white rounded-xl p-4 shadow">
+          <div class="text-xs opacity-90">Sheet size</div>
+          <div class="text-lg font-bold mt-1">{{ fmtInt(results.sheet?.lengthMm) }} × {{ fmtInt(results.sheet?.widthMm) }} mm</div>
+        </div>
+        <div class="bg-gradient-to-br from-indigo-500 to-indigo-600 text-white rounded-xl p-4 shadow">
+          <div class="text-xs opacity-90">Board GSM</div>
+          <div class="text-xl font-bold mt-1">{{ fmtInt(results.weight?.boardGSM) }}</div>
+        </div>
+        <div class="bg-gradient-to-br from-emerald-500 to-emerald-600 text-white rounded-xl p-4 shadow">
+          <div class="text-xs opacity-90">Sheet weight</div>
+          <div class="text-xl font-bold mt-1">{{ fmt(results.weight?.totalGm, 1) }} gm</div>
+          <div class="text-xs opacity-90 mt-1">{{ fmt(results.weight?.totalKg, 3) }} kg</div>
+        </div>
+        <div class="bg-gradient-to-br from-cyan-500 to-cyan-600 text-white rounded-xl p-4 shadow">
+          <div class="text-xs opacity-90">Material ₹/kg</div>
+          <div class="text-xl font-bold mt-1">{{ fmtMoney(results.cost?.sheetRatePerKg) }}</div>
+        </div>
+      </div>
+      <div class="pp-card p-4">
+        <h3 class="font-bold text-navy mb-2">Layer breakdown</h3>
+        <table class="w-full text-sm">
+          <thead class="text-xs text-slate-500 border-b">
+            <tr><th class="text-left py-1">Layer</th><th class="text-right py-1">GSM</th><th class="text-right py-1">Take-up</th><th class="text-right py-1">Weight</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="lw in results.weight?.layerWeights" :key="lw.name" class="border-b border-slate-100">
+              <td class="py-1.5">{{ lw.name }}</td>
+              <td class="py-1.5 text-right font-mono">{{ fmt(lw.gsm, 0) }}</td>
+              <td class="py-1.5 text-right font-mono">{{ fmt(lw.takeUp, 2) }}</td>
+              <td class="py-1.5 text-right font-mono">{{ fmt(lw.weightGm, 1) }} gm</td>
+            </tr>
+            <tr v-if="results.weight?.starchGm" class="border-b border-slate-100">
+              <td class="py-1.5">Starch</td>
+              <td colspan="2" />
+              <td class="py-1.5 text-right font-mono">{{ fmt(results.weight.starchGm, 1) }} gm</td>
+            </tr>
+            <tr class="font-bold text-navy">
+              <td class="py-2">Total</td>
+              <td colspan="2" />
+              <td class="py-2 text-right font-mono">{{ fmt(results.weight?.totalGm, 1) }} gm</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="flex flex-wrap gap-2 hide-on-print">
+        <button type="button" class="pp-btn pp-btn-success" @click="$emit('save')">Save Recipe</button>
+        <button type="button" class="pp-btn pp-btn-ghost" @click="$emit('print')">Print</button>
+      </div>
+    </div>
+
+    <template v-else>
     <!-- Summary cards -->
     <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8 gap-3">
       <div class="bg-gradient-to-br from-indigo-500 to-indigo-600 text-white rounded-xl p-4 shadow">
@@ -606,5 +660,6 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
         </div>
       </div>
     </div>
+    </template>
   </div>
 </template>

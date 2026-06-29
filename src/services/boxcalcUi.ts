@@ -43,6 +43,8 @@ export interface BoxCalcJobCard {
 export interface BoxCalcForm {
   customerName: string
   boxName: string
+  /** Box RSC calc vs flat plain sheet weight (e.g. 1200×300 mm). */
+  calcMode: 'box' | 'plainSheet'
   printType: 'printed' | 'non-printed'
   dimensionUnit: 'mm' | 'inch'
   dimType: 'inner' | 'outer'
@@ -249,6 +251,72 @@ export function computeBoxCalcResults(form: BoxCalcForm) {
   const res = runCalculator(buildCalcInputs(form))
   if (res.error) return { error: res.error } as const
   return res
+}
+
+/** Flat corrugated sheet: area × layer GSM (with flute take-up) + starch. */
+export function computePlainSheetWeight(form: BoxCalcForm) {
+  const dimsMM = formToMM(form)
+  const lengthMm = dimsMM.length
+  const widthMm = dimsMM.width
+  if (!lengthMm || !widthMm || lengthMm <= 0 || widthMm <= 0) {
+    return { error: 'Sheet length aur width positive hona chahiye' } as const
+  }
+
+  const areaM2 = (lengthMm * widthMm) / 1_000_000
+  const layerWeights = form.layers.map((l) => {
+    const gsm = parseFloat(String(l.gsm)) || 0
+    const takeUp = parseFloat(String(l.takeUp)) || 1
+    const rate = parseFloat(String(l.rate)) || 0
+    const weightGm = areaM2 * gsm * takeUp
+    return { name: l.name, gsm, bf: parseFloat(String(l.bf)) || 0, takeUp, weightGm, rate }
+  })
+
+  const paperGm = layerWeights.reduce((sum, l) => sum + l.weightGm, 0)
+  const starchGsm = parseFloat(String(form.starchGSM)) || 7
+  const starchGm = areaM2 * starchGsm * Math.max(0, form.layers.length - 1)
+  const totalGm = paperGm + starchGm
+  const boardGSM = areaM2 > 0 ? totalGm / areaM2 : 0
+
+  let bsWeighted = 0
+  let bfWeighted = 0
+  let gsmForBf = 0
+  for (const l of form.layers) {
+    const gsm = parseFloat(String(l.gsm)) || 0
+    const takeUp = parseFloat(String(l.takeUp)) || 1
+    const effectiveGsm = gsm * takeUp
+    bsWeighted += getLayerBS(l) * effectiveGsm
+    bfWeighted += (parseFloat(String(l.bf)) || 0) * effectiveGsm
+    gsmForBf += effectiveGsm
+  }
+  const combinedBS = gsmForBf > 0 ? bsWeighted / gsmForBf : 0
+  const combinedBF = gsmForBf > 0 ? bfWeighted / gsmForBf : 0
+
+  const paperCost = layerWeights.reduce((sum, l) => sum + (l.weightGm / 1000) * l.rate, 0)
+  const starchCost = (starchGm / 1000) * (parseFloat(String(form.starchRate)) || 45)
+  const materialCost = paperCost + starchCost
+  const totalKg = totalGm / 1000
+
+  return {
+    success: true,
+    calcMode: 'plainSheet' as const,
+    sheet: { lengthMm, widthMm, areaM2 },
+    weight: {
+      boardGSM,
+      paperGm,
+      starchGm,
+      totalGm,
+      totalKg,
+      sheetWeight: totalGm,
+      layerWeights,
+    },
+    strength: { combinedBS, combinedBF },
+    cost: {
+      paperCost,
+      starchCost,
+      materialCost,
+      sheetRatePerKg: totalKg > 0 ? materialCost / totalKg : 0,
+    },
+  }
 }
 
 export function joiningMethodLabel(method: BoxCalcForm['joining']['method']): string {

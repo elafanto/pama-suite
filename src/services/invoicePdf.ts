@@ -514,13 +514,15 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
   y += 5
   pdf.line(L, y, R, y)
 
-  pdf.setFillColor(30, 58, 95)
-  pdf.rect(L, y, W, 8, 'F')
-  pdf.setTextColor(255, 255, 255)
+  pdf.setFillColor(255, 255, 255)
+  pdf.rect(L, y, W, 8, 'FD')
+  pdf.setDrawColor(0, 0, 0)
+  pdf.setLineWidth(0.4)
+  pdf.rect(L, y, W, 8, 'S')
+  pdf.setTextColor(0, 0, 0)
   pdf.setFont('helvetica', 'bold').setFontSize(10.5)
   pdf.text('GRAND TOTAL', L + 5, y + 5.5)
   pdf.text(`Rs. ${n2(b.grandTotal)}`, R - 2, y + 5.5, { align: 'right' })
-  pdf.setTextColor(0, 0, 0)
   y += 8
   pdf.line(L, y, R, y)
 

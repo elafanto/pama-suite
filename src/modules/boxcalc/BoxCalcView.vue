@@ -28,6 +28,7 @@ import {
   setDimensionUnit,
   unitLabel,
   computeBoxCalcResults,
+  computePlainSheetWeight,
   defaultConversionSlabs,
   type BoxCalcForm,
   type BoxCalcJobCard,
@@ -87,6 +88,7 @@ function initialFormState(): BoxCalcForm {
   return {
     customerName: '',
     boxName: '',
+    calcMode: 'box',
     printType: 'printed',
     dimensionUnit: 'mm',
     dimType: 'inner',
@@ -132,8 +134,21 @@ const jobCard = computed({
 const results = ref<any>(null)
 const errors = ref<string[]>([])
 
-const liveCalc = computed(() => computeBoxCalcResults(form))
-const liveResults = computed(() => {
+const liveCalc = computed(() => {
+  if (!form.layers.length) return null
+  if (form.calcMode === 'plainSheet') return computePlainSheetWeight(form)
+  return computeBoxCalcResults(form)
+})
+
+type BoxCalcBoxResult = Exclude<NonNullable<ReturnType<typeof computeBoxCalcResults>>, { error: string }>
+
+const liveResults = computed((): BoxCalcBoxResult | null => {
+  const res = liveCalc.value
+  if (!res || 'error' in res) return null
+  if ('calcMode' in res && res.calcMode === 'plainSheet') return null
+  return res as BoxCalcBoxResult
+})
+const livePanelResults = computed(() => {
   const res = liveCalc.value
   if (!res || 'error' in res) return null
   return res
@@ -145,6 +160,7 @@ const liveError = computed(() => {
 
 function getFluteOptions() {
   const flutes: Record<string, string[]> = {
+    '2-ply': ['B', 'C', 'E'],
     '3-ply': ['A', 'B', 'C', 'E'],
     '5-ply': ['BC', 'CC', 'BE', 'EB'],
     '7-ply': ['ABC', 'BCB', 'BCC'],
@@ -156,6 +172,7 @@ function getTakeUpForLayer(layerIdx: number): number {
   if (form.flute.length === 1) return getTakeUp(form.flute)
   const fluteChars = form.flute.split('')
   const plySlots: Record<string, string[]> = {
+    '2-ply': ['', 'F1'],
     '3-ply': ['', 'B', ''],
     '5-ply': ['', 'F1', '', 'F2', ''],
     '7-ply': ['', 'F1', '', 'F2', '', 'F3', ''],
@@ -170,6 +187,7 @@ function getTakeUpForLayer(layerIdx: number): number {
 
 function updateLayersForPly() {
   const plyMap: Record<string, string[]> = {
+    '2-ply': ['Top Liner', 'Flute'],
     '3-ply': ['Top Liner', 'Flute', 'Bottom Liner'],
     '5-ply': ['Top Liner', 'Flute 1', 'Mid Liner', 'Flute 2', 'Bottom Liner'],
     '7-ply': ['Top Liner', 'Flute 1', 'Mid Liner 1', 'Flute 2', 'Mid Liner 2', 'Flute 3', 'Bottom Liner'],
@@ -214,6 +232,16 @@ watch(() => form.flute, () => {
   })
 })
 
+watch(() => form.calcMode, (mode) => {
+  if (mode === 'plainSheet' && form.ply === '7-ply') form.ply = '3-ply'
+  if (mode === 'box' && form.ply === '2-ply') form.ply = '3-ply'
+  updateLayersForPly()
+})
+
+function onCalcModeChange(mode: 'box' | 'plainSheet') {
+  form.calcMode = mode
+}
+
 function onPrintTypeChange() {
   if (form.printType === 'non-printed') form.printingCost = 0
 }
@@ -250,7 +278,7 @@ function runCostCalculation() {
     return
   }
   errors.value = []
-  const res = liveResults.value
+  const res = livePanelResults.value
   if (!res) {
     errors.value = [liveError.value || 'Unable to calculate with current inputs.']
     showResults.value = false
@@ -271,8 +299,10 @@ function generateSaveName() {
   const box = sanitize(form.boxName) || 'Box'
   const lVal = form.dimensionUnit === 'inch' ? parseFloat(String(form.length)).toFixed(1) : Math.round(form.length)
   const wVal = form.dimensionUnit === 'inch' ? parseFloat(String(form.width)).toFixed(1) : Math.round(form.width)
-  const hVal = form.dimensionUnit === 'inch' ? parseFloat(String(form.height)).toFixed(1) : Math.round(form.height)
-  const dim = `${lVal}x${wVal}x${hVal}${form.dimensionUnit === 'inch' ? 'in' : 'mm'}`
+  const unit = form.dimensionUnit === 'inch' ? 'in' : 'mm'
+  const dim = form.calcMode === 'plainSheet'
+    ? `${lVal}x${wVal}${unit}`
+    : `${lVal}x${wVal}x${form.dimensionUnit === 'inch' ? parseFloat(String(form.height)).toFixed(1) : Math.round(form.height)}${unit}`
   const rate = results.value?.cost?.sellingPrice ? `R${results.value.cost.sellingPrice.toFixed(2)}` : ''
   const weight = results.value?.weight?.boxTotal ? `W${Math.round(results.value.weight.boxTotal)}g` : ''
   const pr = form.printType === 'non-printed' ? 'NP' : 'P'
@@ -604,9 +634,21 @@ onMounted(async () => {
           <div class="pp-card p-4 border-l-4 border-l-blue-400">
             <h2 class="font-bold text-navy mb-3 flex items-center gap-2">
               <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-500 text-white text-[10px] font-bold shrink-0">2</span>
-              Box Dimensions
+              {{ form.calcMode === 'plainSheet' ? 'Plain Sheet Size' : 'Box Dimensions' }}
             </h2>
             <div class="space-y-3">
+              <div>
+                <label class="pp-label">Calculate for</label>
+                <div class="grid grid-cols-2 gap-2 mt-1">
+                  <button type="button" :class="['py-2 rounded-lg text-sm font-medium', form.calcMode === 'box' ? 'bg-blue-600 text-white' : 'bg-slate-100']"
+                    @click="onCalcModeChange('box')">Box (RSC)</button>
+                  <button type="button" :class="['py-2 rounded-lg text-sm font-medium', form.calcMode === 'plainSheet' ? 'bg-teal-600 text-white' : 'bg-slate-100']"
+                    @click="onCalcModeChange('plainSheet')">Plain sheet</button>
+                </div>
+                <p v-if="form.calcMode === 'plainSheet'" class="text-[10px] text-slate-500 mt-1">
+                  Flat 2/3/5-ply sheet — length × width, paper layers se weight (e.g. 1200×300 mm).
+                </p>
+              </div>
               <div>
                 <label class="pp-label">Input Unit</label>
                 <div class="grid grid-cols-2 gap-2 mt-1">
@@ -616,7 +658,7 @@ onMounted(async () => {
                     @click="setDimensionUnit(form, 'inch')">inch</button>
                 </div>
               </div>
-              <div>
+              <div v-if="form.calcMode === 'box'">
                 <label class="pp-label">Dimension Type</label>
                 <div class="grid grid-cols-2 gap-2 mt-1">
                   <button type="button" :class="['py-2 rounded-lg text-sm', form.dimType === 'inner' ? 'bg-blue-600 text-white' : 'bg-slate-100']"
@@ -625,10 +667,10 @@ onMounted(async () => {
                     @click="form.dimType = 'outer'">Outer</button>
                 </div>
               </div>
-              <div class="grid grid-cols-3 gap-2">
-                <div><label class="pp-label">L ({{ unitLabel(form.dimensionUnit) }})</label><input v-model.number="form.length" type="number" class="pp-input" /></div>
-                <div><label class="pp-label">W</label><input v-model.number="form.width" type="number" class="pp-input" /></div>
-                <div><label class="pp-label">H</label><input v-model.number="form.height" type="number" class="pp-input" /></div>
+              <div :class="form.calcMode === 'plainSheet' ? 'grid grid-cols-2 gap-2' : 'grid grid-cols-3 gap-2'">
+                <div><label class="pp-label">{{ form.calcMode === 'plainSheet' ? 'Length' : 'L' }} ({{ unitLabel(form.dimensionUnit) }})</label><input v-model.number="form.length" type="number" class="pp-input" /></div>
+                <div><label class="pp-label">{{ form.calcMode === 'plainSheet' ? 'Width' : 'W' }}</label><input v-model.number="form.width" type="number" class="pp-input" /></div>
+                <div v-if="form.calcMode === 'box'"><label class="pp-label">H</label><input v-model.number="form.height" type="number" class="pp-input" /></div>
               </div>
             </div>
           </div>
@@ -642,24 +684,31 @@ onMounted(async () => {
             <div class="grid grid-cols-2 gap-3">
               <div>
                 <label class="pp-label">Ply</label>
-                <select v-model="form.ply" class="pp-input"><option value="3-ply">3-Ply</option><option value="5-ply">5-Ply</option><option value="7-ply">7-Ply</option></select>
+                <select v-model="form.ply" class="pp-input">
+                  <option v-if="form.calcMode === 'plainSheet'" value="2-ply">2-Ply</option>
+                  <option value="3-ply">3-Ply</option>
+                  <option value="5-ply">5-Ply</option>
+                  <option v-if="form.calcMode === 'box'" value="7-ply">7-Ply</option>
+                </select>
               </div>
               <div>
                 <label class="pp-label">Flute</label>
                 <select v-model="form.flute" class="pp-input"><option v-for="fl in getFluteOptions()" :key="fl" :value="fl">{{ fl }}</option></select>
               </div>
             </div>
-            <div class="mt-2 text-xs text-slate-500">
-              Caliper: <strong>{{ getCurrentCaliper(form) }} mm</strong>
-              <button type="button" class="ml-2 text-blue-600 underline" @click="form.caliperOverride = form.caliperOverride ? null : getCurrentCaliper(form)">
-                {{ form.caliperOverride ? 'Use Default' : 'Override' }}
-              </button>
-            </div>
-            <input v-if="form.caliperOverride" v-model.number="form.caliperOverride" type="number" step="0.1" class="pp-input mt-2" placeholder="Custom caliper mm" />
-            <div class="mt-3">
-              <label class="pp-label">Glue Flap (mm, auto if empty)</label>
-              <input v-model.number="form.glueFlap" type="number" class="pp-input" placeholder="Auto" />
-            </div>
+            <template v-if="form.calcMode === 'box'">
+              <div class="mt-2 text-xs text-slate-500">
+                Caliper: <strong>{{ getCurrentCaliper(form) }} mm</strong>
+                <button type="button" class="ml-2 text-blue-600 underline" @click="form.caliperOverride = form.caliperOverride ? null : getCurrentCaliper(form)">
+                  {{ form.caliperOverride ? 'Use Default' : 'Override' }}
+                </button>
+              </div>
+              <input v-if="form.caliperOverride" v-model.number="form.caliperOverride" type="number" step="0.1" class="pp-input mt-2" placeholder="Custom caliper mm" />
+              <div class="mt-3">
+                <label class="pp-label">Glue Flap (mm, auto if empty)</label>
+                <input v-model.number="form.glueFlap" type="number" class="pp-input" placeholder="Auto" />
+              </div>
+            </template>
           </div>
 
           <!-- Layers -->
@@ -705,7 +754,7 @@ onMounted(async () => {
         <!-- RIGHT -->
         <div class="space-y-4">
           <!-- Glue & Joining -->
-          <div class="pp-card p-4 border-l-4 border-l-amber-400">
+          <div v-if="form.calcMode === 'box'" class="pp-card p-4 border-l-4 border-l-amber-400">
             <h2 class="font-bold text-navy mb-3 flex items-center gap-2">
               <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-500 text-white text-[10px] font-bold shrink-0">5</span>
               Glue & Joining
@@ -750,8 +799,16 @@ onMounted(async () => {
             </div>
           </div>
 
+          <div v-if="form.calcMode === 'plainSheet'" class="pp-card p-4 border-l-4 border-l-amber-400">
+            <h2 class="font-bold text-navy mb-3 text-sm">Starch (between layers)</h2>
+            <div class="grid grid-cols-2 gap-2">
+              <div><label class="pp-label">GSM/line</label><input v-model.number="form.starchGSM" type="number" class="pp-input !py-1.5" /></div>
+              <div><label class="pp-label">₹/kg</label><input v-model.number="form.starchRate" type="number" class="pp-input !py-1.5" /></div>
+            </div>
+          </div>
+
           <!-- Costs -->
-          <div class="pp-card p-4 border-l-4 border-l-emerald-400">
+          <div v-if="form.calcMode === 'box'" class="pp-card p-4 border-l-4 border-l-emerald-400">
             <h2 class="font-bold text-navy mb-3 flex items-center gap-2">
               <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-emerald-500 text-white text-[10px] font-bold shrink-0">6</span>
               Costs & Pricing
@@ -806,7 +863,7 @@ onMounted(async () => {
           </div>
 
           <!-- Stacking -->
-          <div class="pp-card p-4 border-l-4 border-l-purple-400">
+          <div v-if="form.calcMode === 'box'" class="pp-card p-4 border-l-4 border-l-purple-400">
             <div class="flex items-center justify-between mb-3">
               <h2 class="font-bold text-navy flex items-center gap-2">
                 <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-purple-500 text-white text-[10px] font-bold shrink-0">7</span>
@@ -835,18 +892,20 @@ onMounted(async () => {
       </div>
 
       <div class="mt-6 hidden md:block">
-        <button type="button" class="pp-btn pp-btn-primary w-full py-3 text-lg" @click="runCostCalculation">Calculate Box Specifications</button>
+        <button type="button" class="pp-btn pp-btn-primary w-full py-3 text-lg" @click="runCostCalculation">
+          {{ form.calcMode === 'plainSheet' ? 'Calculate Sheet Weight' : 'Calculate Box Specifications' }}
+        </button>
       </div>
         </div>
 
         <!-- Sticky live results (xl+) -->
         <aside class="hidden xl:block xl:sticky xl:top-4">
-          <BoxCalcLivePanel :form="form" :results="liveResults" :error="liveError" />
+          <BoxCalcLivePanel :form="form" :results="livePanelResults" :error="liveError" />
         </aside>
       </div>
 
       <div class="xl:hidden mt-4">
-        <BoxCalcLivePanel :form="form" :results="liveResults" :error="liveError" />
+        <BoxCalcLivePanel :form="form" :results="livePanelResults" :error="liveError" />
       </div>
 
       <button
