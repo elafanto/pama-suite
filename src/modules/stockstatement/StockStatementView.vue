@@ -13,6 +13,7 @@ import {
   segmentTotal,
   softDeleteStockStatement,
 } from '@/services/stockStatement'
+import { downloadStockStatementPdf } from '@/services/stockStatementPdf'
 import type { StockStatement, StockStatementLine, StockStatementSegment } from '@/types/models'
 
 const firm = useFirmStore()
@@ -102,6 +103,11 @@ function printStatement() {
   window.print()
 }
 
+function downloadPdf() {
+  const current = ensureForm()
+  downloadStockStatementPdf(current, firm.activeFirm)
+}
+
 onMounted(async () => {
   loading.value = true
   await firm.load()
@@ -121,6 +127,7 @@ onMounted(async () => {
       <div class="flex gap-2 hide-on-print">
         <button class="pp-btn pp-btn-ghost" @click="newStatement">New</button>
         <button class="pp-btn pp-btn-primary" :disabled="saving" @click="saveCurrent">{{ saving ? 'Saving...' : 'Save' }}</button>
+        <button class="pp-btn pp-btn-ghost" @click="downloadPdf">Download PDF</button>
         <button class="pp-btn pp-btn-ghost" @click="printStatement">Print</button>
       </div>
     </header>
