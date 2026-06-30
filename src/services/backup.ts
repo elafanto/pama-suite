@@ -13,7 +13,7 @@ import { applyImportedPayrollBackup, collectPayrollBackup } from '@/services/pay
 import type {
   Party, Firm, Item, Invoice, Purchase, Recipe, Account, Voucher, ActivityLog,
   ReelStock, ProductionJob, ProductionStageEntry, StockMovement, ItemStockMovement,
-  DashboardTodo, Staff, StaffAdvance, PayrollRun, CapitalAsset,
+  DashboardTodo, Staff, StaffAdvance, PayrollRun, CapitalAsset, StockStatement,
 } from '@/types/models'
 
 export const BACKUP_FORMAT = 'pama_suite_backup'
@@ -59,6 +59,7 @@ export interface SuiteBackup {
   activity_log: ActivityLog[]
   reel_stocks?: ReelStock[]
   capital_assets?: CapitalAsset[]
+  stock_statements?: StockStatement[]
   production_jobs?: ProductionJob[]
   production_stages?: ProductionStageEntry[]
   stock_movements?: StockMovement[]
@@ -89,7 +90,7 @@ type ImportMode = 'merge' | 'replace'
 export async function exportAll(options: ExportOptions = {}): Promise<SuiteBackup> {
   const [
     firms, parties, items, invoices, purchases, recipes, accounts, vouchers, activity_log,
-    reel_stocks, capital_assets, production_jobs, production_stages, stock_movements, item_stock_movements,
+    reel_stocks, capital_assets, stock_statements, production_jobs, production_stages, stock_movements, item_stock_movements,
     dashboard_todos, staff, staff_advances, payroll_runs,
   ] = await Promise.all([
     db.firms.toArray(),
@@ -103,6 +104,7 @@ export async function exportAll(options: ExportOptions = {}): Promise<SuiteBacku
     db.activity_log.toArray(),
     db.reel_stocks.toArray(),
     db.capital_assets.toArray(),
+    db.stock_statements.toArray(),
     db.production_jobs.toArray(),
     db.production_stages.toArray(),
     db.stock_movements.toArray(),
@@ -142,7 +144,7 @@ export async function exportAll(options: ExportOptions = {}): Promise<SuiteBacku
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
     firms, parties, items, invoices, purchases, recipes, accounts, vouchers, activity_log,
-    reel_stocks, capital_assets, production_jobs, production_stages, stock_movements, item_stock_movements,
+    reel_stocks, capital_assets, stock_statements, production_jobs, production_stages, stock_movements, item_stock_movements,
     dashboard_todos, staff, staff_advances, payroll_runs,
     settings,
   }
@@ -261,6 +263,7 @@ async function importSuiteBackup(data: any, mode: ImportMode, options: ImportOpt
     await upsertAll(db.activity_log, data.activity_log || [], 'activity_log')
     await upsertAll(db.reel_stocks, data.reel_stocks || [], 'reel_stocks')
     await upsertAll(db.capital_assets, data.capital_assets || [], 'capital_assets')
+    await upsertAll(db.stock_statements, data.stock_statements || [], 'stock_statements')
     await upsertAll(db.production_jobs, data.production_jobs || [], 'production_jobs')
     await upsertAll(db.production_stages, data.production_stages || [], 'production_stages')
     await upsertAll(db.stock_movements, data.stock_movements || [], 'stock_movements')
@@ -611,6 +614,7 @@ function suiteImportTables(data: any) {
     { key: 'activity_log', table: db.activity_log, rows: asArray<ImportableRecord>(data.activity_log) },
     { key: 'reel_stocks', table: db.reel_stocks, rows: asArray<ImportableRecord>(data.reel_stocks) },
     { key: 'capital_assets', table: db.capital_assets, rows: asArray<ImportableRecord>(data.capital_assets) },
+    { key: 'stock_statements', table: db.stock_statements, rows: asArray<ImportableRecord>(data.stock_statements) },
     { key: 'production_jobs', table: db.production_jobs, rows: asArray<ImportableRecord>(data.production_jobs) },
     { key: 'production_stages', table: db.production_stages, rows: asArray<ImportableRecord>(data.production_stages) },
     { key: 'stock_movements', table: db.stock_movements, rows: asArray<ImportableRecord>(data.stock_movements) },

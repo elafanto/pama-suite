@@ -375,6 +375,41 @@ export interface CapitalAsset extends BaseRecord {
   notes?: string
 }
 
+export type StockStatementSegment = 'paper' | 'gum' | 'stitching_wire' | 'consumables'
+
+export interface StockStatementPaperLine {
+  id: string
+  segment: 'paper'
+  paper_name: string
+  bf: string
+  gsm: string
+  qty: number
+  unit: string
+  rate: number
+  amount: number
+}
+
+export interface StockStatementSimpleLine {
+  id: string
+  segment: 'gum' | 'stitching_wire' | 'consumables'
+  item_name: string
+  qty: number
+  unit: string
+  rate: number
+  amount: number
+}
+
+export type StockStatementLine = StockStatementPaperLine | StockStatementSimpleLine
+
+export interface StockStatement extends BaseRecord {
+  statement_no: string
+  statement_date: string
+  bank_name: string
+  branch_name?: string
+  remarks?: string
+  lines: StockStatementLine[]
+}
+
 export interface ReelStock extends BaseRecord {
   reel_no: string
   paper_type?: PaperType
