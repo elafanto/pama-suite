@@ -15,6 +15,17 @@ function n2(n: number) {
   return (n || 0).toFixed(2)
 }
 
+function formatPayStatusForPdf(payStatus: string, amtPaid: number): string {
+  const key = (payStatus || '').toUpperCase()
+  if (key === 'PAID') return 'Paid'
+  if (key === 'UNPAID') return 'Unpaid'
+  if (key === 'PARTIAL') {
+    const paid = Number(amtPaid) || 0
+    return `Partial (paid Rs. ${paid.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`
+  }
+  return payStatus || '-'
+}
+
 function isInterGst(gstType: string | undefined) {
   return gstType === 'inter' || gstType === 'IGST'
 }
@@ -284,16 +295,19 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
   pdf.text('INVOICE DETAILS:', L + 2 * colW + 1, y + 4)
   pdf.setFont('helvetica', 'normal').setFontSize(8)
   ty = y + 8
+  const infoColW = colW - 2
   const infoLines = [
     `Invoice No: ${b.billNo}`,
     `Date: ${fmtDate(b.date)}`,
     `Ref: ${b.ref || '-'}`,
     `Payment: ${b.payment || '-'}`,
-    `Status: ${b.payStatus}${b.payStatus === 'PARTIAL' ? ` (₹${n2(b.amtPaid)})` : ''}`,
+    `Status: ${formatPayStatusForPdf(b.payStatus, b.amtPaid)}`,
   ]
   infoLines.forEach((line) => {
-    pdf.text(line, L + 2 * colW + 1, ty)
-    ty += 3.5
+    pdf.splitTextToSize(line, infoColW).forEach((wrapped: string) => {
+      pdf.text(wrapped, L + 2 * colW + 1, ty)
+      ty += 3.5
+    })
   })
 
   y += 30
