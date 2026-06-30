@@ -17,6 +17,7 @@ export interface MovePurchaseBillsResult {
   purchases: number
   vouchers: number
   reelStocks: number
+  capitalAssets: number
   stockMovements: number
   itemStockMovements: number
   activityLogs: number
@@ -111,6 +112,7 @@ export async function movePurchaseBillsToFirm(input: MovePurchaseBillsInput): Pr
     purchases: 0,
     vouchers: 0,
     reelStocks: 0,
+    capitalAssets: 0,
     stockMovements: 0,
     itemStockMovements: 0,
     activityLogs: 0,
@@ -125,6 +127,7 @@ export async function movePurchaseBillsToFirm(input: MovePurchaseBillsInput): Pr
       db.purchases,
       db.vouchers,
       db.reel_stocks,
+      db.capital_assets,
       db.stock_movements,
       db.item_stock_movements,
       db.activity_log,
@@ -172,6 +175,22 @@ export async function movePurchaseBillsToFirm(input: MovePurchaseBillsInput): Pr
           _dirty: true,
         }))
         result.reelStocks++
+      }
+
+      const capitalAssets = await db.capital_assets
+        .where('firm_id')
+        .equals(input.fromFirmId)
+        .filter((a) => !!a.purchase_id && idSet.has(a.purchase_id))
+        .toArray()
+      for (const asset of capitalAssets) {
+        await db.capital_assets.put(plain({
+          ...asset,
+          firm_id: input.toFirmId,
+          supplier_id: asset.supplier_id && supplierIdMap.has(asset.supplier_id) ? supplierIdMap.get(asset.supplier_id)! : asset.supplier_id,
+          updated_at: now,
+          _dirty: true,
+        }))
+        result.capitalAssets++
       }
 
       const stockMovements = await db.stock_movements

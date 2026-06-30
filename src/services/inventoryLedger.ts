@@ -2,6 +2,7 @@ import { db } from '@/data/db'
 import { uid, nowISO } from '@/data/util'
 import { logActivity } from '@/services/activityLog'
 import type { Invoice, ItemStockMovement, Purchase } from '@/types/models'
+import { isGenericInventoryLine } from '@/services/assets'
 
 export interface ManualAdjustmentInput {
   firmId: string
@@ -135,7 +136,7 @@ export async function recordPurchaseMovements(purchase: Purchase): Promise<ItemS
   }
 
   const rows = (purchase.items || [])
-    .filter((line) => !!line.item_id && Number(line.qty) !== 0)
+    .filter((line) => !!line.item_id && Number(line.qty) !== 0 && isGenericInventoryLine(line))
     .map((line) => ({
       item_id: line.item_id!,
       date: purchase.received_date || purchase.date,

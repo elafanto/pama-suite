@@ -18,7 +18,8 @@ import {
   getAttachmentForEntity,
 } from '@/services/documentAttachments'
 import { db } from '@/data/db'
-import type { GstType, PaperType, PayStatus, Purchase, PurchaseItemLine } from '@/types/models'
+import { CAPITAL_CATEGORY_LABELS } from '@/services/assets'
+import type { CapitalCategory, GstType, PaperType, PayStatus, Purchase, PurchaseItemLine } from '@/types/models'
 
 // Stores
 const firmStore = useFirmStore()
@@ -97,6 +98,7 @@ interface BulkScanFileStatus {
 
 const BULK_SCAN_ACCEPT = 'application/pdf,.pdf,image/*'
 const paperTypes: PaperType[] = ['KRAFT', 'DUPLEX']
+const capitalCategories = Object.entries(CAPITAL_CATEGORY_LABELS) as [CapitalCategory, string][]
 
 const bulkRows = ref<BulkPurchaseRow[]>([])
 type ScannedBillWithFile = ScanResult & { _sourceFile?: File | null }
@@ -169,6 +171,9 @@ function addRow(data: Partial<PurchaseItemLine> = {}) {
     reel_count: normalizeReelCount(data.reel_count),
     is_consumable: data.is_consumable || false,
     consumable_type: data.consumable_type || 'glue',
+    is_capital: data.is_capital || false,
+    capital_category: data.capital_category || 'plant_machinery',
+    asset_tag: data.asset_tag || '',
   })
 }
 
@@ -297,6 +302,17 @@ function toggleKraftReel(idx: number) {
     row.hsn = row.hsn || '48043100'
     row.paper_type = normalizePaperType(row.paper_type)
     row.is_consumable = false
+    row.is_capital = false
+  }
+}
+
+function toggleCapital(idx: number) {
+  const row = form.items[idx]
+  if (row.is_capital) {
+    row.unit = row.unit || 'NOS'
+    row.capital_category = row.capital_category || 'plant_machinery'
+    row.is_kraft_reel = false
+    row.is_consumable = false
   }
 }
 
@@ -306,6 +322,7 @@ function toggleConsumable(idx: number) {
     row.unit = row.unit || 'KG'
     row.consumable_type = row.consumable_type || 'glue'
     row.is_kraft_reel = false
+    row.is_capital = false
   }
 }
 
@@ -548,7 +565,8 @@ async function savePurchase() {
           rate: it.rate,
           size: '',
           gsm: '',
-          bf: it.bf || ''
+          bf: it.bf || '',
+          track_stock: (it.is_kraft_reel || it.is_consumable || it.is_capital) ? false : undefined,
         })
         it.item_id = added.id
       }
@@ -559,6 +577,8 @@ async function savePurchase() {
     ...it,
     reel_count: it.is_kraft_reel ? normalizeReelCount(it.reel_count) : undefined,
     paper_type: it.is_kraft_reel ? normalizePaperType(it.paper_type) : undefined,
+    capital_category: it.is_capital ? (it.capital_category || 'plant_machinery') : undefined,
+    asset_tag: it.is_capital ? (it.asset_tag?.trim() || undefined) : undefined,
   }))
 
   const purchaseData = {
@@ -1177,6 +1197,10 @@ onMounted(async () => {
                       <input type="checkbox" v-model="item.is_consumable" @change="toggleConsumable(idx)" />
                       Consumable
                     </label>
+                    <label class="mt-2 flex items-center gap-2 text-xs font-semibold">
+                      <input type="checkbox" v-model="item.is_capital" @change="toggleCapital(idx)" />
+                      Capital Goods
+                    </label>
                     <select v-if="item.is_consumable" v-model="item.consumable_type" class="pp-input mt-2 text-xs">
                       <option value="glue">Glue</option>
                       <option value="ink">Ink</option>
@@ -1188,6 +1212,25 @@ onMounted(async () => {
                   </td>
                   <td class="py-2 px-1 text-center">
                     <button @click="removeRow(idx)" class="text-rose-500 hover:text-rose-700 text-lg">✕</button>
+                  </td>
+                </tr>
+                <tr v-for="(item, idx) in form.items.filter(i => i.is_capital)" :key="`capital-${idx}-${item.name}`" class="bg-violet-50/50">
+                  <td colspan="9" class="px-3 py-3">
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      <div>
+                        <label class="pp-label">Category *</label>
+                        <select v-model="item.capital_category" class="pp-input">
+                          <option v-for="[key, label] in capitalCategories" :key="key" :value="key">{{ label }}</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label class="pp-label">Asset Tag / ID (optional)</label>
+                        <input v-model="item.asset_tag" class="pp-input" placeholder="e.g. M/C-01, vehicle no." />
+                      </div>
+                      <div class="md:col-span-2 flex items-end">
+                        <p class="text-xs text-violet-800">Capital goods consume nahi hote — alag Capital Assets list me dikhenge, consumable inventory me nahi.</p>
+                      </div>
+                    </div>
                   </td>
                 </tr>
                 <tr v-for="(item, idx) in form.items.filter(i => i.is_kraft_reel)" :key="`reel-${idx}-${item.name}`" class="bg-amber-50/50">

@@ -1,4 +1,5 @@
 import { manualAdjustmentTotals } from '@/services/inventoryLedger'
+import { isGenericInventoryLine } from '@/services/assets'
 import type { Item, Invoice, Purchase, ItemStockMovement } from '@/types/models'
 
 export type StockStatus = 'out' | 'low' | 'ok'
@@ -68,6 +69,7 @@ export function computeStock(
   for (const p of purchases) {
     if (p.is_deleted || p.firm_id !== firmId) continue
     for (const l of p.items || []) {
+      if (!isGenericInventoryLine(l)) continue
       const itemId = resolveLineItemId(l.item_id, l.name)
       if (!itemId) continue
       purchasedMap.set(itemId, (purchasedMap.get(itemId) || 0) + (Number(l.qty) || 0))

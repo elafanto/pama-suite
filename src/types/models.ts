@@ -168,6 +168,9 @@ export interface PurchaseItemLine {
   reel_count?: number
   is_consumable?: boolean
   consumable_type?: 'glue' | 'ink' | 'stitching_wire'
+  is_capital?: boolean
+  capital_category?: CapitalCategory
+  asset_tag?: string
 }
 
 export interface Purchase extends BaseRecord {
@@ -340,6 +343,29 @@ export interface DocumentAttachment extends BaseRecord {
 export type ReelColor = 'NS' | 'GY' | 'NATURAL_BROWN' | string
 export type ReelStatus = 'active' | 'consumed'
 export type PaperType = 'KRAFT' | 'DUPLEX'
+
+export type CapitalCategory = 'plant_machinery' | 'furniture' | 'vehicle' | 'computer' | 'other'
+export type CapitalAssetStatus = 'active' | 'disposed' | 'written_off'
+
+export interface CapitalAsset extends BaseRecord {
+  name: string
+  item_id: string | null
+  category: CapitalCategory
+  asset_tag?: string
+  supplier_id: string | null
+  supplier_name: string
+  purchase_id: string
+  purchase_bill_no: string
+  purchase_line_index: number
+  purchase_date: string
+  qty: number
+  unit: string
+  rate: number
+  amount: number
+  hsn?: string
+  status: CapitalAssetStatus
+  notes?: string
+}
 
 export interface ReelStock extends BaseRecord {
   reel_no: string

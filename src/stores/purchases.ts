@@ -15,6 +15,10 @@ import {
   reversePurchaseReels,
 } from '@/services/production'
 import {
+  createCapitalAssetsFromPurchase,
+  reversePurchaseCapitalAssets,
+} from '@/services/assets'
+import {
   restoreAttachmentsForEntity,
   softDeleteAttachmentsForEntity,
 } from '@/services/documentAttachments'
@@ -56,6 +60,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
     await recordPurchaseMovements(rec)
     await createReelsFromPurchase(rec)
     await createConsumablesFromPurchase(rec)
+    await createCapitalAssetsFromPurchase(rec)
     await logActivity(firmId, 'create', 'purchase', rec.id, `Purchase ${rec.bill_no} from ${rec.supplier_name}`)
 
     await load()
@@ -81,6 +86,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
       }
       await createReelsFromPurchase(rec)
       await createConsumablesFromPurchase(rec)
+      await createCapitalAssetsFromPurchase(rec)
       await logActivity(rec.firm_id, 'update', 'purchase', rec.id, `Purchase ${rec.bill_no} updated`)
     }
     await load()
@@ -94,6 +100,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
     await softDeleteAttachmentsForEntity('purchase', id, existing?.firm_id)
     await repo.remove(id)
     await reversePurchaseReels(id)
+    await reversePurchaseCapitalAssets(id)
     const accounting = useAccountingStore()
     await accounting.reverseLedgerByRef(id)
     await accounting.reverseLedgerByRef(`${id}_PAY`)
@@ -153,6 +160,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
       await recordPurchaseMovements(rec)
       await createReelsFromPurchase(rec)
       await createConsumablesFromPurchase(rec)
+      await createCapitalAssetsFromPurchase(rec)
       await logActivity(rec.firm_id, 'restore', 'purchase', id, `Purchase ${rec.bill_no} restored`)
     }
     await load()

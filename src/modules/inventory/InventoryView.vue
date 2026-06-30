@@ -131,7 +131,7 @@ onMounted(async () => {
     <header class="mb-5 flex flex-wrap items-start gap-3 justify-between">
       <div>
         <h1 class="text-2xl font-bold text-navy">📊 Inventory</h1>
-        <p class="text-sm text-slate-500">Live stock = opening + purchased − sold + manual adjustments. Set reorder levels on Items.</p>
+        <p class="text-sm text-slate-500">Consumable stock = opening + purchased − sold + adjustments. Capital goods &amp; paper reels alag lists me hain.</p>
       </div>
       <button class="pp-btn pp-btn-primary" @click="openAdjust()">Adjust Stock</button>
     </header>
