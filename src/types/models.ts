@@ -32,6 +32,10 @@ export interface Party extends BaseRecord {
 
 export type ItemUnit = 'PCS' | 'KG' | 'MTR' | 'NOS' | 'BOX' | 'SET' | string
 
+export type PurchaseLineKind = 'inventory' | 'reel' | 'consumable' | 'capital' | 'expense'
+export type ExpenseCategory = 'building_material' | 'utilities' | 'repairs' | 'freight' | 'professional' | 'other'
+export type CapitalAssetSource = 'purchase' | 'inventory'
+
 export interface Item extends BaseRecord {
   name: string
   unit: ItemUnit
@@ -157,6 +161,7 @@ export interface PurchaseItemLine {
   unit: string
   rate: number
   gst: number                 // %
+  line_kind?: PurchaseLineKind
   is_kraft_reel?: boolean
   paper_type?: PaperType
   reel_no?: string
@@ -171,6 +176,8 @@ export interface PurchaseItemLine {
   is_capital?: boolean
   capital_category?: CapitalCategory
   asset_tag?: string
+  is_expense?: boolean
+  expense_category?: ExpenseCategory
 }
 
 export interface Purchase extends BaseRecord {
@@ -354,10 +361,11 @@ export interface CapitalAsset extends BaseRecord {
   asset_tag?: string
   supplier_id: string | null
   supplier_name: string
-  purchase_id: string
-  purchase_bill_no: string
-  purchase_line_index: number
+  purchase_id?: string
+  purchase_bill_no?: string
+  purchase_line_index?: number
   purchase_date: string
+  source?: CapitalAssetSource
   qty: number
   unit: string
   rate: number

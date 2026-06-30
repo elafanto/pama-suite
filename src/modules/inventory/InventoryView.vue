@@ -7,12 +7,17 @@ import { useInvoiceStore } from '@/stores/invoices'
 import { usePurchaseStore } from '@/stores/purchases'
 import { computeStock, stockSummary, type StockRow, type StockStatus } from '@/services/stock'
 import { createManualAdjustment, listItemStockMovements } from '@/services/inventoryLedger'
-import type { ItemStockMovement } from '@/types/models'
+import { CAPITAL_CATEGORY_LABELS, convertInventoryItemToCapitalAsset } from '@/services/assets'
+import { useCapitalAssetStore } from '@/stores/assets'
+import type { CapitalCategory, ItemStockMovement } from '@/types/models'
 
 const firm = useFirmStore()
 const items = useItemStore()
 const invoices = useInvoiceStore()
 const purchases = usePurchaseStore()
+const capitalAssets = useCapitalAssetStore()
+
+const capitalCategories = Object.entries(CAPITAL_CATEGORY_LABELS) as [CapitalCategory, string][]
 
 const search = ref('')
 const statusFilter = ref<'all' | StockStatus>('all')
@@ -21,6 +26,20 @@ const movements = ref<ItemStockMovement[]>([])
 const showAdjustModal = ref(false)
 const adjustmentMsg = ref('')
 const savingAdjustment = ref(false)
+const showCapitalModal = ref(false)
+const savingCapital = ref(false)
+const capitalMsg = ref('')
+const capitalForm = ref({
+  itemId: '',
+  date: new Date().toISOString().slice(0, 10),
+  qty: 0,
+  rate: 0,
+  category: 'plant_machinery' as CapitalCategory,
+  assetTag: '',
+  removeStock: true,
+  notes: '',
+})
+
 const adjustForm = ref({
   itemId: '',
   date: new Date().toISOString().slice(0, 10),
@@ -35,6 +54,8 @@ const rows = computed(() =>
 )
 const summary = computed(() => stockSummary(rows.value))
 const itemById = computed(() => new Map(items.list.map((i) => [i.id, i])))
+const capitalRow = computed(() => rows.value.find((r) => r.itemId === capitalForm.value.itemId) || null)
+const capitalItem = computed(() => itemById.value.get(capitalForm.value.itemId))
 
 const filtered = computed(() => {
   const q = search.value.toLowerCase().trim()
@@ -111,6 +132,64 @@ async function saveAdjustment() {
     adjustmentMsg.value = err?.message || 'Adjustment failed'
   } finally {
     savingAdjustment.value = false
+  }
+}
+
+function openConvertToCapital(row: StockRow) {
+  capitalMsg.value = ''
+  const item = itemById.value.get(row.itemId)
+  capitalForm.value = {
+    itemId: row.itemId,
+    date: new Date().toISOString().slice(0, 10),
+    qty: row.onHand > 0 ? row.onHand : 1,
+    rate: row.rate || item?.purchase_rate || item?.rate || 0,
+    category: 'plant_machinery',
+    assetTag: '',
+    removeStock: true,
+    notes: `Moved from inventory: ${row.name}`,
+  }
+  showCapitalModal.value = true
+}
+
+async function saveConvertToCapital() {
+  capitalMsg.value = ''
+  const row = capitalRow.value
+  const item = capitalItem.value
+  if (!row || !item) {
+    capitalMsg.value = 'Select a valid inventory item'
+    return
+  }
+  if (!capitalForm.value.date) {
+    capitalMsg.value = 'Date required'
+    return
+  }
+  if (!Number.isFinite(Number(capitalForm.value.qty)) || Number(capitalForm.value.qty) <= 0) {
+    capitalMsg.value = 'Quantity must be greater than zero'
+    return
+  }
+  savingCapital.value = true
+  try {
+    await convertInventoryItemToCapitalAsset({
+      firmId: firm.activeFirmId,
+      itemId: row.itemId,
+      name: row.name,
+      qty: Number(capitalForm.value.qty),
+      unit: row.unit,
+      rate: Number(capitalForm.value.rate) || row.rate,
+      hsn: item.hsn,
+      category: capitalForm.value.category,
+      assetTag: capitalForm.value.assetTag,
+      date: capitalForm.value.date,
+      notes: capitalForm.value.notes,
+      removeStock: capitalForm.value.removeStock,
+      currentOnHand: row.onHand,
+    })
+    await Promise.all([items.load(), loadMovements(), capitalAssets.load()])
+    showCapitalModal.value = false
+  } catch (err: any) {
+    capitalMsg.value = err?.message || 'Capital transfer failed'
+  } finally {
+    savingCapital.value = false
   }
 }
 
@@ -201,8 +280,9 @@ onMounted(async () => {
             <td class="px-4 py-2.5 text-center">
               <span :class="['pp-badge', STATUS_META[r.status].cls]">{{ STATUS_META[r.status].label }}</span>
             </td>
-            <td class="px-4 py-2.5 text-right">
-              <button class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs" @click="openAdjust(r)">Adjust</button>
+            <td class="px-4 py-2.5 text-right whitespace-nowrap">
+              <button class="pp-btn pp-btn-ghost !px-2 !py-1 mr-1" @click="openAdjust(r)">Adjust</button>
+              <button class="pp-btn pp-btn-ghost !px-2 !py-1 text-violet-700" @click="openConvertToCapital(r)">→ Capital</button>
             </td>
           </tr>
         </tbody>
@@ -300,6 +380,65 @@ onMounted(async () => {
           <button class="pp-btn pp-btn-ghost" @click="showAdjustModal = false">Cancel</button>
           <button class="pp-btn pp-btn-primary" :disabled="!!adjustmentInvalid || savingAdjustment" @click="saveAdjustment">
             {{ savingAdjustment ? 'Saving…' : 'Save Adjustment' }}
+          </button>
+        </div>
+      </div>
+    </PpModal>
+
+    <PpModal v-if="showCapitalModal" title="Move to Capital Assets" @close="showCapitalModal = false">
+      <div class="space-y-3">
+        <p v-if="capitalRow" class="text-sm text-slate-600">
+          <strong>{{ capitalRow.name }}</strong> — current stock {{ n(capitalRow.onHand) }} {{ capitalRow.unit }}
+        </p>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="pp-label">Date *</label>
+            <input v-model="capitalForm.date" type="date" class="pp-input" />
+          </div>
+          <div>
+            <label class="pp-label">Qty for asset</label>
+            <input v-model.number="capitalForm.qty" type="number" min="0" step="0.01" class="pp-input" />
+          </div>
+        </div>
+        <div>
+          <label class="pp-label">Rate / book value (₹)</label>
+          <input v-model.number="capitalForm.rate" type="number" min="0" step="0.01" class="pp-input" />
+        </div>
+        <div>
+          <label class="pp-label">Capital category (check one)</label>
+          <div class="mt-2 space-y-1.5 rounded-lg border border-violet-200 bg-violet-50/50 p-3">
+            <label
+              v-for="[key, label] in capitalCategories"
+              :key="key"
+              class="flex items-center gap-2 text-sm cursor-pointer"
+            >
+              <input
+                type="checkbox"
+                class="rounded border-slate-300 text-violet-700"
+                :checked="capitalForm.category === key"
+                @click.prevent="capitalForm.category = key"
+              />
+              {{ label }}
+            </label>
+          </div>
+        </div>
+        <div>
+          <label class="pp-label">Asset tag (optional)</label>
+          <input v-model="capitalForm.assetTag" class="pp-input" placeholder="M/C-01, vehicle no." />
+        </div>
+        <label class="flex items-center gap-2 text-sm">
+          <input v-model="capitalForm.removeStock" type="checkbox" class="rounded" />
+          Remove on-hand qty from consumable inventory
+        </label>
+        <div>
+          <label class="pp-label">Notes</label>
+          <textarea v-model="capitalForm.notes" class="pp-input min-h-[70px]" />
+        </div>
+        <p v-if="capitalMsg" class="text-sm text-red-600">{{ capitalMsg }}</p>
+        <div class="flex justify-end gap-2 pt-2">
+          <button class="pp-btn pp-btn-ghost" @click="showCapitalModal = false">Cancel</button>
+          <button class="pp-btn pp-btn-primary" :disabled="savingCapital" @click="saveConvertToCapital">
+            {{ savingCapital ? 'Saving…' : 'Move to Capital Assets' }}
           </button>
         </div>
       </div>

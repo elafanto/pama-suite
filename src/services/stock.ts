@@ -1,5 +1,5 @@
 import { manualAdjustmentTotals } from '@/services/inventoryLedger'
-import { isGenericInventoryLine } from '@/services/assets'
+import { isGenericInventoryLine } from '@/services/purchaseLineKind'
 import type { Item, Invoice, Purchase, ItemStockMovement } from '@/types/models'
 
 export type StockStatus = 'out' | 'low' | 'ok'

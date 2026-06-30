@@ -2,7 +2,7 @@ import { db } from '@/data/db'
 import { uid, nowISO } from '@/data/util'
 import { logActivity } from '@/services/activityLog'
 import type { Invoice, ItemStockMovement, Purchase } from '@/types/models'
-import { isGenericInventoryLine } from '@/services/assets'
+import { isGenericInventoryLine } from '@/services/purchaseLineKind'
 
 export interface ManualAdjustmentInput {
   firmId: string

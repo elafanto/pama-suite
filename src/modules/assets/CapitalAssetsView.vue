@@ -125,8 +125,9 @@ onMounted(async () => {
             </td>
             <td class="py-3 px-3">{{ CAPITAL_CATEGORY_LABELS[asset.category] }}</td>
             <td class="py-3 px-3">
-              <div>{{ asset.purchase_bill_no }}</div>
+              <div>{{ asset.purchase_bill_no || '—' }}</div>
               <div class="text-xs text-slate-500">{{ asset.purchase_date }}</div>
+              <div class="text-[10px] text-violet-700 mt-0.5">{{ asset.source === 'inventory' ? 'From inventory' : 'From purchase' }}</div>
             </td>
             <td class="py-3 px-3">{{ asset.supplier_name }}</td>
             <td class="py-3 px-3 text-right font-mono">{{ asset.qty }} {{ asset.unit }}</td>
