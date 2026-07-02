@@ -186,7 +186,7 @@ onMounted(async () => {
           <p v-if="status" class="mt-2 text-sm text-blue-700">{{ status }}</p>
         </div>
 
-        <div v-for="segment in STOCK_SEGMENTS" :key="segment" class="pp-card p-4">
+        <div v-for="segment in STOCK_SEGMENTS" :key="segment" class="pp-card p-4 overflow-hidden">
           <div class="flex items-center justify-between gap-3 mb-3">
             <div>
               <h2 class="font-bold text-navy">{{ STOCK_SEGMENT_LABELS[segment] }}</h2>
@@ -198,8 +198,18 @@ onMounted(async () => {
             <button type="button" class="pp-btn pp-btn-ghost hide-on-print" @click="addRow(segment)">+ Add Row</button>
           </div>
 
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm min-w-[780px]">
+          <div class="overflow-x-auto -mx-4 px-4">
+            <table class="w-full text-sm min-w-[780px] table-fixed">
+              <colgroup>
+                <col :class="segment === 'paper' ? 'w-[22%]' : 'w-[30%]'" />
+                <col v-if="segment === 'paper'" class="w-[8%]" />
+                <col v-if="segment === 'paper'" class="w-[8%]" />
+                <col class="w-[10%]" />
+                <col class="w-[10%]" />
+                <col class="w-[12%]" />
+                <col class="w-[14%]" />
+                <col class="w-[10%] hide-on-print" />
+              </colgroup>
               <thead class="bg-slate-50 text-slate-500 text-xs uppercase">
                 <tr>
                   <th class="text-left px-3 py-2">{{ lineLabel(segment) }}</th>
@@ -208,7 +218,7 @@ onMounted(async () => {
                   <th class="text-right px-3 py-2">Qty</th>
                   <th class="text-center px-3 py-2">Unit</th>
                   <th class="text-right px-3 py-2">Rate</th>
-                  <th class="text-right px-3 py-2">Amount</th>
+                  <th class="text-right px-3 py-2 whitespace-nowrap">Amount</th>
                   <th class="text-right px-3 py-2 hide-on-print">Action</th>
                 </tr>
               </thead>
@@ -217,26 +227,26 @@ onMounted(async () => {
                   <td :colspan="segment === 'paper' ? 8 : 6" class="px-3 py-6 text-center text-slate-400">No rows in this segment.</td>
                 </tr>
                 <tr v-for="line in rowsBySegment[segment]" :key="line.id" class="border-t border-slate-100">
-                  <td class="px-2 py-2">
-                    <input v-if="line.segment === 'paper'" v-model="line.paper_name" class="pp-input" placeholder="e.g. Kraft Paper" />
-                    <input v-else v-model="line.item_name" class="pp-input" placeholder="Item name" />
+                  <td class="px-2 py-2 min-w-0">
+                    <input v-if="line.segment === 'paper'" v-model="line.paper_name" class="pp-input min-w-0" placeholder="e.g. Kraft Paper" />
+                    <input v-else v-model="line.item_name" class="pp-input min-w-0" placeholder="Item name" />
                   </td>
-                  <td v-if="line.segment === 'paper'" class="px-2 py-2">
-                    <input v-model="line.bf" class="pp-input" placeholder="18" />
+                  <td v-if="line.segment === 'paper'" class="px-2 py-2 min-w-0">
+                    <input v-model="line.bf" class="pp-input min-w-0" placeholder="18" />
                   </td>
-                  <td v-if="line.segment === 'paper'" class="px-2 py-2">
-                    <input v-model="line.gsm" class="pp-input" placeholder="120" />
+                  <td v-if="line.segment === 'paper'" class="px-2 py-2 min-w-0">
+                    <input v-model="line.gsm" class="pp-input min-w-0" placeholder="120" />
                   </td>
-                  <td class="px-2 py-2">
-                    <input v-model.number="line.qty" type="number" min="0" step="0.01" class="pp-input text-right" @input="recalcLine(line)" />
+                  <td class="px-2 py-2 min-w-0">
+                    <input v-model.number="line.qty" type="number" min="0" step="0.01" class="pp-input min-w-0 text-right" @input="recalcLine(line)" />
                   </td>
-                  <td class="px-2 py-2">
-                    <input v-model="line.unit" class="pp-input text-center" />
+                  <td class="px-2 py-2 min-w-0">
+                    <input v-model="line.unit" class="pp-input min-w-0 text-center" />
                   </td>
-                  <td class="px-2 py-2">
-                    <input v-model.number="line.rate" type="number" min="0" step="0.01" class="pp-input text-right" @input="recalcLine(line)" />
+                  <td class="px-2 py-2 min-w-0">
+                    <input v-model.number="line.rate" type="number" min="0" step="0.01" class="pp-input min-w-0 text-right" @input="recalcLine(line)" />
                   </td>
-                  <td class="px-3 py-2 text-right font-medium tabular-nums">Rs. {{ n2(line.amount) }}</td>
+                  <td class="px-3 py-2 text-right font-medium tabular-nums whitespace-nowrap">Rs. {{ n2(line.amount) }}</td>
                   <td class="px-3 py-2 text-right hide-on-print">
                     <button type="button" class="text-rose-600 hover:underline" @click="removeRow(line.id)">Remove</button>
                   </td>
@@ -245,7 +255,7 @@ onMounted(async () => {
               <tfoot>
                 <tr class="border-t-2 border-slate-200 bg-slate-50 font-semibold">
                   <td :colspan="segment === 'paper' ? 6 : 4" class="px-3 py-2 text-right">{{ STOCK_SEGMENT_LABELS[segment] }} Total</td>
-                  <td class="px-3 py-2 text-right tabular-nums">Rs. {{ n2(segmentTotal(form.lines, segment)) }}</td>
+                  <td class="px-3 py-2 text-right tabular-nums whitespace-nowrap">Rs. {{ n2(segmentTotal(form.lines, segment)) }}</td>
                   <td class="hide-on-print"></td>
                 </tr>
               </tfoot>
@@ -253,10 +263,10 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div class="pp-card p-4">
-          <div class="flex items-center justify-between text-lg font-bold text-navy">
-            <span>Grand Total</span>
-            <span>Rs. {{ n2(grandTotal(form.lines)) }}</span>
+        <div class="pp-card p-4 overflow-hidden">
+          <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-lg font-bold text-navy">
+            <span class="shrink-0">Grand Total</span>
+            <span class="tabular-nums whitespace-nowrap ml-auto">Rs. {{ n2(grandTotal(form.lines)) }}</span>
           </div>
         </div>
       </section>
