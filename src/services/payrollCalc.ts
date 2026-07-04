@@ -187,14 +187,22 @@ export function calcEarnedFromHours(
 ): number {
   const hourly = Math.max(0, hourlyWage)
   const otPay = summary.total_ot_hours * hourly
-  const unpaidDeduction = summary.total_off_unpaid_hours * hourly
 
   if (payType === 'daily_wage') {
     return ceilRupee(summary.total_paid_hours * hourly)
   }
 
+  // Monthly: fixed salary − full-day absences − partial unpaid off-duty + OT.
+  // Absent days already contribute 8 unpaid hours in the summary; deduct those
+  // only once via daily wage (not again as hourly unpaid).
   const base = Math.max(0, Number(monthlyAmount) || 0)
-  const absentDeduction = summary.days_absent * ceilRupee(monthlyAmount / PAYROLL_WORKING_DAYS)
+  const daily = ceilRupee(base / PAYROLL_WORKING_DAYS)
+  const absentDeduction = summary.days_absent * daily
+  const unpaidHoursExAbsent = Math.max(
+    0,
+    summary.total_off_unpaid_hours - summary.days_absent * PAYROLL_HOURS_PER_DAY,
+  )
+  const unpaidDeduction = unpaidHoursExAbsent * hourly
   return Math.max(0, ceilRupee(base - absentDeduction - unpaidDeduction + otPay))
 }
 
