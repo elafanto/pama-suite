@@ -109,6 +109,7 @@ const tools = [
   { to: '/purchases', icon: '📥', name: 'Purchases',  desc: 'Vendor bills & stock',  color: 'bg-blue-100' },
   { to: '/reports',   icon: '📈', name: 'Reports',    desc: 'GSTR-1 & outstanding',  color: 'bg-rose-100' },
   { to: '/boxcalc',   icon: '🧮', name: 'BoxCalc',    desc: 'Corrugated costing',    color: 'bg-indigo-100' },
+  { to: '/feeler-gauge', icon: '📏', name: 'Feeler Gauge', desc: 'Blade combinations', color: 'bg-teal-100' },
   { to: '/banking',   icon: '🏦', name: 'Banking',    desc: 'RTGS / NEFT emails',    color: 'bg-orange-100' },
   { to: '/accounting',icon: '📊', name: 'Accounting', desc: 'Ledger & reports',      color: 'bg-violet-100' },
 ]

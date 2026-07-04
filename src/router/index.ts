@@ -16,6 +16,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/parties',   name: 'parties',   component: () => import('@/modules/parties/PartiesView.vue'),     meta: { title: 'Parties', icon: '👥', group: 'Inventory & Masters' } },
 
   { path: '/boxcalc',   name: 'boxcalc',   component: () => import('@/modules/boxcalc/BoxCalcView.vue'),     meta: { title: 'BoxCalc', icon: '🧮', group: 'Tools' } },
+  { path: '/feeler-gauge', name: 'feeler-gauge', component: () => import('@/modules/feelergauge/FeelerGaugeView.vue'), meta: { title: 'Feeler Gauge', icon: '📏', group: 'Tools' } },
   { path: '/stock-statement', name: 'stock-statement', component: () => import('@/modules/stockstatement/StockStatementView.vue'), meta: { title: 'Stock Statement', icon: '🏦', group: 'Tools' } },
 
   { path: '/accounting',name: 'accounting',component: () => import('@/modules/accounting/AccountingView.vue'),meta: { title: 'Accounting', icon: '📒', group: 'Finance' } },
