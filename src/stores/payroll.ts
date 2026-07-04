@@ -10,6 +10,7 @@ import {
   currentPeriod,
   dayFromPreset,
   deriveWageRates,
+  filterStaffForPeriod,
   normalizeDayHours,
   periodLabel,
   sumPayrollLines,
@@ -38,7 +39,13 @@ export const usePayrollStore = defineStore('payroll', () => {
   const runs = ref<PayrollRun[]>([])
   const loaded = ref(false)
 
-  const activeStaff = computed(() => staffList.value.filter((s) => s.is_active))
+  const activeStaff = computed(() =>
+    staffList.value.filter((s) => s.is_active && !s.leaving_date),
+  )
+
+  function staffForPeriod(period: string): Staff[] {
+    return filterStaffForPeriod(staffList.value, period)
+  }
 
   async function load() {
     const firm = useFirmStore()
@@ -64,12 +71,14 @@ export const usePayrollStore = defineStore('payroll', () => {
       return { error: `Maximum ${MAX_STAFF} staff allowed.` }
     }
     const rates = deriveWageRates(data.monthly_amount)
+    const leaving_date = (data.leaving_date || '').trim()
     const rec = await staffRepo.create({
       ...data,
       firm_id: firm.activeFirmId,
       daily_wage: rates.daily_wage,
       hourly_wage: rates.hourly_wage,
-      is_active: data.is_active !== false,
+      leaving_date,
+      is_active: leaving_date ? false : data.is_active !== false,
     } as any)
     await logActivity(firm.activeFirmId, 'create', 'staff', rec.id, `Staff ${rec.name} added`)
     await load()
@@ -82,8 +91,17 @@ export const usePayrollStore = defineStore('payroll', () => {
     if (!existing) return
     const monthly = patch.monthly_amount ?? existing.monthly_amount
     const rates = deriveWageRates(monthly)
+    const leaving_date =
+      patch.leaving_date !== undefined ? (patch.leaving_date || '').trim() : (existing.leaving_date || '')
+    const is_active = leaving_date
+      ? false
+      : patch.is_active !== undefined
+        ? patch.is_active
+        : existing.is_active
     await staffRepo.update(id, {
       ...patch,
+      leaving_date,
+      is_active,
       daily_wage: rates.daily_wage,
       hourly_wage: rates.hourly_wage,
     })
@@ -147,6 +165,45 @@ export const usePayrollStore = defineStore('payroll', () => {
     return pickBestPayrollRun(matches)
   }
 
+  async function syncRunStaff(run: PayrollRun): Promise<PayrollRun> {
+    if (run.status === 'paid') return run
+    const eligible = staffForPeriod(run.period)
+    const eligibleIds = new Set(eligible.map((s) => s.id))
+    const kept = run.lines.filter((l) => eligibleIds.has(l.staff_id))
+    const missing = eligible.filter((s) => !kept.some((l) => l.staff_id === s.id))
+    if (kept.length === run.lines.length && missing.length === 0) return run
+
+    const lines: PayrollLine[] = [
+      ...kept.map((line) => {
+        const staff = eligible.find((s) => s.id === line.staff_id)!
+        return buildPayrollLine(
+          staff,
+          normalizeDayHours(line),
+          line.attendance,
+          run.year,
+          run.month,
+          openAdvanceTotal(line.staff_id),
+          line.other_deduction,
+        )
+      }),
+      ...missing.map((s) =>
+        buildPayrollLine(s, {}, undefined, run.year, run.month, openAdvanceTotal(s.id), 0),
+      ),
+    ]
+    const totals = sumPayrollLines(lines)
+    await runRepo.update(run.id, {
+      lines,
+      ...totals,
+      total_earned: totals.total_earned,
+      total_advance: totals.total_advance,
+      total_other: totals.total_other,
+      total_net: totals.total_net,
+      status: 'draft',
+    })
+    await load()
+    return (await getRunForPeriod(run.period)) || run
+  }
+
   async function ensureRun(period: string): Promise<PayrollRun> {
     const firm = useFirmStore()
     await dedupeAllPayrollRuns(firm.activeFirmId)
@@ -156,10 +213,10 @@ export const usePayrollStore = defineStore('payroll', () => {
       .filter((r) => !r.is_deleted)
       .toArray()
     const existing = matches.length ? pickBestPayrollRun(matches) : undefined
-    if (existing) return existing
+    if (existing) return syncRunStaff(existing)
 
     const [y, m] = period.split('-').map(Number)
-    const lines: PayrollLine[] = activeStaff.value.map((s) =>
+    const lines: PayrollLine[] = staffForPeriod(period).map((s) =>
       buildPayrollLine(s, {}, undefined, y, m, openAdvanceTotal(s.id), 0),
     )
     const totals = sumPayrollLines(lines)
@@ -192,25 +249,27 @@ export const usePayrollStore = defineStore('payroll', () => {
     if (!days.length) return { error: 'Select at least one day' }
 
     const stamp = dayFromPreset(preset)
-    const staffById = new Map(activeStaff.value.map((s) => [s.id, s]))
+    const eligible = staffForPeriod(period)
+    const staffById = new Map(eligible.map((s) => [s.id, s]))
 
-    const lines = run.lines.map((line) => {
-      const staff = staffById.get(line.staff_id)
-      if (!staff) return line
-      const day_hours = { ...normalizeDayHours(line) }
-      for (const d of days) day_hours[d] = { ...stamp }
-      return buildPayrollLine(
-        staff,
-        day_hours,
-        line.attendance,
-        run.year,
-        run.month,
-        openAdvanceTotal(line.staff_id),
-        line.other_deduction,
-      )
-    })
+    const lines = run.lines
+      .filter((line) => staffById.has(line.staff_id))
+      .map((line) => {
+        const staff = staffById.get(line.staff_id)!
+        const day_hours = { ...normalizeDayHours(line) }
+        for (const d of days) day_hours[d] = { ...stamp }
+        return buildPayrollLine(
+          staff,
+          day_hours,
+          line.attendance,
+          run.year,
+          run.month,
+          openAdvanceTotal(line.staff_id),
+          line.other_deduction,
+        )
+      })
 
-    for (const staff of activeStaff.value) {
+    for (const staff of eligible) {
       if (lines.some((l) => l.staff_id === staff.id)) continue
       const day_hours: Record<string, DayAttendance> = {}
       for (const d of days) day_hours[d] = { ...stamp }
@@ -242,15 +301,19 @@ export const usePayrollStore = defineStore('payroll', () => {
     const run = await ensureRun(period)
     if (run.status === 'paid') return { error: 'Month already paid' }
 
-    const staff = activeStaff.value.find((s) => s.id === staffId)
-    if (!staff) return { error: 'Staff not found' }
+    const eligible = staffForPeriod(period)
+    const staff = eligible.find((s) => s.id === staffId)
+    if (!staff) return { error: 'Staff not found or already left' }
+    const eligibleIds = new Set(eligible.map((s) => s.id))
 
-    const lines = run.lines.map((line) => {
-      if (line.staff_id !== staffId) return line
-      const day_hours = patch.day_hours ?? normalizeDayHours(line)
-      const other = patch.other_deduction ?? line.other_deduction
-      return buildPayrollLine(staff, day_hours, line.attendance, run.year, run.month, openAdvanceTotal(staffId), other)
-    })
+    const lines = run.lines
+      .filter((line) => eligibleIds.has(line.staff_id))
+      .map((line) => {
+        if (line.staff_id !== staffId) return line
+        const day_hours = patch.day_hours ?? normalizeDayHours(line)
+        const other = patch.other_deduction ?? line.other_deduction
+        return buildPayrollLine(staff, day_hours, line.attendance, run.year, run.month, openAdvanceTotal(staffId), other)
+      })
 
     const totals = sumPayrollLines(lines)
     await runRepo.update(run.id, {
@@ -271,7 +334,7 @@ export const usePayrollStore = defineStore('payroll', () => {
     const run = await ensureRun(period)
     if (run.status === 'paid') return { error: 'Month already paid' }
 
-    const lines = activeStaff.value.map((s) => {
+    const lines = staffForPeriod(period).map((s) => {
       const existing = run.lines.find((l) => l.staff_id === s.id)
       return buildPayrollLine(
         s,
@@ -345,6 +408,7 @@ export const usePayrollStore = defineStore('payroll', () => {
   return {
     staffList,
     activeStaff,
+    staffForPeriod,
     advances,
     runs,
     loaded,

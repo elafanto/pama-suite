@@ -29,6 +29,33 @@ export function periodLabel(period: string): string {
   return new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
 }
 
+/** YYYY-MM from leaving_date, or null if not set. */
+export function staffLeavingPeriod(leavingDate: string | undefined | null): string | null {
+  if (!leavingDate || leavingDate.length < 7) return null
+  return leavingDate.slice(0, 7)
+}
+
+/**
+ * Staff appears in a payroll period if still employed that month.
+ * Leaving month is included; from the next month they are hidden.
+ */
+export function isStaffInPeriod(
+  staff: Pick<Staff, 'is_active' | 'leaving_date' | 'is_deleted'>,
+  period: string,
+): boolean {
+  if (staff.is_deleted) return false
+  const leavePeriod = staffLeavingPeriod(staff.leaving_date)
+  if (leavePeriod) return period <= leavePeriod
+  return staff.is_active !== false
+}
+
+export function filterStaffForPeriod<T extends Pick<Staff, 'is_active' | 'leaving_date' | 'is_deleted'>>(
+  staffList: T[],
+  period: string,
+): T[] {
+  return staffList.filter((s) => isStaffInPeriod(s, period))
+}
+
 export function daysInMonth(year: number, month: number): number {
   return new Date(year, month, 0).getDate()
 }

@@ -271,6 +271,8 @@ export interface Staff extends BaseRecord {
   ifsc: string
   acname: string
   is_active: boolean
+  /** Last working day (YYYY-MM-DD). Staff stays in that month's payroll, hidden from later months. */
+  leaving_date?: string
 }
 
 export interface StaffAdvance extends BaseRecord {

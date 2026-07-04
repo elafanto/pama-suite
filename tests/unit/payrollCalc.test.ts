@@ -4,6 +4,7 @@ import {
   calcEarnedFromHours,
   dayFromPreset,
   deriveWageRates,
+  isStaffInPeriod,
   summarizeDayHours,
 } from '@/services/payrollCalc'
 import type { DayAttendance, Staff } from '@/types/models'
@@ -163,5 +164,37 @@ describe('buildPayrollLine', () => {
     expect(line.earned).toBe(25000)
     expect(line.advance_deduction).toBe(25000)
     expect(line.net_pay).toBe(0)
+  })
+})
+
+describe('isStaffInPeriod — leaving date', () => {
+  const base = {
+    is_active: true,
+    is_deleted: false,
+    leaving_date: '2026-06-15',
+  }
+
+  it('includes staff in leaving month and earlier months', () => {
+    expect(isStaffInPeriod(base, '2026-05')).toBe(true)
+    expect(isStaffInPeriod(base, '2026-06')).toBe(true)
+  })
+
+  it('hides staff from the month after leaving', () => {
+    expect(isStaffInPeriod(base, '2026-07')).toBe(false)
+    expect(isStaffInPeriod(base, '2026-08')).toBe(false)
+  })
+
+  it('keeps active staff without leaving date', () => {
+    expect(isStaffInPeriod({ is_active: true, is_deleted: false }, '2026-07')).toBe(true)
+  })
+
+  it('hides inactive staff without leaving date', () => {
+    expect(isStaffInPeriod({ is_active: false, is_deleted: false }, '2026-07')).toBe(false)
+  })
+
+  it('still includes left staff in leaving month even if inactive', () => {
+    expect(
+      isStaffInPeriod({ is_active: false, is_deleted: false, leaving_date: '2026-06-20' }, '2026-06'),
+    ).toBe(true)
   })
 })

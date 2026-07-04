@@ -49,6 +49,7 @@ const staffForm = reactive({
   ifsc: '',
   acname: '',
   is_active: true,
+  leaving_date: '',
 })
 
 const showAdvanceModal = ref(false)
@@ -87,6 +88,9 @@ const currentRun = computed(() => {
   const matches = store.runs.filter((r) => r.period === period.value && !r.is_deleted)
   return matches.length ? pickBestPayrollRun(matches) : undefined
 })
+
+/** Staff eligible for the selected payroll month (excludes people who left earlier). */
+const periodStaff = computed(() => store.staffForPeriod(period.value))
 const selectedBulkDays = ref<Set<string>>(new Set())
 const attendanceEditMode = ref(false)
 const showDayActionModal = ref(false)
@@ -100,10 +104,21 @@ const selectedBulkCount = computed(() => selectedBulkDays.value.size)
 const daySalaryExpense = computed(() => {
   const map: Record<string, number> = {}
   for (const d of dayCols.value) {
-    map[d] = sumDaySalaryExpense(d, store.activeStaff, currentRun.value?.lines)
+    map[d] = sumDaySalaryExpense(d, periodStaff.value, currentRun.value?.lines)
   }
   return map
 })
+
+function fmtLeavingDate(date: string | undefined): string {
+  if (!date) return ''
+  const [y, m, d] = date.split('-').map(Number)
+  if (!y || !m || !d) return date
+  return new Date(y, m - 1, d).toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  })
+}
 
 const attendanceSalaryExpenseTotal = computed(() =>
   Object.values(daySalaryExpense.value).reduce((sum, n) => sum + n, 0),
@@ -125,7 +140,7 @@ const tabs: { id: Tab; label: string; icon: string }[] = [
 function blankStaff() {
   Object.assign(staffForm, {
     name: '', phone: '', designation: '', pay_type: 'monthly' as StaffPayType,
-    monthly_amount: 0, bank: '', acno: '', ifsc: '', acname: '', is_active: true,
+    monthly_amount: 0, bank: '', acno: '', ifsc: '', acname: '', is_active: true, leaving_date: '',
   })
 }
 
@@ -144,13 +159,14 @@ function openEditStaff(s: Staff) {
   Object.assign(staffForm, {
     name: s.name, phone: s.phone, designation: s.designation, pay_type: s.pay_type,
     monthly_amount: s.monthly_amount, bank: s.bank, acno: s.acno, ifsc: s.ifsc,
-    acname: s.acname, is_active: s.is_active,
+    acname: s.acname, is_active: s.is_active, leaving_date: s.leaving_date || '',
   })
   showStaffModal.value = true
 }
 
 async function saveStaff() {
   if (!staffForm.name.trim()) return alert('Name required')
+  const leaving_date = staffForm.leaving_date || ''
   const payload: NewStaff = {
     name: staffForm.name.trim(),
     phone: staffForm.phone.trim(),
@@ -161,7 +177,8 @@ async function saveStaff() {
     acno: staffForm.acno.trim(),
     ifsc: staffForm.ifsc.trim().toUpperCase(),
     acname: staffForm.acname.trim() || staffForm.name.trim(),
-    is_active: staffForm.is_active,
+    leaving_date,
+    is_active: leaving_date ? false : staffForm.is_active,
   }
   if (editingStaffId.value) {
     await store.updateStaff(editingStaffId.value, payload)
@@ -244,7 +261,7 @@ async function bulkAllSundays() {
 
 function openDayActionMenu(staffId: string, day: string) {
   if (!canEditAttendance.value) return
-  const staff = store.activeStaff.find((s) => s.id === staffId)
+  const staff = periodStaff.value.find((s) => s.id === staffId)
   dayActionStaffId.value = staffId
   dayActionDay.value = day
   dayActionStaffName.value = staff?.name || ''
@@ -295,7 +312,7 @@ function dayFor(staffId: string, day: string): DayAttendance | undefined {
 
 function openDayModal(staffId: string, day: string) {
   if (currentRun.value?.status === 'paid') return alert('Month already paid — attendance locked.')
-  const staff = store.activeStaff.find((s) => s.id === staffId)
+  const staff = periodStaff.value.find((s) => s.id === staffId)
   const existing = dayFor(staffId, day)
   dayModalStaffId.value = staffId
   dayModalDay.value = day
@@ -364,7 +381,7 @@ async function shareStaffHoursWhatsApp(staffId: string) {
 
 async function shareAllStaffHoursWhatsApp() {
   await ensurePeriodRun()
-  const eligible = store.activeStaff.filter((s) => hasMarkedAttendance(lineFor(s.id)))
+  const eligible = periodStaff.value.filter((s) => hasMarkedAttendance(lineFor(s.id)))
   if (!eligible.length) return alert('Kisi staff ki attendance mark nahi hai.')
   if (!confirm(`${eligible.length} staff — ek-ek karke WhatsApp khulega. Continue?`)) return
   for (const s of eligible) {
@@ -385,7 +402,7 @@ async function paySalary() {
 }
 
 function openAdvance() {
-  advanceForm.staff_id = store.activeStaff[0]?.id || ''
+  advanceForm.staff_id = periodStaff.value[0]?.id || ''
   advanceForm.date = new Date().toISOString().slice(0, 10)
   advanceForm.amount = 0
   advanceForm.narration = ''
@@ -411,7 +428,7 @@ const payslipLine = computed(() => {
 onMounted(async () => {
   await firmStore.load()
   await store.load()
-  if (store.activeStaff.length) payslipStaffId.value = store.activeStaff[0].id
+  if (periodStaff.value.length) payslipStaffId.value = periodStaff.value[0].id
 })
 </script>
 
@@ -464,7 +481,8 @@ onMounted(async () => {
         <div class="min-w-0 flex-1">
           <div class="font-bold text-navy flex items-center gap-2 flex-wrap">
             {{ s.name }}
-            <span v-if="!s.is_active" class="pp-badge bg-slate-200 text-slate-600">Inactive</span>
+            <span v-if="s.leaving_date" class="pp-badge bg-rose-100 text-rose-700">Left {{ fmtLeavingDate(s.leaving_date) }}</span>
+            <span v-else-if="!s.is_active" class="pp-badge bg-slate-200 text-slate-600">Inactive</span>
           </div>
           <div class="text-xs text-slate-500 mt-1">
             {{ s.designation || '—' }} ·
@@ -473,6 +491,9 @@ onMounted(async () => {
           </div>
           <div v-if="s.pay_type === 'daily_wage'" class="text-xs text-emerald-700 mt-1">
             Daily ₹{{ s.daily_wage }} · Hourly ₹{{ s.hourly_wage }}
+          </div>
+          <div v-if="s.leaving_date" class="text-xs text-rose-600 mt-1">
+            Leaving month tak payroll me dikhega, uske baad nahi.
           </div>
           <div v-if="s.phone" class="text-xs text-slate-400 mt-0.5">{{ s.phone }}</div>
         </div>
@@ -522,7 +543,7 @@ onMounted(async () => {
         Date tap = bulk select · <strong>✓all</strong> = sab present · Cell tap = action menu (har change confirm)
       </p>
 
-      <div v-if="store.activeStaff.length > 0 && currentRun" class="flex flex-wrap gap-2 px-1">
+      <div v-if="periodStaff.length > 0 && currentRun" class="flex flex-wrap gap-2 px-1">
         <button
           type="button"
           class="pp-btn pp-btn-success !py-1.5 !text-xs"
@@ -532,7 +553,7 @@ onMounted(async () => {
         </button>
       </div>
 
-      <div v-if="store.activeStaff.length > 0 && canEditAttendance" class="pp-card p-3 flex flex-wrap gap-2 items-center">
+      <div v-if="periodStaff.length > 0 && canEditAttendance" class="pp-card p-3 flex flex-wrap gap-2 items-center">
         <span class="text-xs font-semibold text-slate-600 w-full sm:w-auto">Bulk (sab staff):</span>
         <button
           type="button"
@@ -560,7 +581,9 @@ onMounted(async () => {
         </button>
       </div>
 
-      <div v-if="store.activeStaff.length === 0" class="pp-card p-6 text-center text-slate-400">Add staff first.</div>
+      <div v-if="periodStaff.length === 0" class="pp-card p-6 text-center text-slate-400">
+        Is month ke liye koi staff nahi — pehle Staff tab se add karo, ya leaving date check karo.
+      </div>
       <div v-else class="overflow-x-auto -mx-4 px-4">
         <table class="text-xs border-collapse min-w-max">
           <thead>
@@ -595,7 +618,7 @@ onMounted(async () => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="s in store.activeStaff" :key="s.id">
+            <tr v-for="s in periodStaff" :key="s.id">
               <td class="sticky left-0 z-10 bg-white border border-slate-200 px-2 py-2 font-semibold text-navy max-w-[140px]">
                 <div class="flex items-center gap-1 min-w-0">
                   <span class="truncate">{{ s.name }}</span>
@@ -658,7 +681,7 @@ onMounted(async () => {
         </table>
       </div>
       <div
-        v-if="store.activeStaff.length > 0 && attendanceSalaryExpenseTotal > 0"
+        v-if="periodStaff.length > 0 && attendanceSalaryExpenseTotal > 0"
         class="pp-card p-3 flex flex-wrap items-center justify-between gap-2 bg-emerald-50 border-emerald-200"
       >
         <span class="text-xs text-emerald-800">
@@ -666,7 +689,7 @@ onMounted(async () => {
         </span>
         <span class="font-bold text-emerald-900">₹{{ attendanceSalaryExpenseTotal.toLocaleString('en-IN') }}</span>
       </div>
-      <p v-if="store.activeStaff.length > 0" class="text-[10px] text-slate-400 px-1">
+      <p v-if="periodStaff.length > 0" class="text-[10px] text-slate-400 px-1">
         Har din = paid hours × hourly wage. Sunday weekly off unpaid (÷26 me pehle se); Sunday par duty/OT ho to pay milega.
       </p>
     </section>
@@ -802,7 +825,7 @@ onMounted(async () => {
     <section v-else-if="tab === 'payslip'" class="space-y-4">
       <div class="flex flex-wrap gap-2 items-center print:hidden">
         <select v-model="payslipStaffId" class="pp-input max-w-xs">
-          <option v-for="s in store.activeStaff" :key="s.id" :value="s.id">{{ s.name }}</option>
+          <option v-for="s in periodStaff" :key="s.id" :value="s.id">{{ s.name }}</option>
         </select>
         <button class="pp-btn pp-btn-ghost" @click="printPayslip">Print payslip</button>
         <button
@@ -880,9 +903,19 @@ onMounted(async () => {
             <input v-model="staffForm.acname" class="pp-input" placeholder="Account name" />
           </div>
         </details>
-        <label class="flex items-center gap-2 text-sm">
+        <div>
+          <label class="pp-label">Leaving date</label>
+          <input v-model="staffForm.leaving_date" type="date" class="pp-input" />
+          <p class="text-xs text-slate-500 mt-1">
+            Staff chhodkar gaya ho to last working day daalo. Us month tak payroll me rahega, next month se hide.
+          </p>
+        </div>
+        <label v-if="!staffForm.leaving_date" class="flex items-center gap-2 text-sm">
           <input v-model="staffForm.is_active" type="checkbox" /> Active
         </label>
+        <p v-else class="text-xs text-rose-600">
+          Leaving date set — staff inactive; {{ staffForm.leaving_date.slice(0, 7) }} ke baad payroll me nahi dikhega.
+        </p>
         <div class="flex justify-end gap-2 pt-2">
           <button class="pp-btn pp-btn-ghost" @click="showStaffModal = false">Cancel</button>
           <button class="pp-btn pp-btn-primary" @click="saveStaff">Save</button>
@@ -994,7 +1027,7 @@ onMounted(async () => {
         <div>
           <label class="pp-label">Staff *</label>
           <select v-model="advanceForm.staff_id" class="pp-input">
-            <option v-for="s in store.activeStaff" :key="s.id" :value="s.id">{{ s.name }}</option>
+            <option v-for="s in periodStaff" :key="s.id" :value="s.id">{{ s.name }}</option>
           </select>
         </div>
         <div class="grid grid-cols-2 gap-3">
