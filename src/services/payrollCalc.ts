@@ -72,7 +72,8 @@ export function dayFromPreset(preset: DayBulkPreset): DayAttendance {
   if (preset === 'half') return { duty_hours: 4, off_paid: false, ot_hours: 0, kind: 'work' }
   if (preset === 'absent') return { duty_hours: 0, off_paid: false, ot_hours: 0, kind: 'absent' }
   if (preset === 'holiday') return { duty_hours: 0, off_paid: true, ot_hours: 0, kind: 'holiday' }
-  if (preset === 'sunday') return { duty_hours: 0, off_paid: true, ot_hours: 0, kind: 'sunday' }
+  // Sunday is already excluded from ÷26 daily wage — rest day, no pay / no cut.
+  if (preset === 'sunday') return { duty_hours: 0, off_paid: false, ot_hours: 0, kind: 'sunday' }
   return { duty_hours: 0, off_paid: true, ot_hours: 0, kind: 'leave' }
 }
 
@@ -116,10 +117,17 @@ export function breakdownDay(day: DayAttendance | undefined): DayHourBreakdown {
 
   const dutyRaw = Math.max(0, Number(day.duty_hours) || 0)
   const dutyRegular = Math.min(PAYROLL_HOURS_PER_DAY, dutyRaw)
+  const ot = Math.max(0, Number(day.ot_hours) || 0)
+
+  // Weekly off is outside the ÷26 working-day model: no pay and no salary cut.
+  // If someone actually works on Sunday (duty > 0), normal duty/OT pay applies.
+  if (day.kind === 'sunday' && dutyRegular === 0) {
+    return { paid: ot, unpaid: 0, duty: 0, off: PAYROLL_HOURS_PER_DAY, ot }
+  }
+
   const off = calcOffDutyHours(dutyRegular)
   const offPaid = day.off_paid ? off : 0
   const offUnpaid = day.off_paid ? 0 : off
-  const ot = Math.max(0, Number(day.ot_hours) || 0)
 
   const paid = dutyRegular + offPaid + ot
   const unpaid = offUnpaid

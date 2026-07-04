@@ -101,6 +101,40 @@ describe('calcEarnedFromHours — daily_wage', () => {
     const summary = summarizeDayHours(hoursForDays(25, 0, 0, 1), 30)
     expect(calcEarnedFromHours('daily_wage', monthly, hourly_wage, summary)).toBe(26 * 8 * 125)
   })
+
+  it('does not pay Sunday weekly off (already in ÷26)', () => {
+    const dayHours = hoursForDays(26)
+    dayHours['27'] = dayFromPreset('sunday')
+    dayHours['28'] = dayFromPreset('sunday')
+    const summary = summarizeDayHours(dayHours, 30)
+    expect(summary.days_leave).toBe(2)
+    expect(summary.total_paid_hours).toBe(26 * 8)
+    expect(summary.total_off_unpaid_hours).toBe(0)
+    expect(calcEarnedFromHours('daily_wage', monthly, hourly_wage, summary)).toBe(26 * 8 * 125)
+  })
+
+  it('pays duty/OT if someone works on Sunday', () => {
+    const dayHours = hoursForDays(25)
+    dayHours['26'] = { duty_hours: 8, off_paid: false, ot_hours: 2, kind: 'sunday' }
+    const summary = summarizeDayHours(dayHours, 30)
+    expect(summary.total_paid_hours).toBe(25 * 8 + 8 + 2)
+    expect(calcEarnedFromHours('daily_wage', monthly, hourly_wage, summary)).toBe((25 * 8 + 10) * 125)
+  })
+})
+
+describe('Sunday weekly off — monthly', () => {
+  const monthly = 26000
+  const { hourly_wage } = deriveWageRates(monthly)
+
+  it('does not cut monthly salary for Sunday rest days', () => {
+    const dayHours = hoursForDays(26)
+    dayHours['27'] = dayFromPreset('sunday')
+    dayHours['28'] = dayFromPreset('sunday')
+    const summary = summarizeDayHours(dayHours, 30)
+    expect(summary.days_absent).toBe(0)
+    expect(summary.total_off_unpaid_hours).toBe(0)
+    expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary)).toBe(26000)
+  })
 })
 
 describe('buildPayrollLine', () => {

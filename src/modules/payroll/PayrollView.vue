@@ -226,7 +226,7 @@ async function bulkMarkSelected(preset: 'full' | 'holiday' | 'sunday') {
   if (currentRun.value?.status === 'paid') return alert('Month already paid.')
   const days = [...selectedBulkDays.value]
   if (!days.length) return alert('Pehle upar se din select karein (tap on date).')
-  const label = preset === 'full' ? 'SAB PRESENT (8 hr)' : preset === 'holiday' ? 'FACTORY HOLIDAY (paid)' : 'WEEKLY OFF / Sunday (paid)'
+  const label = preset === 'full' ? 'SAB PRESENT (8 hr)' : preset === 'holiday' ? 'FACTORY HOLIDAY (paid)' : 'WEEKLY OFF / Sunday (unpaid, ÷26)'
   if (!confirm(`${days.length} din — sab staff ke liye ${label}?`)) return
   const res = await store.bulkMarkDays(period.value, days, preset)
   if (res && 'error' in res) alert(res.error)
@@ -237,7 +237,7 @@ async function bulkAllSundays() {
   if (currentRun.value?.status === 'paid') return alert('Month already paid.')
   const days = sundaysThisMonth.value
   if (!days.length) return alert('Is month me Sunday nahi hai.')
-  if (!confirm(`Sab ${days.length} Sundays — sab staff weekly off (paid) mark karein?`)) return
+  if (!confirm(`Sab ${days.length} Sundays — sab staff weekly off (unpaid, ÷26 me pehle se) mark karein?`)) return
   const res = await store.bulkMarkDays(period.value, days, 'sunday')
   if (res && 'error' in res) alert(res.error)
 }
@@ -265,7 +265,7 @@ async function applyStaffDayPreset(preset: 'full' | 'absent' | 'holiday' | 'sund
       full: 'PRESENT (8 hr)',
       absent: 'ABSENT',
       holiday: 'HOLIDAY (paid)',
-      sunday: 'WEEKLY OFF (paid)',
+      sunday: 'WEEKLY OFF (unpaid, ÷26)',
     }
     if (!confirm(`${dayActionStaffName.value} — ${Number(day)} → ${labels[preset]}?`)) return
     hours[day] = { ...dayFromPreset(preset) }
@@ -667,7 +667,7 @@ onMounted(async () => {
         <span class="font-bold text-emerald-900">₹{{ attendanceSalaryExpenseTotal.toLocaleString('en-IN') }}</span>
       </div>
       <p v-if="store.activeStaff.length > 0" class="text-[10px] text-slate-400 px-1">
-        Har din = sab staff ke paid hours × hourly wage (present, holiday, Sunday, OT included).
+        Har din = paid hours × hourly wage. Sunday weekly off unpaid (÷26 me pehle se); Sunday par duty/OT ho to pay milega.
       </p>
     </section>
 
@@ -908,7 +908,7 @@ onMounted(async () => {
           🏭 Holiday (paid)
         </button>
         <button type="button" class="pp-btn pp-btn-ghost w-full justify-center border-indigo-200 text-indigo-800" @click="applyStaffDayPreset('sunday')">
-          ☀ Weekly off (paid)
+          ☀ Weekly off (unpaid, ÷26)
         </button>
         <button type="button" class="pp-btn pp-btn-ghost w-full justify-center" @click="openPartialFromActionMenu">
           ⏱ Partial duty / OT…
