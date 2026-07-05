@@ -193,9 +193,10 @@ export function getPapersForRole(role: string): Partial<typeof PAPER_LIBRARY> {
 }
 
 // Sizing Utilities
-export function getCaliper(ply: string, flute: string): number {
+export function getCaliper(ply: string, flute: string, caliperTable?: Record<string, number>): number {
+  const table = caliperTable ?? CALIPER_TABLE
   const key = `${ply}-${flute}`
-  return CALIPER_TABLE[key] || 4.0
+  return table[key] || 4.0
 }
 
 export function getTakeUp(flute: string): number {
@@ -250,7 +251,8 @@ export function resolveConversionSlab(
   return sorted[sorted.length - 1] ?? DEFAULT_CONVERSION_SLABS[DEFAULT_CONVERSION_SLABS.length - 1]
 }
 
-// Costing Calculations
+import type { BoxSheetSettings } from '@/services/boxSheetSettings'
+import { mergeBoxSheetSettings } from '@/services/boxSheetSettings'
 
 /** One paper layer as fed to {@link calculate}. Form values may still arrive as
  *  strings, so numeric fields accept `number | string` and are parsed inside. */
@@ -312,10 +314,86 @@ export interface CalcInput {
   scrapRate?: number
   stackCheck?: CalcStackCheckInput | null
   stackingConditions?: CalcStackingConditions
+  /** Optional overrides for blank / sheet sizing (see Box Sheet Settings module). */
+  sheetSettings?: Partial<BoxSheetSettings> | null
+}
+
+export interface SheetCalcDetailPart {
+  label: string
+  mm: number
+  formula?: string
+}
+
+export interface SheetCalcDetail {
+  input: {
+    length: number
+    width: number
+    height: number
+    dimType: 'inner' | 'outer'
+    ply: string
+    flute: string
+    glueFlapOverride: number | null
+  }
+  caliper: {
+    value: number
+    source: 'override' | 'table' | 'default'
+    key: string
+  }
+  innerOuter: {
+    lwFactor: number
+    hFactor: number
+    inner: { L: number; W: number; H: number }
+    outer: { L: number; W: number; H: number }
+    steps: string[]
+  }
+  blank: {
+    wrapL: number
+    wrapW: number
+    wrapH: number
+    effectiveT: number
+    clearanceMM: number
+    glueFlap: number
+    lengthParts: SheetCalcDetailPart[]
+    lengthTotal: number
+    widthParts: SheetCalcDetailPart[]
+    widthTotal: number
+    areaM2: number
+    areaFormula: string
+  }
+  construction: {
+    pieces: number
+    type: string
+    maxSingleMM: number
+    maxTwoPieceMM: number
+    maxThreePieceMM: number
+  }
+  slots: {
+    positions: number[]
+    glueFlapStart: number
+    sheetEnd: number
+    slotDepth: number
+  }
+  nesting: {
+    workingDeckleMM: number
+    sideTrimMM: number
+    usableDeckleMM: number
+    sheetsPerWidth: number
+    reelWidthMM: number
+    reelWidthRawMM: number
+    utilizationPercent: number
+    lengthTrimMM: number
+    effectiveLengthUnitMM: number
+    sheetsPerLength: number
+    boxesPerBigSheet: number
+    bigSheetLengthMM: number
+    steps: string[]
+  }
 }
 
 export function calculate(input: CalcInput) {
   const warnings: string[] = []
+  const sheetCfg = mergeBoxSheetSettings(input.sheetSettings)
+  const machine = sheetCfg.machine
 
   // Sizing inputs
   const length = parseFloat(String(input.length))
@@ -332,15 +410,23 @@ export function calculate(input: CalcInput) {
 
   // Determine caliper
   let caliper = input.caliperOverride ? parseFloat(String(input.caliperOverride)) : null
+  let caliperSource: SheetCalcDetail['caliper']['source'] = 'override'
+  const caliperKey = `${input.ply}-${input.flute}`
   if (!caliper) {
-    caliper = getCaliper(input.ply, input.flute)
+    caliper = getCaliper(input.ply, input.flute, sheetCfg.caliperTable)
+    caliperSource = sheetCfg.caliperTable[caliperKey] != null ? 'table' : 'default'
   }
 
-  const glueFlap = input.glueFlap ? parseFloat(String(input.glueFlap)) : (GLUE_FLAP_DEFAULTS[input.ply] || 40)
+  const glueFlap = input.glueFlap
+    ? parseFloat(String(input.glueFlap))
+    : (sheetCfg.glueFlapDefaults[input.ply] || 40)
 
   // Outer vs Inner Sizing
   const isOuter = input.dimType === 'outer'
   const t = caliper
+  const lwFactor = sheetCfg.innerOuterLwFactor
+  const hFactor = sheetCfg.innerOuterHFactor
+  const innerOuterSteps: string[] = []
 
   let innerL = 0, innerW = 0, innerH = 0
   let outerL = 0, outerW = 0, outerH = 0
@@ -349,16 +435,28 @@ export function calculate(input: CalcInput) {
     outerL = length
     outerW = width
     outerH = height
-    innerL = outerL - 1.5 * t
-    innerW = outerW - 1.5 * t
-    innerH = outerH - 2.7 * t
+    innerL = outerL - lwFactor * t
+    innerW = outerW - lwFactor * t
+    innerH = outerH - hFactor * t
+    innerOuterSteps.push(
+      `Outer entered: ${outerL} × ${outerW} × ${outerH} mm`,
+      `Inner L = ${outerL} − ${lwFactor}×${t} = ${innerL.toFixed(2)} mm`,
+      `Inner W = ${outerW} − ${lwFactor}×${t} = ${innerW.toFixed(2)} mm`,
+      `Inner H = ${outerH} − ${hFactor}×${t} = ${innerH.toFixed(2)} mm`,
+    )
   } else {
     innerL = length
     innerW = width
     innerH = height
-    outerL = innerL + 1.5 * t
-    outerW = innerW + 1.5 * t
-    outerH = innerH + 2.7 * t
+    outerL = innerL + lwFactor * t
+    outerW = innerW + lwFactor * t
+    outerH = innerH + hFactor * t
+    innerOuterSteps.push(
+      `Inner entered: ${innerL} × ${innerW} × ${innerH} mm`,
+      `Outer L = ${innerL} + ${lwFactor}×${t} = ${outerL.toFixed(2)} mm`,
+      `Outer W = ${innerW} + ${lwFactor}×${t} = ${outerW.toFixed(2)} mm`,
+      `Outer H = ${innerH} + ${hFactor}×${t} = ${outerH.toFixed(2)} mm`,
+    )
   }
 
   // Blank & machine setup always work from INNER dimensions plus the standard
@@ -371,16 +469,30 @@ export function calculate(input: CalcInput) {
   const wrapW = innerW
   const wrapH = innerH
   const effectiveT = caliper
-  const effectiveClearance = MACHINE_LIMITS.clearanceMM
+  const effectiveClearance = sheetCfg.clearanceMM
 
   // Sheet Size Sizing
-  const sheetLength = 2 * (wrapL + effectiveT) + 2 * (wrapW + effectiveT) + glueFlap
+  const termL = 2 * (wrapL + effectiveT)
+  const termW = 2 * (wrapW + effectiveT)
+  const sheetLength = termL + termW + glueFlap
   const sheetWidth = wrapW + wrapH + effectiveT + effectiveClearance
   const sheetAreaM2 = (sheetLength / 1000) * (sheetWidth / 1000)
 
-  if (sheetWidth > (MACHINE_LIMITS.workingDeckleMM - 2 * MACHINE_LIMITS.sideTrimMM)) {
+  const lengthParts: SheetCalcDetailPart[] = [
+    { label: '2 × (L + t)', mm: termL, formula: `2 × (${wrapL} + ${effectiveT})` },
+    { label: '2 × (W + t)', mm: termW, formula: `2 × (${wrapW} + ${effectiveT})` },
+    { label: 'Glue flap', mm: glueFlap },
+  ]
+  const widthParts: SheetCalcDetailPart[] = [
+    { label: 'Width (W)', mm: wrapW },
+    { label: 'Height (H)', mm: wrapH },
+    { label: 'Caliper (t)', mm: effectiveT },
+    { label: 'Clearance', mm: effectiveClearance },
+  ]
+
+  if (sheetWidth > (machine.workingDeckleMM - 2 * machine.sideTrimMM)) {
     return {
-      error: `Sheet width ${sheetWidth.toFixed(0)}mm exceeds machine deckle limit (${MACHINE_LIMITS.workingDeckleMM - 2 * MACHINE_LIMITS.sideTrimMM}mm usable). Box too wide/tall.`,
+      error: `Sheet width ${sheetWidth.toFixed(0)}mm exceeds machine deckle limit (${machine.workingDeckleMM - 2 * machine.sideTrimMM}mm usable). Box too wide/tall.`,
       success: false
     }
   }
@@ -390,14 +502,14 @@ export function calculate(input: CalcInput) {
   let constType = '1-piece RSC'
   let constWarning: string | null = null
 
-  if (sheetLength <= MACHINE_LIMITS.maxSheetLengthMM) {
+  if (sheetLength <= machine.maxSheetLengthMM) {
     pieces = 1
     constType = '1-piece RSC'
-  } else if (sheetLength <= MACHINE_LIMITS.maxSheetLength2PieceMM) {
+  } else if (sheetLength <= machine.maxSheetLength2PieceMM) {
     pieces = 2
     constType = '2-piece (with lap joint)'
     constWarning = 'Box requires 2-piece construction. Extra material & labor needed.'
-  } else if (sheetLength <= MACHINE_LIMITS.maxSheetLength3PieceMM) {
+  } else if (sheetLength <= machine.maxSheetLength3PieceMM) {
     pieces = 3
     constType = '3-piece (complex)'
     constWarning = 'Box requires 3-piece construction. Verify production feasibility.'
@@ -441,9 +553,10 @@ export function calculate(input: CalcInput) {
   }
 
   // Reel / Nesting — 2-D grid: N_w (across deckle) × N_l (feed direction)
-  const workingDeckle = MACHINE_LIMITS.workingDeckleMM
-  const sideTrim = MACHINE_LIMITS.sideTrimMM
+  const workingDeckle = machine.workingDeckleMM
+  const sideTrim = machine.sideTrimMM
   const totalTrim = 2 * sideTrim
+  const usableDeckle = workingDeckle - totalTrim
 
   // ── Width direction (deckle) ──────────────────────────────────────────────
   let N_w = Math.floor(workingDeckle / sheetWidth)
@@ -470,13 +583,22 @@ export function calculate(input: CalcInput) {
   // ── Length direction (feed / cut-off) ─────────────────────────────────────
   // Each box occupies (blank length + 10 mm cut-off trim) in the feed direction.
   // 2-piece boxes cannot be nested in length (their blank already exceeds 90").
-  const effectiveLengthUnit = sheetLength + MACHINE_LIMITS.lengthTrimMM
+  const effectiveLengthUnit = sheetLength + machine.lengthTrimMM
   const N_l = pieces === 1
-    ? Math.max(1, Math.floor(MACHINE_LIMITS.maxSheetLengthMM / effectiveLengthUnit))
+    ? Math.max(1, Math.floor(machine.maxSheetLengthMM / effectiveLengthUnit))
     : 1
 
   const boxesPerBig = N_w * N_l
   const bigSheetLength = N_l * effectiveLengthUnit   // total feed-direction length
+
+  const nestingSteps = [
+    `Usable deckle = ${workingDeckle} − 2×${sideTrim} = ${usableDeckle} mm`,
+    `N_w = floor(${usableDeckle} ÷ ${sheetWidth.toFixed(2)}) = ${N_w}`,
+    `Reel width = ${N_w}×${sheetWidth.toFixed(2)} + ${totalTrim} → ${reelWidth} mm (5 mm ceil)`,
+    `Feed unit = blank ${sheetLength.toFixed(2)} + cut-off ${machine.lengthTrimMM} = ${effectiveLengthUnit.toFixed(2)} mm`,
+    `N_l = floor(${machine.maxSheetLengthMM} ÷ ${effectiveLengthUnit.toFixed(2)}) = ${N_l}`,
+    `Boxes per big sheet = ${N_w} × ${N_l} = ${boxesPerBig}`,
+  ]
 
   const reelInfo = {
     feasible: true,
@@ -896,12 +1018,75 @@ export function calculate(input: CalcInput) {
     orderQty: divisorQty,
   }
 
+  const sheetCalcDetail: SheetCalcDetail = {
+    input: {
+      length,
+      width,
+      height,
+      dimType: isOuter ? 'outer' : 'inner',
+      ply: input.ply,
+      flute: input.flute,
+      glueFlapOverride: input.glueFlap ? parseFloat(String(input.glueFlap)) : null,
+    },
+    caliper: { value: caliper, source: caliperSource, key: caliperKey },
+    innerOuter: {
+      lwFactor,
+      hFactor,
+      inner: { L: innerL, W: innerW, H: innerH },
+      outer: { L: outerL, W: outerW, H: outerH },
+      steps: innerOuterSteps,
+    },
+    blank: {
+      wrapL,
+      wrapW,
+      wrapH,
+      effectiveT,
+      clearanceMM: effectiveClearance,
+      glueFlap,
+      lengthParts,
+      lengthTotal: sheetLength,
+      widthParts,
+      widthTotal: sheetWidth,
+      areaM2: sheetAreaM2,
+      areaFormula: `(${sheetLength.toFixed(2)} ÷ 1000) × (${sheetWidth.toFixed(2)} ÷ 1000) = ${sheetAreaM2.toFixed(6)} m²`,
+    },
+    construction: {
+      pieces,
+      type: constType,
+      maxSingleMM: machine.maxSheetLengthMM,
+      maxTwoPieceMM: machine.maxSheetLength2PieceMM,
+      maxThreePieceMM: machine.maxSheetLength3PieceMM,
+    },
+    slots: {
+      positions: [slot1, slot2, slot3, slot4],
+      glueFlapStart,
+      sheetEnd,
+      slotDepth: wrapW / 2,
+    },
+    nesting: {
+      workingDeckleMM: workingDeckle,
+      sideTrimMM: sideTrim,
+      usableDeckleMM: usableDeckle,
+      sheetsPerWidth: N_w,
+      reelWidthMM: reelWidth,
+      reelWidthRawMM: reelWidthRaw,
+      utilizationPercent: utilization,
+      lengthTrimMM: machine.lengthTrimMM,
+      effectiveLengthUnitMM: effectiveLengthUnit,
+      sheetsPerLength: N_l,
+      boxesPerBigSheet: boxesPerBig,
+      bigSheetLengthMM: bigSheetLength,
+      steps: nestingSteps,
+    },
+  }
+
   return {
     success: true,
     warnings,
     input,
     caliper,
     glueFlap,
+    sheetCalcDetail,
     dimensions: {
       inner: { L: innerL, W: innerW, H: innerH },
       outer: { L: outerL, W: outerW, H: outerH },

@@ -9,6 +9,7 @@ import {
   joiningMethodLabel,
   type BoxCalcForm,
 } from '@/services/boxcalcUi'
+import SheetCalcDetailPanel from '@/components/boxcalc/SheetCalcDetailPanel.vue'
 
 const props = defineProps<{
   form: BoxCalcForm
@@ -303,6 +304,14 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
         Caliper: <strong>{{ results?.caliper }} mm</strong> |
         Glue Flap: <strong>{{ results?.glueFlap }} mm</strong>
       </div>
+    </div>
+
+    <div v-if="results?.sheetCalcDetail" class="pp-card p-4 print-section">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <h3 class="font-bold text-navy">Sheet Calculation (step-by-step)</h3>
+        <RouterLink to="/box-sheet-settings" class="text-xs text-teal-700 underline hide-on-print">Adjust formulas →</RouterLink>
+      </div>
+      <SheetCalcDetailPanel :detail="results.sheetCalcDetail" />
     </div>
 
     <!-- Sheet diagram -->

@@ -6,6 +6,7 @@ import {
   DEFAULT_CONVERSION_SLABS,
   type ConversionSlab,
 } from '@/services/calculator'
+import { loadBoxSheetSettings, type BoxSheetSettings } from '@/services/boxSheetSettings'
 
 export { COMMON_PAPER_COLORS, getPapersForRole, DEFAULT_CONVERSION_SLABS, type ConversionSlab } from '@/services/calculator'
 
@@ -244,11 +245,14 @@ export function buildCalcInputs(form: BoxCalcForm) {
   }
 }
 
-export function computeBoxCalcResults(form: BoxCalcForm) {
+export function computeBoxCalcResults(form: BoxCalcForm, sheetSettings?: BoxSheetSettings | null) {
   if (!form.layers.length) return null
   const dimsMM = formToMM(form)
   if (!dimsMM.length || !dimsMM.width || !dimsMM.height) return null
-  const res = runCalculator(buildCalcInputs(form))
+  const res = runCalculator({
+    ...buildCalcInputs(form),
+    sheetSettings: sheetSettings ?? loadBoxSheetSettings(),
+  })
   if (res.error) return { error: res.error } as const
   return res
 }

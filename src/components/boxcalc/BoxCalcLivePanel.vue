@@ -6,6 +6,7 @@ import {
   joiningMethodLabel,
   type BoxCalcForm,
 } from '@/services/boxcalcUi'
+import SheetCalcDetailPanel from '@/components/boxcalc/SheetCalcDetailPanel.vue'
 
 const props = defineProps<{
   form: BoxCalcForm
@@ -155,6 +156,11 @@ const sheetRows = computed((): PricingRow[] => {
           <div class="text-amber-700">Conversion slab</div>
           <div class="font-bold text-amber-900">{{ cost?.conversionSlabLabel }} @ ₹{{ fmt(cost?.conversionPerKg, 0) }}/kg</div>
         </div>
+      </div>
+
+      <div v-if="results.sheetCalcDetail" class="mb-3 border border-teal-200 rounded-lg p-2 bg-teal-50/30">
+        <div class="text-[10px] font-bold uppercase text-teal-800 mb-1">Sheet size breakdown</div>
+        <SheetCalcDetailPanel :detail="results.sheetCalcDetail" compact />
       </div>
 
       <!-- Material group -->

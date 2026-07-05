@@ -1016,7 +1016,10 @@ onMounted(async () => {
       </button>
     <div class="pp-card p-6 space-y-6">
       <h2 class="text-lg font-bold text-navy">Settings & Data</h2>
-      <p class="text-sm text-slate-600">Full suite backup is in global Settings. Here: BoxCalc stats and form reset.</p>
+      <p class="text-sm text-slate-600">Full suite backup is in global Settings. Sheet formula / machine limits alag module me adjust karo.</p>
+      <RouterLink to="/box-sheet-settings" class="pp-btn pp-btn-primary inline-flex !py-2 text-sm no-underline">
+        Sheet Calculation Settings →
+      </RouterLink>
       <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <div class="bg-slate-50 p-4 rounded-lg text-center">
           <div class="text-xs text-slate-500">Saved Recipes</div>
