@@ -6,6 +6,7 @@ import { useRecipeStore } from '@/stores/recipes'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useFirmStore } from '@/stores/firm'
+import { useBoxSheetSettingsStore } from '@/stores/boxSheetSettings'
 import {
   PAPER_LIBRARY,
   getTakeUp,
@@ -51,6 +52,7 @@ const recipeStore = useRecipeStore()
 const partyStore = usePartyStore()
 const itemStore = useItemStore()
 const firmStore = useFirmStore()
+const sheetSettingsStore = useBoxSheetSettingsStore()
 
 const activeTab = ref<'calculator' | 'compare' | 'saved' | 'settings'>('calculator')
 const search = ref('')
@@ -137,7 +139,7 @@ const errors = ref<string[]>([])
 const liveCalc = computed(() => {
   if (!form.layers.length) return null
   if (form.calcMode === 'plainSheet') return computePlainSheetWeight(form)
-  return computeBoxCalcResults(form)
+  return computeBoxCalcResults(form, sheetSettingsStore.settings)
 })
 
 type BoxCalcBoxResult = Exclude<NonNullable<ReturnType<typeof computeBoxCalcResults>>, { error: string }>
@@ -383,7 +385,7 @@ function loadRecipe(rec: Recipe) {
   if (!form.jobCard) form.jobCard = defaultJobCard(firmStore.activeFirm?.name || 'My Box Plant')
   if (!form.layers?.length) updateLayersForPly()
   errors.value = []
-  const fresh = computeBoxCalcResults(form)
+  const fresh = computeBoxCalcResults(form, sheetSettingsStore.settings)
   results.value = fresh && !('error' in fresh) ? fresh : rec.results
   showResults.value = true
   setActiveTab('calculator')
@@ -425,7 +427,7 @@ function printFromRecipe(rec: Recipe) {
   const recForm = JSON.parse(JSON.stringify(rec.form)) as BoxCalcForm
   if (!recForm.jobCard) recForm.jobCard = defaultJobCard(firmStore.activeFirm?.name || 'My Box Plant')
   // Recompute so the job card reflects the latest calculator (nesting/plan).
-  const fresh = computeBoxCalcResults(recForm)
+  const fresh = computeBoxCalcResults(recForm, sheetSettingsStore.settings)
   const res = fresh && !('error' in fresh) ? fresh : rec.results
   openJobCardPrintWindow({
     form: recForm as BoxCalcForm & { jobCard: NonNullable<BoxCalcForm['jobCard']> },

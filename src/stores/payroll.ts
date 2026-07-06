@@ -6,13 +6,20 @@ import { useFirmStore } from '@/stores/firm'
 import { logActivity } from '@/services/activityLog'
 import {
   MAX_STAFF,
+  advancePayrollPeriod,
+  advanceTotalForPeriod,
+  advancesForStaffInPeriod,
   buildPayrollLine,
   currentPeriod,
   dayFromPreset,
+  deriveLinePayStatus,
   deriveWageRates,
   filterStaffForPeriod,
+  lineBalanceDue,
   normalizeDayHours,
+  normalizePayrollLine,
   periodLabel,
+  sumLinePayments,
   sumPayrollLines,
 } from '@/services/payrollCalc'
 import { postAdvanceVoucher, postSalaryVoucher } from '@/services/payrollVoucher'
@@ -23,9 +30,31 @@ import type {
   PayrollLine,
   PayrollPaymentMode,
   PayrollRun,
+  PayrollRunStatus,
   Staff,
   StaffAdvance,
 } from '@/types/models'
+
+function normalizeRunLines(run: PayrollRun): PayrollLine[] {
+  return run.lines.map((line) => normalizePayrollLine(line, run.status))
+}
+
+function deriveRunStatus(lines: PayrollLine[]): PayrollRunStatus {
+  if (!lines.length) return 'draft'
+  if (lines.every((l) => l.pay_status === 'paid')) return 'paid'
+  if (lines.some((l) => l.pay_status === 'partial' || l.pay_status === 'paid')) return 'partial'
+  return 'draft'
+}
+
+function preserveLinePayFields(line: PayrollLine) {
+  return {
+    payments: line.payments ?? [],
+    paid_amount: line.paid_amount ?? 0,
+    pay_status: line.pay_status,
+    payment_date: line.payment_date,
+    payment_mode: line.payment_mode,
+  }
+}
 
 const staffRepo = createRepo<Staff>(db.staff)
 const advanceRepo = createRepo<StaffAdvance>(db.staff_advances)
@@ -53,8 +82,21 @@ export const usePayrollStore = defineStore('payroll', () => {
     await dedupeAllPayrollRuns(firm.activeFirmId)
     staffList.value = (await staffRepo.all(firm.activeFirmId)).sort((a, b) => a.name.localeCompare(b.name))
     advances.value = await advanceRepo.all(firm.activeFirmId)
-    runs.value = (await runRepo.all(firm.activeFirmId)).sort((a, b) => b.period.localeCompare(a.period))
+    runs.value = (await runRepo.all(firm.activeFirmId))
+      .map((run) => {
+        const lines = normalizeRunLines(run)
+        return { ...run, lines, status: deriveRunStatus(lines) }
+      })
+      .sort((a, b) => b.period.localeCompare(a.period))
     loaded.value = true
+  }
+
+  function advancesForPeriod(staffId: string, period: string) {
+    return advancesForStaffInPeriod(advances.value, staffId, period)
+  }
+
+  function periodAdvanceTotal(staffId: string, period: string): number {
+    return advanceTotalForPeriod(advances.value, staffId, period)
   }
 
   function openAdvancesForStaff(staffId: string) {
@@ -63,6 +105,21 @@ export const usePayrollStore = defineStore('payroll', () => {
 
   function openAdvanceTotal(staffId: string): number {
     return openAdvancesForStaff(staffId).reduce((s, a) => s + a.amount, 0)
+  }
+
+  async function persistRunLines(run: PayrollRun, lines: PayrollLine[], status?: PayrollRunStatus) {
+    const normalized = lines.map((line) => normalizePayrollLine(line))
+    const totals = sumPayrollLines(normalized)
+    await runRepo.update(run.id, {
+      lines: normalized,
+      ...totals,
+      total_earned: totals.total_earned,
+      total_advance: totals.total_advance,
+      total_other: totals.total_other,
+      total_net: totals.total_net,
+      status: status ?? deriveRunStatus(normalized),
+    })
+    await load()
   }
 
   async function addStaff(data: NewStaff): Promise<Staff | { error: string }> {
@@ -126,12 +183,14 @@ export const usePayrollStore = defineStore('payroll', () => {
     mode: PayrollPaymentMode
     narration: string
     postVoucher: boolean
+    payroll_period?: string
   }): Promise<StaffAdvance | { error: string }> {
     const firm = useFirmStore()
     const staff = staffList.value.find((s) => s.id === data.staff_id)
     if (!staff) return { error: 'Staff not found' }
     const amount = Math.max(0, Number(data.amount) || 0)
     if (amount <= 0) return { error: 'Amount required' }
+    const payroll_period = (data.payroll_period || advancePayrollPeriod({ date: data.date })).slice(0, 7)
 
     const rec = await advanceRepo.create({
       firm_id: firm.activeFirmId,
@@ -141,6 +200,7 @@ export const usePayrollStore = defineStore('payroll', () => {
       amount,
       mode: data.mode,
       narration: data.narration || '',
+      payroll_period,
     } as any)
 
     if (data.postVoucher) {
@@ -154,6 +214,47 @@ export const usePayrollStore = defineStore('payroll', () => {
     return (await advanceRepo.get(rec.id))!
   }
 
+  async function updateAdvance(
+    id: string,
+    patch: Partial<Pick<StaffAdvance, 'date' | 'amount' | 'mode' | 'narration' | 'payroll_period'>>,
+    postVoucher = false,
+  ): Promise<{ ok: true } | { error: string }> {
+    const firm = useFirmStore()
+    const existing = await advanceRepo.get(id)
+    if (!existing) return { error: 'Advance not found' }
+    if (existing.applied_period) return { error: 'Adjusted advance edit nahi ho sakta' }
+
+    const amount = patch.amount !== undefined ? Math.max(0, Number(patch.amount) || 0) : existing.amount
+    if (amount <= 0) return { error: 'Amount required' }
+    const date = patch.date ?? existing.date
+    const payroll_period = (patch.payroll_period
+      || advancePayrollPeriod({ date, payroll_period: patch.payroll_period ?? existing.payroll_period })).slice(0, 7)
+
+    const updated = await advanceRepo.update(id, { ...patch, amount, date, payroll_period })
+    if (postVoucher && updated) {
+      const voucherId = await postAdvanceVoucher(firm.activeFirmId, updated)
+      await advanceRepo.update(id, { voucher_id: voucherId })
+    }
+
+    await logActivity(firm.activeFirmId, 'update', 'staff_advance', id, `Advance updated — ${existing.staff_name}`)
+    await load()
+    void syncPayrollToCloudIfReady()
+    return { ok: true }
+  }
+
+  async function removeAdvance(id: string): Promise<{ ok: true } | { error: string }> {
+    const firm = useFirmStore()
+    const existing = await advanceRepo.get(id)
+    if (!existing) return { error: 'Advance not found' }
+    if (existing.applied_period) return { error: 'Adjusted advance delete nahi ho sakta' }
+
+    await advanceRepo.remove(id)
+    await logActivity(firm.activeFirmId, 'delete', 'staff_advance', id, `Advance removed — ${existing.staff_name}`)
+    await load()
+    void syncPayrollToCloudIfReady()
+    return { ok: true }
+  }
+
   async function getRunForPeriod(period: string): Promise<PayrollRun | undefined> {
     const firm = useFirmStore()
     const matches = await db.payroll_runs
@@ -162,7 +263,9 @@ export const usePayrollStore = defineStore('payroll', () => {
       .filter((r) => !r.is_deleted)
       .toArray()
     if (!matches.length) return undefined
-    return pickBestPayrollRun(matches)
+    const run = pickBestPayrollRun(matches)
+    const lines = normalizeRunLines(run)
+    return { ...run, lines, status: deriveRunStatus(lines) }
   }
 
   async function syncRunStaff(run: PayrollRun): Promise<PayrollRun> {
@@ -182,25 +285,16 @@ export const usePayrollStore = defineStore('payroll', () => {
           line.attendance,
           run.year,
           run.month,
-          openAdvanceTotal(line.staff_id),
+          periodAdvanceTotal(line.staff_id, run.period),
           line.other_deduction,
+          preserveLinePayFields(line),
         )
       }),
       ...missing.map((s) =>
-        buildPayrollLine(s, {}, undefined, run.year, run.month, openAdvanceTotal(s.id), 0),
+        buildPayrollLine(s, {}, undefined, run.year, run.month, periodAdvanceTotal(s.id, run.period), 0),
       ),
     ]
-    const totals = sumPayrollLines(lines)
-    await runRepo.update(run.id, {
-      lines,
-      ...totals,
-      total_earned: totals.total_earned,
-      total_advance: totals.total_advance,
-      total_other: totals.total_other,
-      total_net: totals.total_net,
-      status: 'draft',
-    })
-    await load()
+    await persistRunLines(run, lines)
     return (await getRunForPeriod(run.period)) || run
   }
 
@@ -213,11 +307,11 @@ export const usePayrollStore = defineStore('payroll', () => {
       .filter((r) => !r.is_deleted)
       .toArray()
     const existing = matches.length ? pickBestPayrollRun(matches) : undefined
-    if (existing) return syncRunStaff(existing)
+    if (existing) return syncRunStaff({ ...existing, lines: normalizeRunLines(existing) })
 
     const [y, m] = period.split('-').map(Number)
     const lines: PayrollLine[] = staffForPeriod(period).map((s) =>
-      buildPayrollLine(s, {}, undefined, y, m, openAdvanceTotal(s.id), 0),
+      buildPayrollLine(s, {}, undefined, y, m, periodAdvanceTotal(s.id, period), 0),
     )
     const totals = sumPayrollLines(lines)
     const rec = await runRepo.create({
@@ -264,8 +358,9 @@ export const usePayrollStore = defineStore('payroll', () => {
           line.attendance,
           run.year,
           run.month,
-          openAdvanceTotal(line.staff_id),
+          periodAdvanceTotal(line.staff_id, period),
           line.other_deduction,
+          preserveLinePayFields(line),
         )
       })
 
@@ -274,21 +369,11 @@ export const usePayrollStore = defineStore('payroll', () => {
       const day_hours: Record<string, DayAttendance> = {}
       for (const d of days) day_hours[d] = { ...stamp }
       lines.push(
-        buildPayrollLine(staff, day_hours, undefined, run.year, run.month, openAdvanceTotal(staff.id), 0),
+        buildPayrollLine(staff, day_hours, undefined, run.year, run.month, periodAdvanceTotal(staff.id, period), 0),
       )
     }
 
-    const totals = sumPayrollLines(lines)
-    await runRepo.update(run.id, {
-      lines,
-      ...totals,
-      total_earned: totals.total_earned,
-      total_advance: totals.total_advance,
-      total_other: totals.total_other,
-      total_net: totals.total_net,
-      status: 'draft',
-    })
-    await load()
+    await persistRunLines(run, lines)
     void syncPayrollToCloudIfReady()
     return { ok: true }
   }
@@ -310,22 +395,22 @@ export const usePayrollStore = defineStore('payroll', () => {
       .filter((line) => eligibleIds.has(line.staff_id))
       .map((line) => {
         if (line.staff_id !== staffId) return line
+        if (line.pay_status === 'paid') return line
         const day_hours = patch.day_hours ?? normalizeDayHours(line)
         const other = patch.other_deduction ?? line.other_deduction
-        return buildPayrollLine(staff, day_hours, line.attendance, run.year, run.month, openAdvanceTotal(staffId), other)
+        return buildPayrollLine(
+          staff,
+          day_hours,
+          line.attendance,
+          run.year,
+          run.month,
+          periodAdvanceTotal(staffId, period),
+          other,
+          preserveLinePayFields(line),
+        )
       })
 
-    const totals = sumPayrollLines(lines)
-    await runRepo.update(run.id, {
-      lines,
-      ...totals,
-      total_earned: totals.total_earned,
-      total_advance: totals.total_advance,
-      total_other: totals.total_other,
-      total_net: totals.total_net,
-      status: 'draft',
-    })
-    await load()
+    await persistRunLines(run, lines)
     void syncPayrollToCloudIfReady()
     return { ok: true }
   }
@@ -336,21 +421,81 @@ export const usePayrollStore = defineStore('payroll', () => {
 
     const lines = staffForPeriod(period).map((s) => {
       const existing = run.lines.find((l) => l.staff_id === s.id)
+      if (existing?.pay_status === 'paid') return existing
       return buildPayrollLine(
         s,
         existing ? normalizeDayHours(existing) : {},
         existing?.attendance,
         run.year,
         run.month,
-        openAdvanceTotal(s.id),
+        periodAdvanceTotal(s.id, period),
         existing?.other_deduction || 0,
+        existing ? preserveLinePayFields(existing) : undefined,
       )
     })
-    const totals = sumPayrollLines(lines)
-    await runRepo.update(run.id, { lines, ...totals, status: 'finalized' })
-    await load()
+    await persistRunLines(run, lines, 'finalized')
     void syncPayrollToCloudIfReady()
     return { ok: true }
+  }
+
+  async function markPeriodAdvancesApplied(staffId: string, period: string, amount: number) {
+    const open = advancesForPeriod(staffId, period)
+    let remaining = amount
+    for (const adv of open) {
+      if (remaining <= 0) break
+      await advanceRepo.update(adv.id, { applied_period: period })
+      remaining -= adv.amount
+    }
+  }
+
+  async function payStaffLine(
+    period: string,
+    staffId: string,
+    amount: number,
+    paymentMode: PayrollPaymentMode,
+    paymentDate: string,
+  ) {
+    const firm = useFirmStore()
+    const run = await ensureRun(period)
+    const line = run.lines.find((l) => l.staff_id === staffId)
+    if (!line) return { error: 'Staff line not found' }
+    if (line.pay_status === 'paid') return { error: 'Already fully paid' }
+
+    const balance = lineBalanceDue(line)
+    const payAmt = Math.min(Math.max(0, Number(amount) || 0), balance)
+    if (payAmt <= 0) return { error: 'Enter payment amount' }
+
+    const payments = [...(line.payments || []), { date: paymentDate, amount: payAmt, mode: paymentMode }]
+    const paid_amount = sumLinePayments({ payments, paid_amount: 0 })
+    const pay_status = deriveLinePayStatus({ ...line, payments, paid_amount })
+
+    const lines = run.lines.map((l) => {
+      if (l.staff_id !== staffId) return l
+      return normalizePayrollLine({
+        ...l,
+        payments,
+        paid_amount,
+        pay_status,
+        payment_date: paymentDate,
+        payment_mode: paymentMode,
+      })
+    })
+
+    if (pay_status === 'paid' && line.advance_deduction > 0) {
+      await markPeriodAdvancesApplied(staffId, period, line.advance_deduction)
+    }
+
+    await persistRunLines(run, lines)
+
+    await logActivity(
+      firm.activeFirmId,
+      'payroll',
+      'payroll_run',
+      run.id,
+      `${line.staff_name} paid ₹${payAmt} — ${periodLabel(period)}`,
+    )
+    void syncPayrollToCloudIfReady()
+    return { ok: true, paid: payAmt, balance: Math.max(0, line.net_pay - paid_amount) }
   }
 
   async function payRun(period: string, paymentMode: PayrollPaymentMode, paymentDate: string) {
@@ -360,32 +505,31 @@ export const usePayrollStore = defineStore('payroll', () => {
     if (run.status === 'paid') return { error: 'Already paid' }
     if (run.total_net <= 0 && run.total_earned <= 0) return { error: 'Nothing to pay' }
 
+    for (const line of run.lines) {
+      const balance = lineBalanceDue(line)
+      if (balance <= 0) continue
+      const res = await payStaffLine(period, line.staff_id, balance, paymentMode, paymentDate)
+      if ('error' in res) return res
+    }
+
+    const fresh = await getRunForPeriod(period)
+    if (!fresh) return { error: 'Run missing after pay' }
+
     const voucherId = await postSalaryVoucher(
       firm.activeFirmId,
-      run.id,
+      fresh.id,
       period,
       paymentDate,
       paymentMode,
       {
-        earned: run.total_earned,
-        advance: run.total_advance,
-        other: run.total_other,
-        net: run.total_net,
+        earned: fresh.total_earned,
+        advance: fresh.total_advance,
+        other: fresh.total_other,
+        net: fresh.total_net,
       },
     )
 
-    for (const line of run.lines) {
-      if (line.advance_deduction <= 0) continue
-      const open = openAdvancesForStaff(line.staff_id)
-      let remaining = line.advance_deduction
-      for (const adv of open) {
-        if (remaining <= 0) break
-        await advanceRepo.update(adv.id, { applied_period: period })
-        remaining -= adv.amount
-      }
-    }
-
-    await runRepo.update(run.id, {
+    await runRepo.update(fresh.id, {
       status: 'paid',
       payment_mode: paymentMode,
       payment_date: paymentDate,
@@ -397,8 +541,8 @@ export const usePayrollStore = defineStore('payroll', () => {
       firm.activeFirmId,
       'payroll',
       'payroll_run',
-      run.id,
-      `Salary paid ${periodLabel(period)} — ₹${run.total_net}`,
+      fresh.id,
+      `Salary paid ${periodLabel(period)} — ₹${fresh.total_net}`,
     )
     await load()
     void syncPayrollToCloudIfReady()
@@ -417,6 +561,10 @@ export const usePayrollStore = defineStore('payroll', () => {
     updateStaff,
     removeStaff,
     recordAdvance,
+    updateAdvance,
+    removeAdvance,
+    advancesForPeriod,
+    periodAdvanceTotal,
     openAdvancesForStaff,
     openAdvanceTotal,
     getRunForPeriod,
@@ -424,6 +572,7 @@ export const usePayrollStore = defineStore('payroll', () => {
     bulkMarkDays,
     updateRunLine,
     recalculateRun,
+    payStaffLine,
     payRun,
     currentPeriod,
   }

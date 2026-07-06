@@ -3,6 +3,8 @@ import type {
   DayAttendance,
   PayrollLine,
   Staff,
+  StaffAdvance,
+  StaffLinePayStatus,
   StaffPayType,
 } from '@/types/models'
 
@@ -63,6 +65,66 @@ export function daysInMonth(year: number, month: number): number {
 export function currentPeriod(): string {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+/** YYYY-MM from advance date or explicit payroll_period. */
+export function advancePayrollPeriod(advance: Pick<StaffAdvance, 'date' | 'payroll_period'>): string {
+  if (advance.payroll_period && advance.payroll_period.length >= 7) return advance.payroll_period.slice(0, 7)
+  if (!advance.date || advance.date.length < 7) return ''
+  return advance.date.slice(0, 7)
+}
+
+/** Open advances for one staff in one payroll month only — no carry to next month. */
+export function advancesForStaffInPeriod(
+  advances: Pick<StaffAdvance, 'id' | 'staff_id' | 'date' | 'payroll_period' | 'amount' | 'applied_period'>[],
+  staffId: string,
+  period: string,
+) {
+  return advances.filter(
+    (a) => a.staff_id === staffId
+      && advancePayrollPeriod(a) === period
+      && !a.applied_period,
+  )
+}
+
+export function advanceTotalForPeriod(
+  advances: Pick<StaffAdvance, 'id' | 'staff_id' | 'date' | 'payroll_period' | 'amount' | 'applied_period'>[],
+  staffId: string,
+  period: string,
+): number {
+  return advancesForStaffInPeriod(advances, staffId, period).reduce((s, a) => s + a.amount, 0)
+}
+
+export function sumLinePayments(line: Pick<PayrollLine, 'payments' | 'paid_amount'>): number {
+  if (line.payments?.length) return line.payments.reduce((s, p) => s + p.amount, 0)
+  return Math.max(0, line.paid_amount || 0)
+}
+
+export function lineBalanceDue(line: Pick<PayrollLine, 'net_pay' | 'payments' | 'paid_amount'>): number {
+  return Math.max(0, line.net_pay - sumLinePayments(line))
+}
+
+export function deriveLinePayStatus(line: Pick<PayrollLine, 'net_pay' | 'payments' | 'paid_amount'>): StaffLinePayStatus {
+  const paid = sumLinePayments(line)
+  if (paid <= 0) return 'pending'
+  if (paid >= line.net_pay) return 'paid'
+  return 'partial'
+}
+
+export function normalizePayrollLine(line: PayrollLine, runStatus?: string): PayrollLine {
+  const payments = line.payments ?? []
+  const paidFromLegacy = runStatus === 'paid' && !payments.length && !line.paid_amount
+    ? line.net_pay
+    : Math.max(0, line.paid_amount || 0)
+  const paid_amount = payments.length ? sumLinePayments({ payments, paid_amount: 0 }) : paidFromLegacy
+  const normalized: PayrollLine = {
+    ...line,
+    payments,
+    paid_amount,
+    pay_status: line.pay_status || deriveLinePayStatus({ ...line, paid_amount, payments }),
+  }
+  normalized.pay_status = deriveLinePayStatus(normalized)
+  return normalized
 }
 
 export function emptyDay(): DayAttendance {
@@ -277,6 +339,7 @@ export function buildPayrollLine(
   month: number,
   advanceDeduction: number,
   otherDeduction: number,
+  existing?: Pick<PayrollLine, 'payments' | 'paid_amount' | 'pay_status' | 'payment_date' | 'payment_mode'>,
 ): PayrollLine {
   const dim = daysInMonth(year, month)
   const day_hours =
@@ -289,6 +352,10 @@ export function buildPayrollLine(
   const adv = Math.min(Math.max(0, advanceDeduction), earned)
   const other = Math.min(Math.max(0, otherDeduction), Math.max(0, earned - adv))
   const net = Math.max(0, earned - adv - other)
+  const payments = existing?.payments ? [...existing.payments] : []
+  const paid_amount = payments.length ? sumLinePayments({ payments, paid_amount: 0 }) : Math.max(0, existing?.paid_amount || 0)
+  const cappedPaid = Math.min(paid_amount, net)
+  const pay_status = deriveLinePayStatus({ net_pay: net, paid_amount: cappedPaid, payments })
 
   return {
     staff_id: staff.id,
@@ -310,6 +377,11 @@ export function buildPayrollLine(
     advance_deduction: adv,
     other_deduction: other,
     net_pay: net,
+    paid_amount: cappedPaid,
+    pay_status,
+    payments,
+    payment_date: existing?.payment_date,
+    payment_mode: existing?.payment_mode,
   }
 }
 

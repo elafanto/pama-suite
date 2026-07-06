@@ -3,11 +3,12 @@ import { ref, computed, reactive, onMounted, watch } from 'vue'
 import PpModal from '@/components/PpModal.vue'
 import { usePayrollStore, type NewStaff } from '@/stores/payroll'
 import { useFirmStore } from '@/stores/firm'
-import type { DayAttendance, PayrollPaymentMode, Staff, StaffPayType } from '@/types/models'
+import type { DayAttendance, PayrollPaymentMode, Staff, StaffAdvance, StaffPayType } from '@/types/models'
 import {
   MAX_STAFF,
   PAYROLL_HOURS_PER_DAY,
   PAYROLL_WORKING_DAYS,
+  advancePayrollPeriod,
   calcOffDutyHours,
   currentPeriod,
   dayCellClass,
@@ -17,11 +18,13 @@ import {
   deriveWageRates,
   emptyDay,
   isSunday,
+  lineBalanceDue,
   normalizeDayHours,
   periodLabel,
   sumDaySalaryExpense,
   sundayDayKeys,
 } from '@/services/payrollCalc'
+import { buildStaffLedger } from '@/services/staffLedger'
 import { pickBestPayrollRun } from '@/services/payrollRuns'
 import {
   generateStaffHoursMessage,
@@ -32,7 +35,7 @@ import {
 const store = usePayrollStore()
 const firmStore = useFirmStore()
 
-type Tab = 'staff' | 'attendance' | 'salary' | 'advance' | 'payslip'
+type Tab = 'staff' | 'attendance' | 'salary' | 'advance' | 'ledger' | 'payslip'
 const tab = ref<Tab>('staff')
 const period = ref(currentPeriod())
 
@@ -53,6 +56,7 @@ const staffForm = reactive({
 })
 
 const showAdvanceModal = ref(false)
+const editingAdvanceId = ref<string | null>(null)
 const advanceForm = reactive({
   staff_id: '',
   date: new Date().toISOString().slice(0, 10),
@@ -60,7 +64,14 @@ const advanceForm = reactive({
   mode: 'cash' as PayrollPaymentMode,
   narration: '',
   postVoucher: true,
+  payroll_period: currentPeriod(),
 })
+
+const showStaffPayModal = ref(false)
+const staffPayStaffId = ref('')
+const staffPayAmount = ref(0)
+
+const ledgerStaffId = ref('')
 
 const payslipStaffId = ref('')
 const paymentMode = ref<PayrollPaymentMode>('transfer')
@@ -134,6 +145,7 @@ const tabs: { id: Tab; label: string; icon: string }[] = [
   { id: 'attendance', label: 'Attendance', icon: '📅' },
   { id: 'salary', label: 'Salary', icon: '💵' },
   { id: 'advance', label: 'Advance', icon: '💸' },
+  { id: 'ledger', label: 'Ledger', icon: '📒' },
   { id: 'payslip', label: 'Payslip', icon: '📄' },
 ]
 
@@ -402,19 +414,76 @@ async function paySalary() {
 }
 
 function openAdvance() {
+  editingAdvanceId.value = null
   advanceForm.staff_id = periodStaff.value[0]?.id || ''
-  advanceForm.date = new Date().toISOString().slice(0, 10)
+  advanceForm.date = `${period.value}-01`
+  advanceForm.payroll_period = period.value
   advanceForm.amount = 0
   advanceForm.narration = ''
   advanceForm.postVoucher = true
   showAdvanceModal.value = true
 }
 
+function openEditAdvance(a: StaffAdvance) {
+  if (a.applied_period) return alert('Adjusted advance edit nahi ho sakta.')
+  editingAdvanceId.value = a.id
+  advanceForm.staff_id = a.staff_id
+  advanceForm.date = a.date
+  advanceForm.amount = a.amount
+  advanceForm.mode = a.mode
+  advanceForm.narration = a.narration
+  advanceForm.payroll_period = advancePayrollPeriod(a)
+  advanceForm.postVoucher = false
+  showAdvanceModal.value = true
+}
+
 async function saveAdvance() {
-  const res = await store.recordAdvance({ ...advanceForm, amount: Number(advanceForm.amount) })
+  const payload = {
+    ...advanceForm,
+    amount: Number(advanceForm.amount),
+    payroll_period: advanceForm.payroll_period || period.value,
+  }
+  const res = editingAdvanceId.value
+    ? await store.updateAdvance(editingAdvanceId.value, payload, advanceForm.postVoucher)
+    : await store.recordAdvance(payload)
   if ('error' in res) return alert(res.error)
   showAdvanceModal.value = false
+  await store.recalculateRun(period.value)
 }
+
+async function deleteAdvance(id: string) {
+  if (!confirm('Ye advance delete karein?')) return
+  const res = await store.removeAdvance(id)
+  if ('error' in res) return alert(res.error)
+  await store.recalculateRun(period.value)
+}
+
+const periodAdvances = computed(() =>
+  store.advances.filter((a) => advancePayrollPeriod(a) === period.value),
+)
+
+function openStaffPay(lineStaffId: string, balance: number) {
+  staffPayStaffId.value = lineStaffId
+  staffPayAmount.value = balance
+  showStaffPayModal.value = true
+}
+
+async function confirmStaffPay() {
+  const res = await store.payStaffLine(
+    period.value,
+    staffPayStaffId.value,
+    Number(staffPayAmount.value),
+    paymentMode.value,
+    paymentDate.value,
+  )
+  if ('error' in res) return alert(res.error)
+  showStaffPayModal.value = false
+}
+
+const staffLedger = computed(() => {
+  if (!ledgerStaffId.value) return null
+  return buildStaffLedger(ledgerStaffId.value, store.advances, store.runs)
+})
 
 function printPayslip() {
   window.print()
@@ -428,7 +497,10 @@ const payslipLine = computed(() => {
 onMounted(async () => {
   await firmStore.load()
   await store.load()
-  if (periodStaff.value.length) payslipStaffId.value = periodStaff.value[0].id
+  if (periodStaff.value.length) {
+    payslipStaffId.value = periodStaff.value[0].id
+    ledgerStaffId.value = periodStaff.value[0].id
+  }
 })
 </script>
 
@@ -450,6 +522,7 @@ onMounted(async () => {
       <span v-if="currentRun" class="text-xs pp-badge" :class="{
         'bg-slate-100 text-slate-600': currentRun.status === 'draft',
         'bg-amber-100 text-amber-800': currentRun.status === 'finalized',
+        'bg-sky-100 text-sky-800': currentRun.status === 'partial',
         'bg-emerald-100 text-emerald-800': currentRun.status === 'paid',
       }">{{ currentRun.status }}</span>
     </div>
@@ -740,7 +813,10 @@ onMounted(async () => {
                 <th class="text-right px-2 py-2">Earned</th>
                 <th class="text-right px-2 py-2">Adv</th>
                 <th class="text-right px-2 py-2">Other</th>
-                <th class="text-right px-3 py-2">Net</th>
+                <th class="text-right px-2 py-2">Net</th>
+                <th class="text-right px-2 py-2">Paid</th>
+                <th class="text-right px-2 py-2">Balance</th>
+                <th class="text-right px-3 py-2">Pay</th>
               </tr>
             </thead>
             <tbody>
@@ -775,13 +851,28 @@ onMounted(async () => {
                   />
                 </td>
                 <td class="px-3 py-2 text-right font-bold">₹{{ line.net_pay.toLocaleString('en-IN') }}</td>
+                <td class="px-2 py-2 text-right text-emerald-700">₹{{ (line.paid_amount || 0).toLocaleString('en-IN') }}</td>
+                <td class="px-2 py-2 text-right font-semibold text-amber-800">₹{{ lineBalanceDue(line).toLocaleString('en-IN') }}</td>
+                <td class="px-3 py-2 text-right">
+                  <span v-if="line.pay_status === 'paid'" class="text-xs text-emerald-700 font-semibold">Done</span>
+                  <button
+                    v-else-if="lineBalanceDue(line) > 0"
+                    type="button"
+                    class="pp-btn pp-btn-primary !py-1 !px-2 text-xs"
+                    @click="openStaffPay(line.staff_id, lineBalanceDue(line))"
+                  >
+                    Pay
+                  </button>
+                  <span v-else class="text-xs text-slate-400">—</span>
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
 
         <div v-if="currentRun.status !== 'paid'" class="pp-card p-4 space-y-3">
-          <h3 class="font-bold text-navy">Pay salary (combined voucher → 5101)</h3>
+          <h3 class="font-bold text-navy">Pay all remaining (combined voucher → 5101)</h3>
+          <p class="text-xs text-slate-500">Har staff ka alag amount upar Pay se bhi record kar sakte ho. Sab clear hone par combined voucher post hoga.</p>
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label class="pp-label">Payment mode</label>
@@ -805,20 +896,70 @@ onMounted(async () => {
 
     <!-- ADVANCE -->
     <section v-else-if="tab === 'advance'" class="space-y-3">
-      <button class="pp-btn pp-btn-primary" @click="openAdvance">+ Record advance</button>
-      <div v-if="store.advances.length === 0" class="pp-card p-6 text-center text-slate-400">No advances yet.</div>
-      <div v-for="a in store.advances" :key="a.id" class="pp-card p-3 flex justify-between gap-2 flex-wrap text-sm">
+      <div class="flex flex-wrap gap-2 items-center justify-between">
+        <button class="pp-btn pp-btn-primary" @click="openAdvance">+ Record advance</button>
+        <p class="text-xs text-slate-500">Sirf <strong>{{ periodLabel(period) }}</strong> ke advances is month ki salary me adjust honge — agle month carry nahi.</p>
+      </div>
+      <div v-if="periodAdvances.length === 0" class="pp-card p-6 text-center text-slate-400">Is month ka koi advance nahi.</div>
+      <div v-for="a in periodAdvances" :key="a.id" class="pp-card p-3 flex justify-between gap-2 flex-wrap text-sm">
         <div>
           <span class="font-semibold text-navy">{{ a.staff_name }}</span>
           <span class="text-slate-500 ml-2">{{ a.date }}</span>
-          <div class="text-xs text-slate-400">{{ a.mode }} · {{ a.narration || '—' }}</div>
+          <div class="text-xs text-slate-400">{{ a.mode }} · {{ a.narration || '—' }} · Month {{ advancePayrollPeriod(a) }}</div>
         </div>
-        <div class="text-right">
+        <div class="text-right flex flex-col items-end gap-1">
           <div class="font-bold">₹{{ a.amount.toLocaleString('en-IN') }}</div>
           <span v-if="a.applied_period" class="text-xs text-emerald-600">Adjusted {{ a.applied_period }}</span>
-          <span v-else class="text-xs text-amber-600">Open</span>
+          <span v-else class="text-xs text-amber-600">Pending adjust</span>
+          <div v-if="!a.applied_period" class="flex gap-1">
+            <button type="button" class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs" @click="openEditAdvance(a)">Edit</button>
+            <button type="button" class="pp-btn pp-btn-danger !py-1 !px-2 text-xs" @click="deleteAdvance(a.id)">Delete</button>
+          </div>
         </div>
       </div>
+    </section>
+
+    <!-- LEDGER -->
+    <section v-else-if="tab === 'ledger'" class="space-y-3">
+      <div class="flex flex-wrap gap-2 items-center">
+        <label class="text-sm font-semibold text-slate-600">Staff</label>
+        <select v-model="ledgerStaffId" class="pp-input max-w-xs">
+          <option v-for="s in store.staffList" :key="s.id" :value="s.id">{{ s.name }}</option>
+        </select>
+      </div>
+      <div v-if="!staffLedger" class="pp-card p-6 text-center text-slate-400">Staff select karein.</div>
+      <template v-else>
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          <div class="pp-card p-3 text-center"><div class="text-xs text-slate-500">Earned</div><div class="font-bold">₹{{ staffLedger.totals.earned.toLocaleString('en-IN') }}</div></div>
+          <div class="pp-card p-3 text-center"><div class="text-xs text-slate-500">Advances</div><div class="font-bold text-amber-700">₹{{ staffLedger.totals.advancesGiven.toLocaleString('en-IN') }}</div></div>
+          <div class="pp-card p-3 text-center"><div class="text-xs text-slate-500">Paid</div><div class="font-bold text-emerald-700">₹{{ staffLedger.totals.paid.toLocaleString('en-IN') }}</div></div>
+        </div>
+        <div class="pp-card p-3 text-sm text-slate-600">
+          Balance due (company owes staff): <strong class="text-navy">₹{{ staffLedger.totals.balanceDue.toLocaleString('en-IN') }}</strong>
+        </div>
+        <div class="pp-card overflow-x-auto">
+          <table class="w-full text-sm min-w-[640px]">
+            <thead class="bg-slate-50 text-xs text-slate-500 uppercase">
+              <tr>
+                <th class="text-left px-3 py-2">Date</th>
+                <th class="text-left px-3 py-2">Particulars</th>
+                <th class="text-right px-2 py-2">Debit</th>
+                <th class="text-right px-2 py-2">Credit</th>
+                <th class="text-right px-3 py-2">Balance</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in staffLedger.rows" :key="row.id" class="border-t border-slate-100">
+                <td class="px-3 py-2 text-xs">{{ row.date }}</td>
+                <td class="px-3 py-2">{{ row.label }}</td>
+                <td class="px-2 py-2 text-right text-amber-700">{{ row.debit ? `₹${row.debit.toLocaleString('en-IN')}` : '—' }}</td>
+                <td class="px-2 py-2 text-right text-emerald-700">{{ row.credit ? `₹${row.credit.toLocaleString('en-IN')}` : '—' }}</td>
+                <td class="px-3 py-2 text-right font-semibold">₹{{ row.balance.toLocaleString('en-IN') }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
     </section>
 
     <!-- PAYSLIP -->
@@ -858,6 +999,8 @@ onMounted(async () => {
             <tr v-if="payslipLine.advance_deduction"><td class="py-2 text-amber-700">Advance deduction</td><td class="py-2 text-right">− ₹{{ payslipLine.advance_deduction.toLocaleString('en-IN') }}</td></tr>
             <tr v-if="payslipLine.other_deduction"><td class="py-2">Other deduction</td><td class="py-2 text-right">− ₹{{ payslipLine.other_deduction.toLocaleString('en-IN') }}</td></tr>
             <tr class="border-t-2 border-navy font-bold text-base"><td class="py-3">Net pay</td><td class="py-3 text-right text-emerald-800">₹{{ payslipLine.net_pay.toLocaleString('en-IN') }}</td></tr>
+            <tr v-if="payslipLine.paid_amount"><td class="py-2 text-emerald-700">Paid</td><td class="py-2 text-right">₹{{ payslipLine.paid_amount.toLocaleString('en-IN') }}</td></tr>
+            <tr v-if="lineBalanceDue(payslipLine) > 0"><td class="py-2 text-amber-800">Balance due</td><td class="py-2 text-right font-bold">₹{{ lineBalanceDue(payslipLine).toLocaleString('en-IN') }}</td></tr>
           </tbody>
         </table>
       </div>
@@ -1022,13 +1165,17 @@ onMounted(async () => {
     </PpModal>
 
     <!-- Advance modal -->
-    <PpModal v-if="showAdvanceModal" title="Record advance" @close="showAdvanceModal = false">
+    <PpModal v-if="showAdvanceModal" :title="editingAdvanceId ? 'Edit advance' : 'Record advance'" @close="showAdvanceModal = false">
       <div class="space-y-3">
         <div>
           <label class="pp-label">Staff *</label>
-          <select v-model="advanceForm.staff_id" class="pp-input">
+          <select v-model="advanceForm.staff_id" class="pp-input" :disabled="!!editingAdvanceId">
             <option v-for="s in periodStaff" :key="s.id" :value="s.id">{{ s.name }}</option>
           </select>
+        </div>
+        <div>
+          <label class="pp-label">Salary month (adjust isi month me hoga)</label>
+          <input v-model="advanceForm.payroll_period" type="month" class="pp-input" />
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
@@ -1058,6 +1205,33 @@ onMounted(async () => {
         <div class="flex justify-end gap-2">
           <button class="pp-btn pp-btn-ghost" @click="showAdvanceModal = false">Cancel</button>
           <button class="pp-btn pp-btn-primary" @click="saveAdvance">Save</button>
+        </div>
+      </div>
+    </PpModal>
+
+    <PpModal v-if="showStaffPayModal" title="Record salary payment" @close="showStaffPayModal = false">
+      <div class="space-y-3">
+        <p class="text-sm text-slate-600">Jo amount ab pay kar rahe ho woh yahan daalein — balance auto update hoga.</p>
+        <div>
+          <label class="pp-label">Amount ₹</label>
+          <input v-model.number="staffPayAmount" type="number" min="1" class="pp-input text-lg font-bold" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="pp-label">Payment mode</label>
+            <select v-model="paymentMode" class="pp-input">
+              <option value="transfer">Bank transfer</option>
+              <option value="cash">Cash</option>
+            </select>
+          </div>
+          <div>
+            <label class="pp-label">Payment date</label>
+            <input v-model="paymentDate" type="date" class="pp-input" />
+          </div>
+        </div>
+        <div class="flex justify-end gap-2">
+          <button class="pp-btn pp-btn-ghost" @click="showStaffPayModal = false">Cancel</button>
+          <button class="pp-btn pp-btn-primary" @click="confirmStaffPay">Save payment</button>
         </div>
       </div>
     </PpModal>

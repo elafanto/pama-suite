@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
+  advancePayrollPeriod,
+  advanceTotalForPeriod,
+  advancesForStaffInPeriod,
   buildPayrollLine,
   calcEarnedFromHours,
   dayFromPreset,
   deriveWageRates,
   isStaffInPeriod,
+  lineBalanceDue,
   summarizeDayHours,
 } from '@/services/payrollCalc'
-import type { DayAttendance, Staff } from '@/types/models'
+import { buildStaffLedger } from '@/services/staffLedger'
+import type { DayAttendance, Staff, StaffAdvance } from '@/types/models'
 
 function hoursForDays(
   presentDays: number,
@@ -164,6 +169,60 @@ describe('buildPayrollLine', () => {
     expect(line.earned).toBe(25000)
     expect(line.advance_deduction).toBe(25000)
     expect(line.net_pay).toBe(0)
+    expect(line.pay_status).toBe('pending')
+    expect(lineBalanceDue(line)).toBe(0)
+  })
+})
+
+describe('advance period — no carry to next month', () => {
+  const advances: StaffAdvance[] = [
+    {
+      id: 'a1', firm_id: 'f1', staff_id: 's1', staff_name: 'R', date: '2026-03-10', amount: 5000,
+      mode: 'cash', narration: '', created_at: '', updated_at: '', is_deleted: false,
+    },
+    {
+      id: 'a2', firm_id: 'f1', staff_id: 's1', staff_name: 'R', date: '2026-04-05', amount: 3000,
+      mode: 'cash', narration: '', created_at: '', updated_at: '', is_deleted: false,
+    },
+  ]
+
+  it('only counts advances in the same payroll month', () => {
+    expect(advanceTotalForPeriod(advances, 's1', '2026-03')).toBe(5000)
+    expect(advanceTotalForPeriod(advances, 's1', '2026-04')).toBe(3000)
+    expect(advanceTotalForPeriod(advances, 's1', '2026-05')).toBe(0)
+  })
+
+  it('uses payroll_period when set', () => {
+    const adv = { ...advances[0], date: '2026-03-28', payroll_period: '2026-04' }
+    expect(advancePayrollPeriod(adv)).toBe('2026-04')
+    expect(advancesForStaffInPeriod([adv], 's1', '2026-04')).toHaveLength(1)
+    expect(advancesForStaffInPeriod([adv], 's1', '2026-03')).toHaveLength(0)
+  })
+})
+
+describe('staff ledger', () => {
+  it('builds running balance for advances and salary', () => {
+    const advances: StaffAdvance[] = [{
+      id: 'a1', firm_id: 'f1', staff_id: 's1', staff_name: 'R', date: '2026-06-05', amount: 2000,
+      mode: 'cash', narration: '', payroll_period: '2026-06', created_at: '', updated_at: '', is_deleted: false,
+    }]
+    const runs = [{
+      id: 'r1', firm_id: 'f1', period: '2026-06', year: 2026, month: 6, status: 'partial' as const,
+      lines: [{
+        staff_id: 's1', staff_name: 'R', pay_type: 'monthly' as const, monthly_amount: 10000,
+        daily_wage: 385, hourly_wage: 49, day_hours: {}, days_present: 26, days_half: 0, days_absent: 0,
+        days_leave: 0, total_duty_hours: 208, total_off_unpaid_hours: 0, total_ot_hours: 0, total_paid_hours: 208,
+        earned: 10000, advance_deduction: 2000, other_deduction: 0, net_pay: 8000,
+        paid_amount: 5000, pay_status: 'partial' as const, payments: [{ date: '2026-06-28', amount: 5000, mode: 'transfer' as const }],
+      }],
+      total_earned: 10000, total_advance: 2000, total_other: 0, total_net: 8000,
+      payment_mode: 'transfer' as const, payment_date: '2026-06-28', created_at: '', updated_at: '', is_deleted: false,
+    }]
+    const ledger = buildStaffLedger('s1', advances, runs as any)
+    expect(ledger.totals.earned).toBe(10000)
+    expect(ledger.totals.advancesGiven).toBe(2000)
+    expect(ledger.totals.paid).toBe(5000)
+    expect(ledger.totals.balanceDue).toBe(3000)
   })
 })
 

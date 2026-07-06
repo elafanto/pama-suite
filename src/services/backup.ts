@@ -10,6 +10,12 @@ import {
   type FirmSignatureBackupMap,
 } from '@/services/firmSignature'
 import { applyImportedPayrollBackup, collectPayrollBackup } from '@/services/payrollBackup'
+import {
+  loadBoxSheetSettings,
+  mergeBoxSheetSettings,
+  saveBoxSheetSettings,
+  type BoxSheetSettings,
+} from '@/services/boxSheetSettings'
 import type {
   Party, Firm, Item, Invoice, Purchase, Recipe, Account, Voucher, ActivityLog,
   ReelStock, ProductionJob, ProductionStageEntry, StockMovement, ItemStockMovement,
@@ -81,6 +87,8 @@ export interface SuiteBackup {
     signatureArchive?: FirmSignatureArchive
     /** Always included — staff, advances, attendance & salary runs. */
     payrollBackup?: Awaited<ReturnType<typeof collectPayrollBackup>>
+    /** BoxCalc RSC blank / sheet formula settings. */
+    boxSheetSettings?: BoxSheetSettings
   }
 }
 
@@ -131,6 +139,7 @@ export async function exportAll(options: ExportOptions = {}): Promise<SuiteBacku
     firmSignatures: signatureBackup.firmSignatures,
     signatureArchive: signatureBackup.signatureArchive,
     payrollBackup,
+    boxSheetSettings: loadBoxSheetSettings(),
   }
 
   if (options.includeSensitiveSettings) {
@@ -655,6 +664,9 @@ function applyImportedSettings(settings: SuiteBackup['settings'] | undefined, op
   if (settings.rtgsAccounts) localStorage.setItem('pama_rtgs_accounts', JSON.stringify(settings.rtgsAccounts))
   if (settings.activeFirmId) localStorage.setItem('pama_active_firm', settings.activeFirmId)
   if (settings.templates) localStorage.setItem('pama_templates_suite', JSON.stringify(settings.templates))
+  if (settings.boxSheetSettings) {
+    saveBoxSheetSettings(mergeBoxSheetSettings(settings.boxSheetSettings))
+  }
 
   return skippedSensitiveSettings
 }

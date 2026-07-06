@@ -254,8 +254,15 @@ export interface DayAttendance {
   ot_hours: number
   kind?: DayAttendanceKind
 }
-export type PayrollRunStatus = 'draft' | 'finalized' | 'paid'
+export type PayrollRunStatus = 'draft' | 'finalized' | 'partial' | 'paid'
 export type PayrollPaymentMode = 'cash' | 'transfer'
+export type StaffLinePayStatus = 'pending' | 'partial' | 'paid'
+
+export interface StaffLinePayment {
+  date: string
+  amount: number
+  mode: PayrollPaymentMode
+}
 
 export interface Staff extends BaseRecord {
   name: string
@@ -282,6 +289,8 @@ export interface StaffAdvance extends BaseRecord {
   amount: number
   mode: PayrollPaymentMode
   narration: string
+  /** Payroll month this advance belongs to (YYYY-MM). Defaults from date. */
+  payroll_period?: string
   /** Set when deducted from a salary run (YYYY-MM). */
   applied_period?: string
   voucher_id?: string
@@ -310,6 +319,12 @@ export interface PayrollLine {
   advance_deduction: number
   other_deduction: number
   net_pay: number
+  /** Salary actually paid to staff (sum of payments). */
+  paid_amount: number
+  pay_status: StaffLinePayStatus
+  payments: StaffLinePayment[]
+  payment_date?: string
+  payment_mode?: PayrollPaymentMode
 }
 
 export interface PayrollRun extends BaseRecord {

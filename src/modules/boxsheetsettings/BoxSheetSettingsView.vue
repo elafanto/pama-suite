@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
+import { reactive, ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useBoxSheetSettingsStore } from '@/stores/boxSheetSettings'
 import {
   CALIPER_TABLE_KEYS,
   DEFAULT_BOX_SHEET_SETTINGS,
+  mergeBoxSheetSettings,
   type BoxSheetSettings,
 } from '@/services/boxSheetSettings'
 
@@ -13,18 +14,49 @@ const store = useBoxSheetSettingsStore()
 
 const form = reactive<BoxSheetSettings>(JSON.parse(JSON.stringify(store.settings)))
 const status = ref('')
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+let syncingFromStore = false
 
 function syncFromStore() {
+  syncingFromStore = true
   Object.assign(form, JSON.parse(JSON.stringify(store.settings)))
+  nextTick(() => { syncingFromStore = false })
 }
 
 watch(() => store.settings, syncFromStore, { deep: true })
 
+function persistForm() {
+  store.persist(mergeBoxSheetSettings(JSON.parse(JSON.stringify(form))))
+}
+
+function scheduleAutoSave() {
+  if (syncingFromStore) return
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = setTimeout(() => {
+    persistForm()
+    status.value = 'Saved — ye settings is device par permanent rahengi.'
+    setTimeout(() => { status.value = '' }, 2500)
+  }, 400)
+}
+
+watch(form, scheduleAutoSave, { deep: true })
+
 function save() {
-  store.persist(JSON.parse(JSON.stringify(form)))
-  status.value = 'Settings saved — BoxCalc sheet calculation ab in values use karega.'
+  if (saveTimer) clearTimeout(saveTimer)
+  persistForm()
+  status.value = 'Saved — ye settings is device par permanent rahengi.'
   setTimeout(() => { status.value = '' }, 4000)
 }
+
+onMounted(() => {
+  store.reload()
+  syncFromStore()
+})
+
+onBeforeUnmount(() => {
+  if (saveTimer) clearTimeout(saveTimer)
+  if (!syncingFromStore) persistForm()
+})
 
 function resetDefaults() {
   if (!confirm('Sab sheet settings factory default par reset karein?')) return
@@ -57,6 +89,7 @@ const machineFields: { key: keyof BoxSheetSettings['machine']; label: string; hi
         <h1 class="text-2xl font-bold text-navy mt-1">Sheet Calculation Settings</h1>
         <p class="text-sm text-slate-500 mt-1 max-w-xl">
           Sirf blank / sheet size ke formulas aur machine limits — cost, margin, strength yahan nahi.
+          Har change auto-save hota hai; backup restore par bhi settings wapas aati hain.
         </p>
       </div>
       <button type="button" class="pp-btn pp-btn-ghost" @click="goBoxCalc">← BoxCalc</button>

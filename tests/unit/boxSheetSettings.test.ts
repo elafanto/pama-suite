@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { calculate } from '@/services/calculator'
-import { DEFAULT_BOX_SHEET_SETTINGS, mergeBoxSheetSettings } from '@/services/boxSheetSettings'
+import { DEFAULT_BOX_SHEET_SETTINGS, loadBoxSheetSettings, mergeBoxSheetSettings, saveBoxSheetSettings } from '@/services/boxSheetSettings'
 
 const baseInput = {
   length: 300,
@@ -21,6 +21,27 @@ describe('boxSheetSettings', () => {
     const merged = mergeBoxSheetSettings({ clearanceMM: 10 })
     expect(merged.clearanceMM).toBe(10)
     expect(merged.innerOuterLwFactor).toBe(DEFAULT_BOX_SHEET_SETTINGS.innerOuterLwFactor)
+  })
+
+  it('persists custom settings to localStorage', () => {
+    const storage = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => { storage.set(key, value) },
+      removeItem: (key: string) => { storage.delete(key) },
+    })
+
+    saveBoxSheetSettings(mergeBoxSheetSettings({
+      clearanceMM: 12,
+      widthCaliperFactor: 2,
+      heightAllowanceDefaults: { '3-ply': 5, '5-ply': 10, '7-ply': 0 },
+    }))
+    const loaded = loadBoxSheetSettings()
+    expect(loaded.clearanceMM).toBe(12)
+    expect(loaded.heightAllowanceDefaults['3-ply']).toBe(5)
+    expect(loaded.heightAllowanceDefaults['5-ply']).toBe(10)
+
+    vi.unstubAllGlobals()
   })
 })
 

@@ -11,9 +11,14 @@ import {
 export const useBoxSheetSettingsStore = defineStore('boxSheetSettings', () => {
   const settings = ref<BoxSheetSettings>(loadBoxSheetSettings())
 
+  function reload() {
+    settings.value = loadBoxSheetSettings()
+  }
+
   function persist(next: BoxSheetSettings) {
-    settings.value = next
-    saveBoxSheetSettings(next)
+    const merged = mergeBoxSheetSettings(next)
+    settings.value = merged
+    saveBoxSheetSettings(merged)
   }
 
   function update(patch: Partial<BoxSheetSettings>) {
@@ -45,5 +50,5 @@ export const useBoxSheetSettingsStore = defineStore('boxSheetSettings', () => {
     persist(resetBoxSheetSettings())
   }
 
-  return { settings, persist, update, updateMachine, updateCaliper, updateGlueFlap, reset }
+  return { settings, reload, persist, update, updateMachine, updateCaliper, updateGlueFlap, reset }
 })
