@@ -352,6 +352,8 @@ export interface SheetCalcDetail {
     wrapH: number
     effectiveT: number
     clearanceMM: number
+    widthCaliperFactor: number
+    heightAllowanceMM: number
     glueFlap: number
     lengthParts: SheetCalcDetailPart[]
     lengthTotal: number
@@ -474,8 +476,11 @@ export function calculate(input: CalcInput) {
   // Sheet Size Sizing
   const termL = 2 * (wrapL + effectiveT)
   const termW = 2 * (wrapW + effectiveT)
+  const widthCaliperTotal = sheetCfg.widthCaliperFactor * effectiveT
+  const heightAllowance = sheetCfg.heightAllowanceDefaults[input.ply] ?? 0
+  const heightTerm = wrapH + widthCaliperTotal + heightAllowance
   const sheetLength = termL + termW + glueFlap
-  const sheetWidth = wrapW + wrapH + effectiveT + effectiveClearance
+  const sheetWidth = wrapW + heightTerm + effectiveClearance
   const sheetAreaM2 = (sheetLength / 1000) * (sheetWidth / 1000)
 
   const lengthParts: SheetCalcDetailPart[] = [
@@ -485,8 +490,15 @@ export function calculate(input: CalcInput) {
   ]
   const widthParts: SheetCalcDetailPart[] = [
     { label: 'Width (W)', mm: wrapW },
-    { label: 'Height (H)', mm: wrapH },
-    { label: 'Caliper (t)', mm: effectiveT },
+    {
+      label: heightAllowance > 0
+        ? `Height + ${sheetCfg.widthCaliperFactor}×t + ${heightAllowance}`
+        : `Height + ${sheetCfg.widthCaliperFactor}×t`,
+      mm: heightTerm,
+      formula: heightAllowance > 0
+        ? `${wrapH} + ${sheetCfg.widthCaliperFactor}×${effectiveT} + ${heightAllowance}`
+        : `${wrapH} + ${sheetCfg.widthCaliperFactor}×${effectiveT}`,
+    },
     { label: 'Clearance', mm: effectiveClearance },
   ]
 
@@ -1042,6 +1054,8 @@ export function calculate(input: CalcInput) {
       wrapH,
       effectiveT,
       clearanceMM: effectiveClearance,
+      widthCaliperFactor: sheetCfg.widthCaliperFactor,
+      heightAllowanceMM: heightAllowance,
       glueFlap,
       lengthParts,
       lengthTotal: sheetLength,

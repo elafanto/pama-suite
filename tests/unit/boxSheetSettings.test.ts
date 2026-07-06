@@ -42,4 +42,18 @@ describe('calculate with sheetSettings', () => {
     expect(wide.sheet?.width).toBe((def.sheet?.width ?? 0) + 14)
     expect(wide.sheetCalcDetail?.blank.clearanceMM).toBe(20)
   })
+
+  it('uses width caliper factor and ply height allowance in blank width', () => {
+    const res = calculate(baseInput)
+    const t = res.caliper ?? 0
+    expect(res.sheet?.width).toBe(200 + 150 + 2 * t + 3 + 6)
+    expect(res.sheetCalcDetail?.blank.heightAllowanceMM).toBe(3)
+  })
+
+  it('adds 8 mm height allowance for 5-ply', () => {
+    const res = calculate({ ...baseInput, ply: '5-ply', flute: 'BC' })
+    const t = res.caliper ?? 0
+    expect(res.sheet?.width).toBe(200 + 150 + 2 * t + 8 + 6)
+    expect(res.sheetCalcDetail?.blank.heightAllowanceMM).toBe(8)
+  })
 })

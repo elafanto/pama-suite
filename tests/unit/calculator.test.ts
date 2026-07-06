@@ -109,8 +109,14 @@ describe('calculate — 3-ply RSC (inner dims)', () => {
     const t = 3.2
     // each panel + ~1 caliper of fold take-up, + glueFlap(3-ply=35)
     expect(res.sheet.length).toBeCloseTo(2 * (300 + t) + 2 * (200 + t) + 35, 4)
-    // sheetWidth = innerW + innerH + caliper + fold clearance(6)
-    expect(res.sheet.width).toBeCloseTo(200 + 150 + t + 6, 4)
+    // sheetWidth = innerW + innerH + 2×caliper + ply height allowance(3) + fold clearance(6)
+    expect(res.sheet.width).toBeCloseTo(200 + 150 + 2 * t + 3 + 6, 4)
+    expect(res.sheetCalcDetail?.blank.widthParts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: 'Width (W)', mm: 200 }),
+        expect.objectContaining({ label: 'Height + 2×t + 3', mm: 150 + 2 * t + 3 }),
+      ]),
+    )
   })
 
   it('uses 1-piece construction for a small box', () => {
@@ -121,7 +127,7 @@ describe('calculate — 3-ply RSC (inner dims)', () => {
     expect(res.reel.feasible).toBe(true)
     expect(res.reel.reelWidthMM).toBeGreaterThan(0)
     expect(res.weight.paperTotal).toBeGreaterThan(0)
-    // sheetWidth=359.2 → N_w=floor(1702/359.2)=4; effectiveUnit=1047.8+10=1057.8 → N_l=floor(2286/1057.8)=2
+    // sheetWidth=365.4 → N_w=floor(1702/365.4)=4; effectiveUnit=1047.8+10=1057.8 → N_l=floor(2286/1057.8)=2
     expect(res.reel.sheetsPerWidth).toBe(4)
     expect(res.reel.sheetsPerLength).toBe(2)
     expect(res.reel.boxesPerBigSheet).toBe(8)

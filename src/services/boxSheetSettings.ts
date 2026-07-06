@@ -14,6 +14,10 @@ export interface BoxSheetSettings {
   innerOuterLwFactor: number
   innerOuterHFactor: number
   clearanceMM: number
+  /** Caliper (t) count in blank width: W + H + (factor × t) + clearance. Default 2 (H + 2×t). */
+  widthCaliperFactor: number
+  /** Extra mm added to height term in blank width, per ply (e.g. 3-ply +3, 5-ply +8). */
+  heightAllowanceDefaults: Record<string, number>
   glueFlapDefaults: Record<string, number>
   caliperTable: Record<string, number>
   machine: BoxSheetMachineSettings
@@ -38,6 +42,8 @@ export const DEFAULT_BOX_SHEET_SETTINGS: BoxSheetSettings = {
   innerOuterLwFactor: 1.5,
   innerOuterHFactor: 2.7,
   clearanceMM: 6,
+  widthCaliperFactor: 2,
+  heightAllowanceDefaults: { '3-ply': 3, '5-ply': 8, '7-ply': 0 },
   glueFlapDefaults: { '3-ply': 35, '5-ply': 45, '7-ply': 55 },
   caliperTable: { ...DEFAULT_CALIPER_TABLE },
   machine: {
@@ -57,6 +63,7 @@ export function mergeBoxSheetSettings(partial?: Partial<BoxSheetSettings> | null
   if (!partial) {
     return {
       ...base,
+      heightAllowanceDefaults: { ...base.heightAllowanceDefaults },
       glueFlapDefaults: { ...base.glueFlapDefaults },
       caliperTable: { ...base.caliperTable },
       machine: { ...base.machine },
@@ -66,6 +73,8 @@ export function mergeBoxSheetSettings(partial?: Partial<BoxSheetSettings> | null
     innerOuterLwFactor: partial.innerOuterLwFactor ?? base.innerOuterLwFactor,
     innerOuterHFactor: partial.innerOuterHFactor ?? base.innerOuterHFactor,
     clearanceMM: partial.clearanceMM ?? base.clearanceMM,
+    widthCaliperFactor: partial.widthCaliperFactor ?? base.widthCaliperFactor,
+    heightAllowanceDefaults: { ...base.heightAllowanceDefaults, ...partial.heightAllowanceDefaults },
     glueFlapDefaults: { ...base.glueFlapDefaults, ...partial.glueFlapDefaults },
     caliperTable: { ...base.caliperTable, ...partial.caliperTable },
     machine: { ...base.machine, ...partial.machine },

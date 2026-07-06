@@ -62,9 +62,9 @@ defineProps<{
         </div>
       </div>
       <p class="mt-2 text-xs font-mono text-teal-800">Area: {{ detail.blank.areaFormula }}</p>
-      <p v-if="!compact" class="mt-1 text-xs text-slate-500">
-        Glue flap {{ fmtInt(detail.blank.glueFlap) }} mm · Clearance {{ fmtInt(detail.blank.clearanceMM) }} mm
-      </p>
+          <p v-if="!compact" class="mt-1 text-xs text-slate-500">
+            Glue flap {{ fmtInt(detail.blank.glueFlap) }} mm · Clearance {{ fmtInt(detail.blank.clearanceMM) }} mm · Width uses H + {{ detail.blank.widthCaliperFactor }}×t<span v-if="detail.blank.heightAllowanceMM"> + {{ detail.blank.heightAllowanceMM }} mm ({{ detail.input.ply }})</span>
+          </p>
     </section>
 
     <section v-if="!compact" class="rounded-xl border border-slate-200 bg-white p-4">

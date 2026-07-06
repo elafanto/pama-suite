@@ -87,7 +87,19 @@ const machineFields: { key: keyof BoxSheetSettings['machine']; label: string; hi
         <div>
           <label class="pp-label">Sheet width clearance (mm)</label>
           <input v-model.number="form.clearanceMM" type="number" step="0.5" min="0" class="pp-input max-w-xs" />
-          <p class="text-xs text-slate-500 mt-1">Width = W + H + t + clearance</p>
+          <p class="text-xs text-slate-500 mt-1">Width = W + (H + factor×t + ply allowance) + clearance</p>
+          <div class="mt-2">
+            <label class="pp-label">Width caliper factor (× t)</label>
+            <input v-model.number="form.widthCaliperFactor" type="number" step="0.5" min="0" class="pp-input max-w-xs" />
+            <p class="text-[10px] text-slate-400 mt-1">Default {{ DEFAULT_BOX_SHEET_SETTINGS.widthCaliperFactor }} — RSC blank width me H ke saath 2× board thickness</p>
+          </div>
+        </div>
+        <div class="grid sm:grid-cols-3 gap-3">
+          <div v-for="ply in gluePlyKeys" :key="'h-' + ply">
+            <label class="pp-label">Height allowance {{ ply }} (mm)</label>
+            <input v-model.number="form.heightAllowanceDefaults[ply]" type="number" min="0" class="pp-input" />
+            <p class="text-[10px] text-slate-400 mt-1">Default {{ DEFAULT_BOX_SHEET_SETTINGS.heightAllowanceDefaults[ply] ?? 0 }} — blank width me H term par extra mm</p>
+          </div>
         </div>
         <div class="grid sm:grid-cols-3 gap-3">
           <div v-for="ply in gluePlyKeys" :key="ply">
