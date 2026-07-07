@@ -25,6 +25,7 @@ import {
   sundayDayKeys,
 } from '@/services/payrollCalc'
 import { buildStaffLedger } from '@/services/staffLedger'
+import { downloadPayrollPayslipsPdf, payrollPayTypeLabel } from '@/services/payrollPdf'
 import { pickBestPayrollRun } from '@/services/payrollRuns'
 import {
   generateStaffHoursMessage,
@@ -487,6 +488,21 @@ const staffLedger = computed(() => {
 
 function printPayslip() {
   window.print()
+}
+
+function downloadCurrentPayslipPdf() {
+  if (!payslipLine.value) return
+  downloadPayrollPayslipsPdf(
+    [payslipLine.value],
+    period.value,
+    firmStore.activeFirm,
+    `Payslip_${payslipLine.value.staff_name}_${period.value}.pdf`,
+  )
+}
+
+function downloadAllPayslipsPdf() {
+  if (!currentRun.value?.lines?.length) return alert('Is month ke liye payslip data nahi hai.')
+  downloadPayrollPayslipsPdf(currentRun.value.lines, period.value, firmStore.activeFirm)
 }
 
 const payslipLine = computed(() => {
@@ -969,6 +985,8 @@ onMounted(async () => {
           <option v-for="s in periodStaff" :key="s.id" :value="s.id">{{ s.name }}</option>
         </select>
         <button class="pp-btn pp-btn-ghost" @click="printPayslip">Print payslip</button>
+        <button class="pp-btn pp-btn-primary" @click="downloadCurrentPayslipPdf">PDF</button>
+        <button class="pp-btn pp-btn-success" @click="downloadAllPayslipsPdf">All Payslips PDF</button>
         <button
           v-if="payslipStaffId"
           type="button"
@@ -986,7 +1004,7 @@ onMounted(async () => {
         </div>
         <div class="space-y-1 text-sm mb-4">
           <div><span class="text-slate-500">Employee:</span> <strong>{{ payslipLine.staff_name }}</strong></div>
-          <div><span class="text-slate-500">Type:</span> {{ payslipLine.pay_type === 'monthly' ? 'Monthly' : 'Daily wage' }}</div>
+          <div><span class="text-slate-500">Type:</span> {{ payrollPayTypeLabel(payslipLine.pay_type) }}</div>
           <div><span class="text-slate-500">Duty hours:</span> {{ payslipLine.total_duty_hours ?? 0 }}</div>
           <div><span class="text-slate-500">Off unpaid:</span> {{ payslipLine.total_off_unpaid_hours ?? 0 }} hr</div>
           <div><span class="text-slate-500">OT hours:</span> {{ payslipLine.total_ot_hours ?? 0 }}</div>
