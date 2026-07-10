@@ -8,7 +8,6 @@ import {
   MAX_STAFF,
   PAYROLL_HOURS_PER_DAY,
   PAYROLL_WORKING_DAYS,
-  advancePayrollPeriod,
   advanceAdjustedInLabel,
   calcOffDutyHours,
   currentPeriod,
@@ -16,16 +15,14 @@ import {
   dayCellLabel,
   dayFromPreset,
   daysInMonth,
-  defaultAdvanceRangeForSalaryDate,
-  defaultSalaryDateForPeriod,
+  defaultAdvanceRangeForPeriod,
   deriveWageRates,
   emptyDay,
   isSunday,
   lineBalanceDue,
   normalizeDayHours,
   periodLabel,
-  resolveRunAdjustmentConfig,
-  resolveRunSalaryDate,
+  resolveRunAdvanceRange,
   sumDaySalaryExpense,
   sundayDayKeys,
 } from '@/services/payrollCalc'
@@ -70,7 +67,6 @@ const advanceForm = reactive({
   mode: 'cash' as PayrollPaymentMode,
   narration: '',
   postVoucher: true,
-  payroll_period: currentPeriod(),
 })
 
 const showStaffPayModal = ref(false)
@@ -80,10 +76,9 @@ const staffPayAmount = ref(0)
 const ledgerStaffId = ref('')
 
 const payslipStaffId = ref('')
-const salaryDate = ref(defaultSalaryDateForPeriod(currentPeriod()))
-const adjustmentPeriod = ref(currentPeriod())
-const advanceFrom = ref(defaultAdvanceRangeForSalaryDate(salaryDate.value).from)
-const advanceTo = ref(defaultAdvanceRangeForSalaryDate(salaryDate.value).to)
+const range = defaultAdvanceRangeForPeriod(currentPeriod())
+const advanceFrom = ref(range.from)
+const advanceTo = ref(range.to)
 const paymentMode = ref<PayrollPaymentMode>('transfer')
 const paymentDate = ref(new Date().toISOString().slice(0, 10))
 
@@ -216,37 +211,23 @@ async function ensurePeriodRun() {
 }
 
 function syncAdvanceRangeDefaults() {
-  const range = defaultAdvanceRangeForSalaryDate(salaryDate.value)
-  advanceFrom.value = range.from
-  advanceTo.value = range.to
+  const next = defaultAdvanceRangeForPeriod(period.value)
+  advanceFrom.value = next.from
+  advanceTo.value = next.to
 }
 
 watch(period, () => {
   selectedBulkDays.value = new Set()
   attendanceEditMode.value = false
-  salaryDate.value = defaultSalaryDateForPeriod(period.value)
-  adjustmentPeriod.value = period.value
   syncAdvanceRangeDefaults()
   void ensurePeriodRun()
 })
 
-watch(salaryDate, (next, prev) => {
-  if (!next || next === prev) return
-  if (currentRun.value?.status === 'finalized' || currentRun.value?.status === 'paid') return
-  syncAdvanceRangeDefaults()
-})
-
 watch(currentRun, (run) => {
   if (!run) return
-  const resolved = resolveRunSalaryDate(run)
-  if (salaryDate.value !== resolved) salaryDate.value = resolved
-  const cfg = resolveRunAdjustmentConfig(run)
-  adjustmentPeriod.value = cfg.adjustmentPeriod
+  const cfg = resolveRunAdvanceRange(run)
   advanceFrom.value = cfg.advanceFrom
   advanceTo.value = cfg.advanceTo
-  if (run.status === 'finalized' || run.status === 'partial' || run.status === 'paid') {
-    paymentDate.value = resolved
-  }
 }, { immediate: true })
 watch(tab, (t) => {
   if (t !== 'attendance') attendanceEditMode.value = false
@@ -403,18 +384,13 @@ async function setOtherDeduction(staffId: string, amount: number) {
 }
 
 async function calculateSalary() {
-  if (!salaryDate.value) return alert('Salary day select karein.')
-  if (!adjustmentPeriod.value) return alert('Adjustment month select karein.')
   if (!advanceFrom.value || !advanceTo.value) return alert('Advance from / to select karein.')
   if (advanceFrom.value > advanceTo.value) return alert('Advance from, to se pehle honi chahiye.')
   const res = await store.recalculateRun(period.value, {
-    salaryDate: salaryDate.value,
-    adjustmentPeriod: adjustmentPeriod.value,
     advanceFrom: advanceFrom.value,
     advanceTo: advanceTo.value,
   })
   if (res && 'error' in res) alert(res.error)
-  else paymentDate.value = salaryDate.value
 }
 
 function staffHoursMessage(staffId: string): string | null {
@@ -465,7 +441,6 @@ function openAdvance() {
   editingAdvanceId.value = null
   advanceForm.staff_id = periodStaff.value[0]?.id || ''
   advanceForm.date = `${period.value}-01`
-  advanceForm.payroll_period = adjustmentPeriod.value
   advanceForm.amount = 0
   advanceForm.narration = ''
   advanceForm.postVoucher = true
@@ -480,7 +455,6 @@ function openEditAdvance(a: StaffAdvance) {
   advanceForm.amount = a.amount
   advanceForm.mode = a.mode
   advanceForm.narration = a.narration
-  advanceForm.payroll_period = advancePayrollPeriod(a)
   advanceForm.postVoucher = false
   showAdvanceModal.value = true
 }
@@ -489,7 +463,6 @@ async function saveAdvance() {
   const payload = {
     ...advanceForm,
     amount: Number(advanceForm.amount),
-    payroll_period: advanceForm.payroll_period || adjustmentPeriod.value,
   }
   const res = editingAdvanceId.value
     ? await store.updateAdvance(editingAdvanceId.value, payload, advanceForm.postVoucher)
@@ -505,12 +478,10 @@ async function deleteAdvance(id: string) {
 }
 
 const cycleAdvances = computed(() => {
-  if (!advanceFrom.value || !advanceTo.value || !adjustmentPeriod.value) return []
-  return store.advances.filter((a) => {
-    if (a.date < advanceFrom.value || a.date > advanceTo.value) return false
-    const target = advancePayrollPeriod(a) || adjustmentPeriod.value
-    return target === adjustmentPeriod.value
-  })
+  if (!advanceFrom.value || !advanceTo.value) return []
+  return store.advances.filter(
+    (a) => a.date >= advanceFrom.value && a.date <= advanceTo.value,
+  )
 })
 
 function openStaffPay(lineStaffId: string, balance: number) {
@@ -547,13 +518,19 @@ function downloadCurrentPayslipPdf() {
     period.value,
     firmStore.activeFirm,
     `Payslip_${payslipLine.value.staff_name}_${period.value}.pdf`,
-    salaryDate.value,
+    { from: advanceFrom.value, to: advanceTo.value },
   )
 }
 
 function downloadAllPayslipsPdf() {
   if (!currentRun.value?.lines?.length) return alert('Is month ke liye payslip data nahi hai.')
-  downloadPayrollPayslipsPdf(currentRun.value.lines, period.value, firmStore.activeFirm, undefined, salaryDate.value)
+  downloadPayrollPayslipsPdf(
+    currentRun.value.lines,
+    period.value,
+    firmStore.activeFirm,
+    undefined,
+    { from: advanceFrom.value, to: advanceTo.value },
+  )
 }
 
 const payslipLine = computed(() => {
@@ -583,11 +560,13 @@ onMounted(async () => {
       </p>
     </header>
 
-    <div class="flex flex-wrap items-center gap-2 mb-2">
+    <div class="flex flex-wrap items-center gap-2 mb-4">
       <label class="text-sm font-semibold text-slate-600">Salary month</label>
       <input v-model="period" type="month" class="pp-input !w-auto" />
-      <label class="text-sm font-semibold text-slate-600">Salary day</label>
-      <input v-model="salaryDate" type="date" class="pp-input !w-auto" :disabled="currentRun?.status === 'paid'" />
+      <label class="text-sm font-semibold text-slate-600">Advance from</label>
+      <input v-model="advanceFrom" type="date" class="pp-input !w-auto" :disabled="currentRun?.status === 'paid'" />
+      <label class="text-sm font-semibold text-slate-600">Advance to</label>
+      <input v-model="advanceTo" type="date" class="pp-input !w-auto" :disabled="currentRun?.status === 'paid'" />
       <button
         type="button"
         class="pp-btn pp-btn-primary !py-1.5"
@@ -602,17 +581,6 @@ onMounted(async () => {
         'bg-sky-100 text-sky-800': currentRun.status === 'partial',
         'bg-emerald-100 text-emerald-800': currentRun.status === 'paid',
       }">{{ currentRun.status }}</span>
-    </div>
-    <div class="flex flex-wrap items-center gap-2 mb-4 pp-card px-3 py-2 bg-slate-50 border border-slate-200">
-      <label class="text-sm font-semibold text-slate-600">Adjustment month</label>
-      <input v-model="adjustmentPeriod" type="month" class="pp-input !w-auto" :disabled="currentRun?.status === 'paid'" />
-      <label class="text-sm font-semibold text-slate-600">Advance from</label>
-      <input v-model="advanceFrom" type="date" class="pp-input !w-auto" :disabled="currentRun?.status === 'paid'" />
-      <label class="text-sm font-semibold text-slate-600">Advance to</label>
-      <input v-model="advanceTo" type="date" class="pp-input !w-auto" :disabled="currentRun?.status === 'paid'" />
-      <span class="text-xs text-slate-500">
-        {{ periodLabel(adjustmentPeriod) }} salary me {{ advanceFrom }} se {{ advanceTo }} tak ke advances adjust honge
-      </span>
     </div>
 
     <nav class="flex gap-1 overflow-x-auto pb-2 mb-4 -mx-1 px-1 scrollbar-thin">
@@ -859,10 +827,10 @@ onMounted(async () => {
     <section v-else-if="tab === 'salary'" class="space-y-4">
       <div class="flex flex-wrap gap-2 items-center">
         <p v-if="currentRun?.status === 'draft'" class="text-xs text-amber-700">
-          Salary month, adjustment month, advance from/to select karke upar <strong>Calculate</strong> dabayein.
+          {{ periodLabel(period) }} ki poori month salary + advance range select karke <strong>Calculate</strong> dabayein.
         </p>
         <p v-else-if="currentRun?.status === 'finalized'" class="text-xs text-emerald-700">
-          Calculated — salary day tak ke advances adjust ho chuke hain. Salary day badle to dubara Calculate dabayein.
+          Calculated — {{ periodLabel(period) }} salary aur {{ advanceFrom }} se {{ advanceTo }} advances adjust ho chuke hain.
         </p>
         <button
           v-if="currentRun"
@@ -991,7 +959,7 @@ onMounted(async () => {
     <section v-else-if="tab === 'advance'" class="space-y-3">
       <div class="flex flex-wrap gap-2 items-center justify-between">
         <button class="pp-btn pp-btn-primary" @click="openAdvance">+ Record advance</button>
-        <p class="text-xs text-slate-500">Calculate par {{ periodLabel(adjustmentPeriod) }} me {{ advanceFrom }}–{{ advanceTo }} ke advances adjust honge.</p>
+        <p class="text-xs text-slate-500">Calculate par {{ advanceFrom }} se {{ advanceTo }} tak ke advances {{ periodLabel(period) }} salary me adjust honge.</p>
       </div>
       <div v-if="cycleAdvances.length === 0" class="pp-card p-6 text-center text-slate-400">Is salary cycle me koi advance nahi.</div>
       <div v-for="a in cycleAdvances" :key="a.id" class="pp-card p-3 flex justify-between gap-2 flex-wrap text-sm">
@@ -999,11 +967,11 @@ onMounted(async () => {
           <span class="font-semibold text-navy">{{ a.staff_name }}</span>
           <span class="text-slate-500 ml-2">{{ a.date }}</span>
           <span v-if="a.applied_period" class="ml-2 text-xs font-medium text-emerald-700">{{ advanceAdjustedInLabel(a.applied_period) }}</span>
-          <div class="text-xs text-slate-400">{{ a.mode }} · {{ a.narration || '—' }} · Month {{ advancePayrollPeriod(a) }}</div>
+          <div class="text-xs text-slate-400">{{ a.mode }} · {{ a.narration || '—' }}</div>
         </div>
         <div class="text-right flex flex-col items-end gap-1">
           <div class="font-bold">₹{{ a.amount.toLocaleString('en-IN') }}</div>
-          <span v-if="!a.applied_period" class="text-xs text-amber-600">Pending — {{ periodLabel(advancePayrollPeriod(a) || adjustmentPeriod) }}</span>
+          <span v-if="!a.applied_period" class="text-xs text-amber-600">Pending — {{ periodLabel(period) }} salary</span>
           <div v-if="!a.applied_period" class="flex gap-1">
             <button type="button" class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs" @click="openEditAdvance(a)">Edit</button>
             <button type="button" class="pp-btn pp-btn-danger !py-1 !px-2 text-xs" @click="deleteAdvance(a.id)">Delete</button>
@@ -1078,9 +1046,7 @@ onMounted(async () => {
         <div class="text-center border-b border-slate-200 pb-3 mb-3">
           <div class="font-bold text-lg text-navy">{{ firmStore.activeFirm?.name || 'Firm' }}</div>
           <div class="text-sm text-slate-500">Payslip — {{ periodLabel(period) }}</div>
-          <div v-if="salaryDate" class="text-xs text-slate-400">
-            Salary day: {{ salaryDate }} · Adjustment: {{ periodLabel(adjustmentPeriod) }} · Advances {{ advanceFrom }} → {{ advanceTo }}
-          </div>
+          <div class="text-xs text-slate-400">Advances {{ advanceFrom }} → {{ advanceTo }}</div>
         </div>
         <div class="space-y-1 text-sm mb-4">
           <div><span class="text-slate-500">Employee:</span> <strong>{{ payslipLine.staff_name }}</strong></div>
@@ -1280,10 +1246,6 @@ onMounted(async () => {
           <select v-model="advanceForm.staff_id" class="pp-input" :disabled="!!editingAdvanceId">
             <option v-for="s in periodStaff" :key="s.id" :value="s.id">{{ s.name }}</option>
           </select>
-        </div>
-        <div>
-          <label class="pp-label">Adjustment month (isi month ki salary me adjust hoga)</label>
-          <input v-model="advanceForm.payroll_period" type="month" class="pp-input" />
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>

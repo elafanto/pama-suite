@@ -15,7 +15,7 @@ function addPayslipPage(
   line: PayrollLine,
   period: string,
   firm?: Firm | null,
-  salaryDate?: string,
+  advanceRange?: { from: string; to: string },
 ) {
   const PW = pdf.internal.pageSize.getWidth()
   const PH = pdf.internal.pageSize.getHeight()
@@ -43,9 +43,9 @@ function addPayslipPage(
   pdf.setFont('helvetica', 'bold').setFontSize(12)
   pdf.text(`PAYSLIP - ${periodLabel(period).toUpperCase()}`, PW / 2, y + 2, { align: 'center' })
   y += 6
-  if (salaryDate) {
+  if (advanceRange?.from && advanceRange?.to) {
     pdf.setFont('helvetica', 'normal').setFontSize(8)
-    pdf.text(`Salary day: ${salaryDate}`, PW / 2, y, { align: 'center' })
+    pdf.text(`Advances ${advanceRange.from} to ${advanceRange.to}`, PW / 2, y, { align: 'center' })
     y += 4
   }
   y += 4
@@ -113,7 +113,7 @@ export function downloadPayrollPayslipsPdf(
   period: string,
   firm?: Firm | null,
   filename?: string,
-  salaryDate?: string,
+  advanceRange?: { from: string; to: string },
 ) {
   const validLines = lines.filter(Boolean)
   if (!validLines.length) return
@@ -121,7 +121,7 @@ export function downloadPayrollPayslipsPdf(
   const pdf = new jsPDF({ unit: 'mm', format: 'a4' })
   validLines.forEach((line, idx) => {
     if (idx > 0) pdf.addPage()
-    addPayslipPage(pdf, line, period, firm, salaryDate)
+    addPayslipPage(pdf, line, period, firm, advanceRange)
   })
   pdf.save(filename || `Payslips_${period}_${validLines.length}.pdf`)
 }

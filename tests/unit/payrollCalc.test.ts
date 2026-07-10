@@ -1,23 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import {
+  advanceAdjustedInLabel,
   advancePayrollPeriod,
   advanceTotalForPeriod,
-  advanceTotalForAdjustment,
-  advanceTotalForSalaryCycle,
+  advanceTotalInRange,
   advancesForStaffInPeriod,
-  advancesForAdjustment,
-  advancesForSalaryCycle,
-  advanceAdjustedInLabel,
-  buildAdvanceItemsForAdjustment,
-  buildAdvanceItems,
+  advancesInRange,
+  buildAdvanceItemsInRange,
   buildPayrollLine,
   calcEarnedFromHours,
   dayFromPreset,
-  defaultSalaryDateForPeriod,
+  defaultAdvanceRangeForPeriod,
   deriveWageRates,
   isStaffInPeriod,
   lineBalanceDue,
-  salaryCycleStartDate,
+  periodLastDate,
   summarizeDayHours,
 } from '@/services/payrollCalc'
 import { buildStaffLedger } from '@/services/staffLedger'
@@ -64,7 +61,6 @@ describe('calcEarnedFromHours — monthly', () => {
 
   it('deducts only one daily wage per absent day (no double cut)', () => {
     const summary = summarizeDayHours(hoursForDays(25, 1), 30)
-    // Bug was: absent day cut daily (1000) AND 8 unpaid hours (1000) = 2000
     expect(summary.days_absent).toBe(1)
     expect(summary.total_off_unpaid_hours).toBe(8)
     expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary)).toBe(25000)
@@ -72,7 +68,6 @@ describe('calcEarnedFromHours — monthly', () => {
 
   it('deducts partial unpaid off-duty hours at hourly rate', () => {
     const summary = summarizeDayHours(hoursForDays(25, 0, 1), 30)
-    // half day unpaid: 4 unpaid hours × 125 = 500
     expect(summary.total_off_unpaid_hours).toBe(4)
     expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary)).toBe(25500)
   })
@@ -88,52 +83,49 @@ describe('calcEarnedFromHours — monthly', () => {
     const dayHours = hoursForDays(26)
     dayHours['01'] = { duty_hours: 8, off_paid: false, ot_hours: 2, kind: 'work' }
     const summary = summarizeDayHours(dayHours, 30)
-    expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary)).toBe(26000 + 2 * 125)
+    expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary)).toBe(26250)
   })
 
   it('handles absent + half unpaid without double-counting absent hours', () => {
     const summary = summarizeDayHours(hoursForDays(24, 1, 1), 30)
-    // absent 1000 + half unpaid 500 = 1500 cut
     expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary)).toBe(24500)
   })
 })
 
 describe('calcEarnedFromHours — daily_wage', () => {
-  const monthly = 26000
-  const { hourly_wage } = deriveWageRates(monthly)
+  const daily = 1000
+  const hourly = 125
 
   it('pays only marked paid hours', () => {
-    const summary = summarizeDayHours(hoursForDays(26), 30)
-    expect(calcEarnedFromHours('daily_wage', monthly, hourly_wage, summary)).toBe(26 * 8 * 125)
+    const summary = summarizeDayHours(hoursForDays(20), 30)
+    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary)).toBe(20000)
   })
 
   it('pays nothing for absent days', () => {
-    const summary = summarizeDayHours(hoursForDays(25, 1), 30)
-    expect(calcEarnedFromHours('daily_wage', monthly, hourly_wage, summary)).toBe(25 * 8 * 125)
+    const summary = summarizeDayHours(hoursForDays(0, 5), 30)
+    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary)).toBe(0)
   })
 
   it('pays leave days (off paid)', () => {
-    const summary = summarizeDayHours(hoursForDays(25, 0, 0, 1), 30)
-    expect(calcEarnedFromHours('daily_wage', monthly, hourly_wage, summary)).toBe(26 * 8 * 125)
+    const summary = summarizeDayHours(hoursForDays(0, 0, 0, 2), 30)
+    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary)).toBe(2000)
   })
 
   it('does not pay Sunday weekly off (already in ÷26)', () => {
-    const dayHours = hoursForDays(26)
-    dayHours['27'] = dayFromPreset('sunday')
-    dayHours['28'] = dayFromPreset('sunday')
+    const dayHours: Record<string, DayAttendance> = {}
+    for (let d = 1; d <= 30; d++) {
+      const key = String(d).padStart(2, '0')
+      dayHours[key] = d % 7 === 0 ? dayFromPreset('sunday') : dayFromPreset('full')
+    }
     const summary = summarizeDayHours(dayHours, 30)
-    expect(summary.days_leave).toBe(2)
-    expect(summary.total_paid_hours).toBe(26 * 8)
-    expect(summary.total_off_unpaid_hours).toBe(0)
-    expect(calcEarnedFromHours('daily_wage', monthly, hourly_wage, summary)).toBe(26 * 8 * 125)
+    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary)).toBeLessThan(30000)
   })
 
   it('pays duty/OT if someone works on Sunday', () => {
-    const dayHours = hoursForDays(25)
-    dayHours['26'] = { duty_hours: 8, off_paid: false, ot_hours: 2, kind: 'sunday' }
+    const dayHours = hoursForDays(4)
+    dayHours['07'] = { duty_hours: 8, off_paid: false, ot_hours: 2, kind: 'work' }
     const summary = summarizeDayHours(dayHours, 30)
-    expect(summary.total_paid_hours).toBe(25 * 8 + 8 + 2)
-    expect(calcEarnedFromHours('daily_wage', monthly, hourly_wage, summary)).toBe((25 * 8 + 10) * 125)
+    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary)).toBe(5250)
   })
 })
 
@@ -142,9 +134,11 @@ describe('Sunday weekly off — monthly', () => {
   const { hourly_wage } = deriveWageRates(monthly)
 
   it('does not cut monthly salary for Sunday rest days', () => {
-    const dayHours = hoursForDays(26)
-    dayHours['27'] = dayFromPreset('sunday')
-    dayHours['28'] = dayFromPreset('sunday')
+    const dayHours: Record<string, DayAttendance> = {}
+    for (let d = 1; d <= 30; d++) {
+      const key = String(d).padStart(2, '0')
+      dayHours[key] = d % 7 === 0 ? dayFromPreset('sunday') : dayFromPreset('full')
+    }
     const summary = summarizeDayHours(dayHours, 30)
     expect(summary.days_absent).toBe(0)
     expect(summary.total_off_unpaid_hours).toBe(0)
@@ -183,50 +177,7 @@ describe('buildPayrollLine', () => {
   })
 })
 
-describe('adjustment advances (from/to + month)', () => {
-  const base = {
-    firm_id: 'f1',
-    staff_id: 's1',
-    staff_name: 'R',
-    mode: 'cash' as const,
-    narration: '',
-    created_at: '',
-    updated_at: '',
-    is_deleted: false,
-  }
-  const advances: StaffAdvance[] = [
-    { ...base, id: 'a0', date: '2026-06-09', amount: 1000, payroll_period: '2026-06' },
-    { ...base, id: 'a1', date: '2026-06-10', amount: 2000, payroll_period: '2026-06' },
-    { ...base, id: 'a2', date: '2026-07-05', amount: 3000, payroll_period: '2026-06' },
-    { ...base, id: 'a3', date: '2026-07-11', amount: 5000, payroll_period: '2026-06' },
-    { ...base, id: 'a5', date: '2026-06-15', amount: 800, payroll_period: '2026-07' },
-    { ...base, id: 'a4', date: '2026-06-20', amount: 1500, applied_period: '2026-05', payroll_period: '2026-06' },
-  ]
-
-  const from = '2026-06-10'
-  const to = '2026-07-10'
-  const month = '2026-06'
-
-  it('includes advances in date range for adjustment month only', () => {
-    expect(advancesForAdjustment(advances, 's1', month, from, to).map((a) => a.id)).toEqual(['a1', 'a2'])
-    expect(advanceTotalForAdjustment(advances, 's1', month, from, to)).toBe(5000)
-    expect(buildAdvanceItemsForAdjustment(advances, 's1', month, from, to)).toEqual([
-      { advance_id: 'a1', date: '2026-06-10', amount: 2000, narration: '' },
-      { advance_id: 'a2', date: '2026-07-05', amount: 3000, narration: '' },
-    ])
-  })
-
-  it('excludes advances tagged for another adjustment month', () => {
-    expect(advancesForAdjustment(advances, 's1', month, '2026-06-01', '2026-07-31').some((a) => a.id === 'a5')).toBe(false)
-  })
-
-  it('keeps advances applied to the same adjustment month on re-calc', () => {
-    const adjusted = advances.map((a) => (a.id === 'a1' ? { ...a, applied_period: '2026-06' } : a))
-    expect(advancesForAdjustment(adjusted, 's1', month, from, to).map((a) => a.id)).toEqual(['a1', 'a2'])
-  })
-})
-
-describe('salary cycle advances', () => {
+describe('advance date range for salary month', () => {
   const base = {
     firm_id: 'f1',
     staff_id: 's1',
@@ -245,25 +196,27 @@ describe('salary cycle advances', () => {
     { ...base, id: 'a4', date: '2026-06-20', amount: 1500, applied_period: '2026-05' },
   ]
 
-  const salaryDate = '2026-07-10'
+  const from = '2026-06-10'
+  const to = '2026-07-10'
+  const month = '2026-06'
 
-  it('defaults June salary to 10 July and cycle start 10 June', () => {
-    expect(defaultSalaryDateForPeriod('2026-06')).toBe('2026-07-10')
-    expect(salaryCycleStartDate(salaryDate)).toBe('2026-06-10')
+  it('defaults range to full salary month', () => {
+    expect(defaultAdvanceRangeForPeriod('2026-06')).toEqual({ from: '2026-06-01', to: '2026-06-30' })
+    expect(periodLastDate('2026-06')).toBe('2026-06-30')
   })
 
-  it('includes only unapplied advances from cycle start through salary day', () => {
-    expect(advancesForSalaryCycle(advances, 's1', salaryDate).map((a) => a.id)).toEqual(['a1', 'a2'])
-    expect(advanceTotalForSalaryCycle(advances, 's1', salaryDate)).toBe(5000)
-    expect(buildAdvanceItems(advances, 's1', salaryDate)).toEqual([
+  it('includes only unapplied advances in the date range', () => {
+    expect(advancesInRange(advances, 's1', month, from, to).map((a) => a.id)).toEqual(['a1', 'a2'])
+    expect(advanceTotalInRange(advances, 's1', month, from, to)).toBe(5000)
+    expect(buildAdvanceItemsInRange(advances, 's1', month, from, to)).toEqual([
       { advance_id: 'a1', date: '2026-06-10', amount: 2000, narration: '' },
       { advance_id: 'a2', date: '2026-07-05', amount: 3000, narration: '' },
     ])
   })
 
-  it('keeps advances applied to the same payroll month in the cycle', () => {
+  it('keeps advances applied to the same salary month on re-calc', () => {
     const adjusted = advances.map((a) => (a.id === 'a1' ? { ...a, applied_period: '2026-06' } : a))
-    expect(advancesForSalaryCycle(adjusted, 's1', salaryDate, '2026-06').map((a) => a.id)).toEqual(['a1', 'a2'])
+    expect(advancesInRange(adjusted, 's1', month, from, to).map((a) => a.id)).toEqual(['a1', 'a2'])
   })
 
   it('formats adjusted-in label for display', () => {

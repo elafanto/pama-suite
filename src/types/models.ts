@@ -346,10 +346,6 @@ export interface PayrollRun extends BaseRecord {
   total_other: number
   total_net: number
   status: PayrollRunStatus
-  /** Actual salary payment date. */
-  salary_date?: string
-  /** Payroll month (YYYY-MM) in which advances are adjusted. */
-  adjustment_period?: string
   /** Include advances with date on or after this (YYYY-MM-DD). */
   advance_from?: string
   /** Include advances with date on or before this (YYYY-MM-DD). */

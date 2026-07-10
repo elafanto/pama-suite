@@ -105,126 +105,64 @@ export function advanceTotalForPeriod(
   return advancesForStaffInPeriod(advances, staffId, period).reduce((s, a) => s + a.amount, 0)
 }
 
-/** Default salary pay date: 10th of the month after the payroll period (June → 10 July). */
-export function defaultSalaryDateForPeriod(period: string): string {
+/** Last calendar day of payroll month (YYYY-MM-DD). */
+export function periodLastDate(period: string): string {
   const [y, m] = period.split('-').map(Number)
-  if (!y || !m) return new Date().toISOString().slice(0, 10)
-  const d = new Date(y, m, 10)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  if (!y || !m) return period
+  const last = new Date(y, m, 0).getDate()
+  return `${y}-${String(m).padStart(2, '0')}-${String(last).padStart(2, '0')}`
 }
 
-export function resolveRunSalaryDate(run: Pick<PayrollRun, 'period' | 'salary_date' | 'payment_date'>): string {
-  if (run.salary_date) return run.salary_date
-  if (run.payment_date) return run.payment_date
-  return defaultSalaryDateForPeriod(run.period)
+export function defaultAdvanceRangeForPeriod(period: string): { from: string; to: string } {
+  return { from: `${period}-01`, to: periodLastDate(period) }
 }
 
-/** Cycle start = same day-of-month, one month before salary date (10 Jul → 10 Jun). */
-export function salaryCycleStartDate(salaryDate: string): string {
-  const [y, m, d] = salaryDate.split('-').map(Number)
-  if (!y || !m || !d) return salaryDate.slice(0, 7) + '-01'
-  const prev = new Date(y, m - 2, d)
-  return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-${String(prev.getDate()).padStart(2, '0')}`
-}
-
-/** Default advance range from salary day (same day prior month → salary day). */
-export function defaultAdvanceRangeForSalaryDate(salaryDate: string): { from: string; to: string } {
-  return { from: salaryCycleStartDate(salaryDate), to: salaryDate }
-}
-
-export function resolveRunAdjustmentConfig(
-  run: Pick<PayrollRun, 'period' | 'adjustment_period' | 'advance_from' | 'advance_to' | 'salary_date' | 'payment_date'>,
-): { adjustmentPeriod: string; advanceFrom: string; advanceTo: string } {
-  const salaryDate = resolveRunSalaryDate(run)
-  const defaults = defaultAdvanceRangeForSalaryDate(salaryDate)
+export function resolveRunAdvanceRange(
+  run: Pick<PayrollRun, 'period' | 'advance_from' | 'advance_to'>,
+): { advanceFrom: string; advanceTo: string } {
+  const defaults = defaultAdvanceRangeForPeriod(run.period)
   return {
-    adjustmentPeriod: run.adjustment_period || run.period,
     advanceFrom: run.advance_from || defaults.from,
     advanceTo: run.advance_to || defaults.to,
   }
 }
 
-/** Unapplied advances in date range for the selected adjustment month.
- *  Also includes advances already applied to the same adjustment month (re-calc). */
-export function advancesForAdjustment(
+/** Unapplied advances in date range; includes same-month applied on re-calc. */
+export function advancesInRange(
   advances: AdvanceCalcRow[],
   staffId: string,
-  adjustmentPeriod: string,
+  salaryPeriod: string,
   fromDate: string,
   toDate: string,
 ) {
-  if (!adjustmentPeriod || !fromDate || !toDate) return []
+  if (!fromDate || !toDate) return []
   return advances
     .filter((a) => {
       if (a.staff_id !== staffId || a.date < fromDate || a.date > toDate) return false
-      const targetMonth = advancePayrollPeriod(a) || adjustmentPeriod
-      if (targetMonth !== adjustmentPeriod) return false
       if (!a.applied_period) return true
-      return a.applied_period === adjustmentPeriod
+      return a.applied_period === salaryPeriod
     })
     .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))
 }
 
-export function advanceTotalForAdjustment(
+export function advanceTotalInRange(
   advances: AdvanceCalcRow[],
   staffId: string,
-  adjustmentPeriod: string,
+  salaryPeriod: string,
   fromDate: string,
   toDate: string,
 ): number {
-  return advancesForAdjustment(advances, staffId, adjustmentPeriod, fromDate, toDate)
-    .reduce((s, a) => s + a.amount, 0)
+  return advancesInRange(advances, staffId, salaryPeriod, fromDate, toDate).reduce((s, a) => s + a.amount, 0)
 }
 
-export function buildAdvanceItemsForAdjustment(
+export function buildAdvanceItemsInRange(
   advances: AdvanceCalcRow[],
   staffId: string,
-  adjustmentPeriod: string,
+  salaryPeriod: string,
   fromDate: string,
   toDate: string,
 ): PayrollAdvanceItem[] {
-  return advancesForAdjustment(advances, staffId, adjustmentPeriod, fromDate, toDate).map((a) => ({
-    advance_id: a.id,
-    date: a.date,
-    amount: a.amount,
-    narration: a.narration || '',
-  }))
-}
-
-/** @deprecated Use advancesForAdjustment with explicit from/to range. */
-export function advancesForSalaryCycle(
-  advances: AdvanceCalcRow[],
-  staffId: string,
-  salaryDate: string,
-  payrollPeriod?: string,
-) {
-  if (!salaryDate) return []
-  const start = salaryCycleStartDate(salaryDate)
-  return advances
-    .filter((a) => {
-      if (a.staff_id !== staffId || a.date < start || a.date > salaryDate) return false
-      if (!a.applied_period) return true
-      return payrollPeriod ? a.applied_period === payrollPeriod : false
-    })
-    .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))
-}
-
-export function advanceTotalForSalaryCycle(
-  advances: AdvanceCalcRow[],
-  staffId: string,
-  salaryDate: string,
-  payrollPeriod?: string,
-): number {
-  return advancesForSalaryCycle(advances, staffId, salaryDate, payrollPeriod).reduce((s, a) => s + a.amount, 0)
-}
-
-export function buildAdvanceItems(
-  advances: AdvanceCalcRow[],
-  staffId: string,
-  salaryDate: string,
-  payrollPeriod?: string,
-): PayrollAdvanceItem[] {
-  return advancesForSalaryCycle(advances, staffId, salaryDate, payrollPeriod).map((a) => ({
+  return advancesInRange(advances, staffId, salaryPeriod, fromDate, toDate).map((a) => ({
     advance_id: a.id,
     date: a.date,
     amount: a.amount,
