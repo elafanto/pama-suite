@@ -1,5 +1,6 @@
 import {
   advancePayrollPeriod,
+  advanceAdjustedInLabel,
   periodLabel,
   sumLinePayments,
 } from '@/services/payrollCalc'
@@ -58,7 +59,7 @@ export function buildStaffLedger(
       date: adv.date,
       period,
       type: 'advance',
-      label: `Advance${adv.narration ? ` — ${adv.narration}` : ''}${adv.applied_period ? ` (adj ${adv.applied_period})` : ''}`,
+      label: `Advance${adv.narration ? ` — ${adv.narration}` : ''}${adv.applied_period ? ` (${advanceAdjustedInLabel(adv.applied_period)})` : ''}`,
       debit: adv.amount,
       credit: 0,
     })

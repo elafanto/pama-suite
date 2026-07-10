@@ -296,6 +296,13 @@ export interface StaffAdvance extends BaseRecord {
   voucher_id?: string
 }
 
+export interface PayrollAdvanceItem {
+  advance_id: string
+  date: string
+  amount: number
+  narration: string
+}
+
 export interface PayrollLine {
   staff_id: string
   staff_name: string
@@ -317,6 +324,8 @@ export interface PayrollLine {
   total_paid_hours: number
   earned: number
   advance_deduction: number
+  /** Advances in this salary cycle, date-wise (for payslip breakdown). */
+  advance_items: PayrollAdvanceItem[]
   other_deduction: number
   net_pay: number
   /** Salary actually paid to staff (sum of payments). */
@@ -337,6 +346,8 @@ export interface PayrollRun extends BaseRecord {
   total_other: number
   total_net: number
   status: PayrollRunStatus
+  /** Actual salary payment date — advances up to this date (from prior cycle start) adjust in this run. */
+  salary_date?: string
   payment_mode: PayrollPaymentMode
   payment_date: string
   voucher_id?: string

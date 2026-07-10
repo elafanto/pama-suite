@@ -2,13 +2,19 @@ import { describe, expect, it } from 'vitest'
 import {
   advancePayrollPeriod,
   advanceTotalForPeriod,
+  advanceTotalForSalaryCycle,
   advancesForStaffInPeriod,
+  advancesForSalaryCycle,
+  advanceAdjustedInLabel,
+  buildAdvanceItems,
   buildPayrollLine,
   calcEarnedFromHours,
   dayFromPreset,
+  defaultSalaryDateForPeriod,
   deriveWageRates,
   isStaffInPeriod,
   lineBalanceDue,
+  salaryCycleStartDate,
   summarizeDayHours,
 } from '@/services/payrollCalc'
 import { buildStaffLedger } from '@/services/staffLedger'
@@ -171,6 +177,51 @@ describe('buildPayrollLine', () => {
     expect(line.net_pay).toBe(0)
     expect(line.pay_status).toBe('pending')
     expect(lineBalanceDue(line)).toBe(0)
+  })
+})
+
+describe('salary cycle advances', () => {
+  const base = {
+    firm_id: 'f1',
+    staff_id: 's1',
+    staff_name: 'R',
+    mode: 'cash' as const,
+    narration: '',
+    created_at: '',
+    updated_at: '',
+    is_deleted: false,
+  }
+  const advances: StaffAdvance[] = [
+    { ...base, id: 'a0', date: '2026-06-09', amount: 1000 },
+    { ...base, id: 'a1', date: '2026-06-10', amount: 2000 },
+    { ...base, id: 'a2', date: '2026-07-05', amount: 3000 },
+    { ...base, id: 'a3', date: '2026-07-11', amount: 5000 },
+    { ...base, id: 'a4', date: '2026-06-20', amount: 1500, applied_period: '2026-05' },
+  ]
+
+  const salaryDate = '2026-07-10'
+
+  it('defaults June salary to 10 July and cycle start 10 June', () => {
+    expect(defaultSalaryDateForPeriod('2026-06')).toBe('2026-07-10')
+    expect(salaryCycleStartDate(salaryDate)).toBe('2026-06-10')
+  })
+
+  it('includes only unapplied advances from cycle start through salary day', () => {
+    expect(advancesForSalaryCycle(advances, 's1', salaryDate).map((a) => a.id)).toEqual(['a1', 'a2'])
+    expect(advanceTotalForSalaryCycle(advances, 's1', salaryDate)).toBe(5000)
+    expect(buildAdvanceItems(advances, 's1', salaryDate)).toEqual([
+      { advance_id: 'a1', date: '2026-06-10', amount: 2000, narration: '' },
+      { advance_id: 'a2', date: '2026-07-05', amount: 3000, narration: '' },
+    ])
+  })
+
+  it('keeps advances applied to the same payroll month in the cycle', () => {
+    const adjusted = advances.map((a) => (a.id === 'a1' ? { ...a, applied_period: '2026-06' } : a))
+    expect(advancesForSalaryCycle(adjusted, 's1', salaryDate, '2026-06').map((a) => a.id)).toEqual(['a1', 'a2'])
+  })
+
+  it('formats adjusted-in label for display', () => {
+    expect(advanceAdjustedInLabel('2026-06')).toBe('Adjusted in salary of June 2026')
   })
 })
 

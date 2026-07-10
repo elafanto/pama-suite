@@ -9,18 +9,22 @@ import {
   PAYROLL_HOURS_PER_DAY,
   PAYROLL_WORKING_DAYS,
   advancePayrollPeriod,
+  advanceAdjustedInLabel,
   calcOffDutyHours,
   currentPeriod,
   dayCellClass,
   dayCellLabel,
   dayFromPreset,
   daysInMonth,
+  defaultSalaryDateForPeriod,
   deriveWageRates,
   emptyDay,
   isSunday,
   lineBalanceDue,
   normalizeDayHours,
   periodLabel,
+  resolveRunSalaryDate,
+  salaryCycleStartDate,
   sumDaySalaryExpense,
   sundayDayKeys,
 } from '@/services/payrollCalc'
@@ -75,6 +79,7 @@ const staffPayAmount = ref(0)
 const ledgerStaffId = ref('')
 
 const payslipStaffId = ref('')
+const salaryDate = ref(defaultSalaryDateForPeriod(currentPeriod()))
 const paymentMode = ref<PayrollPaymentMode>('transfer')
 const paymentDate = ref(new Date().toISOString().slice(0, 10))
 
@@ -209,8 +214,28 @@ async function ensurePeriodRun() {
 watch(period, () => {
   selectedBulkDays.value = new Set()
   attendanceEditMode.value = false
+  salaryDate.value = defaultSalaryDateForPeriod(period.value)
   void ensurePeriodRun()
 })
+
+watch(salaryDate, async (next, prev) => {
+  if (!next || next === prev) return
+  paymentDate.value = next
+  await ensurePeriodRun()
+  const run = currentRun.value
+  if (!run || run.period !== period.value) return
+  if (run.status === 'paid') return
+  if (run.salary_date === next) return
+  const res = await store.updateRunSalaryDate(period.value, next)
+  if (res && 'error' in res) alert(res.error)
+})
+
+watch(currentRun, (run) => {
+  if (!run) return
+  const resolved = resolveRunSalaryDate(run)
+  if (salaryDate.value !== resolved) salaryDate.value = resolved
+  paymentDate.value = resolved
+}, { immediate: true })
 watch(tab, (t) => {
   if (t !== 'attendance') attendanceEditMode.value = false
   if (t === 'attendance' || t === 'salary') void ensurePeriodRun()
@@ -459,9 +484,11 @@ async function deleteAdvance(id: string) {
   await store.recalculateRun(period.value)
 }
 
-const periodAdvances = computed(() =>
-  store.advances.filter((a) => advancePayrollPeriod(a) === period.value),
-)
+const cycleAdvances = computed(() => {
+  if (!salaryDate.value) return []
+  const start = salaryCycleStartDate(salaryDate.value)
+  return store.advances.filter((a) => a.date >= start && a.date <= salaryDate.value)
+})
 
 function openStaffPay(lineStaffId: string, balance: number) {
   staffPayStaffId.value = lineStaffId
@@ -497,12 +524,13 @@ function downloadCurrentPayslipPdf() {
     period.value,
     firmStore.activeFirm,
     `Payslip_${payslipLine.value.staff_name}_${period.value}.pdf`,
+    salaryDate.value,
   )
 }
 
 function downloadAllPayslipsPdf() {
   if (!currentRun.value?.lines?.length) return alert('Is month ke liye payslip data nahi hai.')
-  downloadPayrollPayslipsPdf(currentRun.value.lines, period.value, firmStore.activeFirm)
+  downloadPayrollPayslipsPdf(currentRun.value.lines, period.value, firmStore.activeFirm, undefined, salaryDate.value)
 }
 
 const payslipLine = computed(() => {
@@ -533,8 +561,13 @@ onMounted(async () => {
     </header>
 
     <div class="flex flex-wrap items-center gap-2 mb-4">
-      <label class="text-sm font-semibold text-slate-600">Month</label>
+      <label class="text-sm font-semibold text-slate-600">Salary month</label>
       <input v-model="period" type="month" class="pp-input !w-auto" />
+      <label class="text-sm font-semibold text-slate-600">Salary day</label>
+      <input v-model="salaryDate" type="date" class="pp-input !w-auto" :disabled="currentRun?.status === 'paid'" />
+      <span v-if="salaryDate" class="text-xs text-slate-500">
+        Advance window: {{ salaryCycleStartDate(salaryDate) }} → {{ salaryDate }}
+      </span>
       <span v-if="currentRun" class="text-xs pp-badge" :class="{
         'bg-slate-100 text-slate-600': currentRun.status === 'draft',
         'bg-amber-100 text-amber-800': currentRun.status === 'finalized',
@@ -914,19 +947,19 @@ onMounted(async () => {
     <section v-else-if="tab === 'advance'" class="space-y-3">
       <div class="flex flex-wrap gap-2 items-center justify-between">
         <button class="pp-btn pp-btn-primary" @click="openAdvance">+ Record advance</button>
-        <p class="text-xs text-slate-500">Sirf <strong>{{ periodLabel(period) }}</strong> ke advances is month ki salary me adjust honge — agle month carry nahi.</p>
+        <p class="text-xs text-slate-500">Salary day tak ke advances ({{ salaryCycleStartDate(salaryDate) }} se {{ salaryDate }}) is month ki salary me adjust honge.</p>
       </div>
-      <div v-if="periodAdvances.length === 0" class="pp-card p-6 text-center text-slate-400">Is month ka koi advance nahi.</div>
-      <div v-for="a in periodAdvances" :key="a.id" class="pp-card p-3 flex justify-between gap-2 flex-wrap text-sm">
+      <div v-if="cycleAdvances.length === 0" class="pp-card p-6 text-center text-slate-400">Is salary cycle me koi advance nahi.</div>
+      <div v-for="a in cycleAdvances" :key="a.id" class="pp-card p-3 flex justify-between gap-2 flex-wrap text-sm">
         <div>
           <span class="font-semibold text-navy">{{ a.staff_name }}</span>
           <span class="text-slate-500 ml-2">{{ a.date }}</span>
+          <span v-if="a.applied_period" class="ml-2 text-xs font-medium text-emerald-700">{{ advanceAdjustedInLabel(a.applied_period) }}</span>
           <div class="text-xs text-slate-400">{{ a.mode }} · {{ a.narration || '—' }} · Month {{ advancePayrollPeriod(a) }}</div>
         </div>
         <div class="text-right flex flex-col items-end gap-1">
           <div class="font-bold">₹{{ a.amount.toLocaleString('en-IN') }}</div>
-          <span v-if="a.applied_period" class="text-xs text-emerald-600">Adjusted {{ a.applied_period }}</span>
-          <span v-else class="text-xs text-amber-600">Pending adjust</span>
+          <span v-if="!a.applied_period" class="text-xs text-amber-600">Pending adjust in {{ periodLabel(period) }} salary</span>
           <div v-if="!a.applied_period" class="flex gap-1">
             <button type="button" class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs" @click="openEditAdvance(a)">Edit</button>
             <button type="button" class="pp-btn pp-btn-danger !py-1 !px-2 text-xs" @click="deleteAdvance(a.id)">Delete</button>
@@ -1001,6 +1034,7 @@ onMounted(async () => {
         <div class="text-center border-b border-slate-200 pb-3 mb-3">
           <div class="font-bold text-lg text-navy">{{ firmStore.activeFirm?.name || 'Firm' }}</div>
           <div class="text-sm text-slate-500">Payslip — {{ periodLabel(period) }}</div>
+          <div v-if="salaryDate" class="text-xs text-slate-400">Salary day: {{ salaryDate }} · Advances {{ salaryCycleStartDate(salaryDate) }} → {{ salaryDate }}</div>
         </div>
         <div class="space-y-1 text-sm mb-4">
           <div><span class="text-slate-500">Employee:</span> <strong>{{ payslipLine.staff_name }}</strong></div>
@@ -1014,7 +1048,17 @@ onMounted(async () => {
         <table class="w-full text-sm border-t border-slate-200">
           <tbody>
             <tr><td class="py-2">Gross earned</td><td class="py-2 text-right font-semibold">₹{{ payslipLine.earned.toLocaleString('en-IN') }}</td></tr>
-            <tr v-if="payslipLine.advance_deduction"><td class="py-2 text-amber-700">Advance deduction</td><td class="py-2 text-right">− ₹{{ payslipLine.advance_deduction.toLocaleString('en-IN') }}</td></tr>
+            <template v-if="payslipLine.advance_items?.length">
+              <tr v-for="adv in payslipLine.advance_items" :key="adv.advance_id">
+                <td class="py-2 text-amber-700">Advance {{ adv.date }}<span v-if="adv.narration" class="text-slate-400"> · {{ adv.narration }}</span></td>
+                <td class="py-2 text-right">− ₹{{ adv.amount.toLocaleString('en-IN') }}</td>
+              </tr>
+              <tr v-if="payslipLine.advance_items.length > 1">
+                <td class="py-2 font-semibold text-amber-800">Total advance</td>
+                <td class="py-2 text-right font-semibold">− ₹{{ payslipLine.advance_deduction.toLocaleString('en-IN') }}</td>
+              </tr>
+            </template>
+            <tr v-else-if="payslipLine.advance_deduction"><td class="py-2 text-amber-700">Advance deduction</td><td class="py-2 text-right">− ₹{{ payslipLine.advance_deduction.toLocaleString('en-IN') }}</td></tr>
             <tr v-if="payslipLine.other_deduction"><td class="py-2">Other deduction</td><td class="py-2 text-right">− ₹{{ payslipLine.other_deduction.toLocaleString('en-IN') }}</td></tr>
             <tr class="border-t-2 border-navy font-bold text-base"><td class="py-3">Net pay</td><td class="py-3 text-right text-emerald-800">₹{{ payslipLine.net_pay.toLocaleString('en-IN') }}</td></tr>
             <tr v-if="payslipLine.paid_amount"><td class="py-2 text-emerald-700">Paid</td><td class="py-2 text-right">₹{{ payslipLine.paid_amount.toLocaleString('en-IN') }}</td></tr>

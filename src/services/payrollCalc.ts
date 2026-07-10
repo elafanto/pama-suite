@@ -6,6 +6,8 @@ import type {
   StaffAdvance,
   StaffLinePayStatus,
   StaffPayType,
+  PayrollAdvanceItem,
+  PayrollRun,
 } from '@/types/models'
 
 export const PAYROLL_WORKING_DAYS = 26
@@ -29,6 +31,12 @@ export function periodLabel(period: string): string {
   const [y, m] = period.split('-').map(Number)
   if (!y || !m) return period
   return new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
+}
+
+/** e.g. "Adjusted in salary of June 2026" */
+export function advanceAdjustedInLabel(appliedPeriod: string): string {
+  if (!appliedPeriod) return ''
+  return `Adjusted in salary of ${periodLabel(appliedPeriod)}`
 }
 
 /** YYYY-MM from leaving_date, or null if not set. */
@@ -74,9 +82,11 @@ export function advancePayrollPeriod(advance: Pick<StaffAdvance, 'date' | 'payro
   return advance.date.slice(0, 7)
 }
 
+type AdvanceCalcRow = Pick<StaffAdvance, 'id' | 'staff_id' | 'date' | 'payroll_period' | 'amount' | 'applied_period' | 'narration'>
+
 /** Open advances for one staff in one payroll month only — no carry to next month. */
 export function advancesForStaffInPeriod(
-  advances: Pick<StaffAdvance, 'id' | 'staff_id' | 'date' | 'payroll_period' | 'amount' | 'applied_period'>[],
+  advances: AdvanceCalcRow[],
   staffId: string,
   period: string,
 ) {
@@ -88,11 +98,75 @@ export function advancesForStaffInPeriod(
 }
 
 export function advanceTotalForPeriod(
-  advances: Pick<StaffAdvance, 'id' | 'staff_id' | 'date' | 'payroll_period' | 'amount' | 'applied_period'>[],
+  advances: AdvanceCalcRow[],
   staffId: string,
   period: string,
 ): number {
   return advancesForStaffInPeriod(advances, staffId, period).reduce((s, a) => s + a.amount, 0)
+}
+
+/** Default salary pay date: 10th of the month after the payroll period (June → 10 July). */
+export function defaultSalaryDateForPeriod(period: string): string {
+  const [y, m] = period.split('-').map(Number)
+  if (!y || !m) return new Date().toISOString().slice(0, 10)
+  const d = new Date(y, m, 10)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+export function resolveRunSalaryDate(run: Pick<PayrollRun, 'period' | 'salary_date' | 'payment_date'>): string {
+  if (run.salary_date) return run.salary_date
+  if (run.payment_date) return run.payment_date
+  return defaultSalaryDateForPeriod(run.period)
+}
+
+/** Cycle start = same day-of-month, one month before salary date (10 Jul → 10 Jun). */
+export function salaryCycleStartDate(salaryDate: string): string {
+  const [y, m, d] = salaryDate.split('-').map(Number)
+  if (!y || !m || !d) return salaryDate.slice(0, 7) + '-01'
+  const prev = new Date(y, m - 2, d)
+  return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-${String(prev.getDate()).padStart(2, '0')}`
+}
+
+/** Unapplied advances from cycle start through salary date (inclusive).
+ *  Also includes advances already applied to payrollPeriod (same month re-calc). */
+export function advancesForSalaryCycle(
+  advances: AdvanceCalcRow[],
+  staffId: string,
+  salaryDate: string,
+  payrollPeriod?: string,
+) {
+  if (!salaryDate) return []
+  const start = salaryCycleStartDate(salaryDate)
+  return advances
+    .filter((a) => {
+      if (a.staff_id !== staffId || a.date < start || a.date > salaryDate) return false
+      if (!a.applied_period) return true
+      return payrollPeriod ? a.applied_period === payrollPeriod : false
+    })
+    .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))
+}
+
+export function advanceTotalForSalaryCycle(
+  advances: AdvanceCalcRow[],
+  staffId: string,
+  salaryDate: string,
+  payrollPeriod?: string,
+): number {
+  return advancesForSalaryCycle(advances, staffId, salaryDate, payrollPeriod).reduce((s, a) => s + a.amount, 0)
+}
+
+export function buildAdvanceItems(
+  advances: AdvanceCalcRow[],
+  staffId: string,
+  salaryDate: string,
+  payrollPeriod?: string,
+): PayrollAdvanceItem[] {
+  return advancesForSalaryCycle(advances, staffId, salaryDate, payrollPeriod).map((a) => ({
+    advance_id: a.id,
+    date: a.date,
+    amount: a.amount,
+    narration: a.narration || '',
+  }))
 }
 
 export function sumLinePayments(line: Pick<PayrollLine, 'payments' | 'paid_amount'>): number {
@@ -122,6 +196,7 @@ export function normalizePayrollLine(line: PayrollLine, runStatus?: string): Pay
     payments,
     paid_amount,
     pay_status: line.pay_status || deriveLinePayStatus({ ...line, paid_amount, payments }),
+    advance_items: line.advance_items ?? [],
   }
   normalized.pay_status = deriveLinePayStatus(normalized)
   return normalized
@@ -340,6 +415,7 @@ export function buildPayrollLine(
   advanceDeduction: number,
   otherDeduction: number,
   existing?: Pick<PayrollLine, 'payments' | 'paid_amount' | 'pay_status' | 'payment_date' | 'payment_mode'>,
+  advanceItems: PayrollAdvanceItem[] = [],
 ): PayrollLine {
   const dim = daysInMonth(year, month)
   const day_hours =
@@ -375,6 +451,7 @@ export function buildPayrollLine(
     total_paid_hours: summary.total_paid_hours,
     earned,
     advance_deduction: adv,
+    advance_items: advanceItems,
     other_deduction: other,
     net_pay: net,
     paid_amount: cappedPaid,

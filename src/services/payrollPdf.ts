@@ -15,6 +15,7 @@ function addPayslipPage(
   line: PayrollLine,
   period: string,
   firm?: Firm | null,
+  salaryDate?: string,
 ) {
   const PW = pdf.internal.pageSize.getWidth()
   const PH = pdf.internal.pageSize.getHeight()
@@ -41,7 +42,13 @@ function addPayslipPage(
 
   pdf.setFont('helvetica', 'bold').setFontSize(12)
   pdf.text(`PAYSLIP - ${periodLabel(period).toUpperCase()}`, PW / 2, y + 2, { align: 'center' })
-  y += 10
+  y += 6
+  if (salaryDate) {
+    pdf.setFont('helvetica', 'normal').setFontSize(8)
+    pdf.text(`Salary day: ${salaryDate}`, PW / 2, y, { align: 'center' })
+    y += 4
+  }
+  y += 4
 
   pdf.setFont('helvetica', 'normal').setFontSize(10)
   pdf.text(`Employee: ${line.staff_name}`, L + 4, y)
@@ -63,7 +70,19 @@ function addPayslipPage(
   const rows: Array<[string, string, boolean?]> = [
     ['Gross earned', money(line.earned)],
   ]
-  if (line.advance_deduction) rows.push(['Advance deduction', `- ${money(line.advance_deduction)}`])
+  if (line.advance_items?.length) {
+    for (const adv of line.advance_items) {
+      const label = adv.narration
+        ? `Advance ${adv.date} (${adv.narration})`
+        : `Advance ${adv.date}`
+      rows.push([label, `- ${money(adv.amount)}`])
+    }
+    if (line.advance_items.length > 1) {
+      rows.push(['Total advance', `- ${money(line.advance_deduction)}`, true])
+    }
+  } else if (line.advance_deduction) {
+    rows.push(['Advance deduction', `- ${money(line.advance_deduction)}`])
+  }
   if (line.other_deduction) rows.push(['Other deduction', `- ${money(line.other_deduction)}`])
   rows.push(['Net pay', money(line.net_pay), true])
   if (line.paid_amount) rows.push(['Paid', money(line.paid_amount)])
@@ -94,6 +113,7 @@ export function downloadPayrollPayslipsPdf(
   period: string,
   firm?: Firm | null,
   filename?: string,
+  salaryDate?: string,
 ) {
   const validLines = lines.filter(Boolean)
   if (!validLines.length) return
@@ -101,7 +121,7 @@ export function downloadPayrollPayslipsPdf(
   const pdf = new jsPDF({ unit: 'mm', format: 'a4' })
   validLines.forEach((line, idx) => {
     if (idx > 0) pdf.addPage()
-    addPayslipPage(pdf, line, period, firm)
+    addPayslipPage(pdf, line, period, firm, salaryDate)
   })
   pdf.save(filename || `Payslips_${period}_${validLines.length}.pdf`)
 }
