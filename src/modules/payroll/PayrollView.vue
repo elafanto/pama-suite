@@ -25,9 +25,11 @@ import {
   isSunday,
   lineBalanceDue,
   normalizeDayHours,
+  normalizeSalaryHistory,
   periodLabel,
   resolveRunAdvanceRange,
   sortAdvanceItems,
+  staffSalaryForPeriod,
   sortStaffAdvances,
   sumDaySalaryExpense,
   sundayDayKeys,
@@ -50,6 +52,7 @@ const period = ref(currentPeriod())
 
 const showStaffModal = ref(false)
 const editingStaffId = ref<string | null>(null)
+const salaryEffectiveMonth = ref(currentPeriod())
 const staffForm = reactive({
   name: '',
   phone: '',
@@ -62,6 +65,15 @@ const staffForm = reactive({
   acname: '',
   is_active: true,
   leaving_date: '',
+})
+
+const showSalaryIncrementModal = ref(false)
+const incrementStaffId = ref('')
+const incrementStaffName = ref('')
+const incrementForm = reactive({
+  effective_period: currentPeriod(),
+  monthly_amount: 0,
+  note: '',
 })
 
 const showAdvanceModal = ref(false)
@@ -163,10 +175,43 @@ const tabs: { id: Tab; label: string; icon: string }[] = [
 ]
 
 function blankStaff() {
+  salaryEffectiveMonth.value = currentPeriod()
   Object.assign(staffForm, {
     name: '', phone: '', designation: '', pay_type: 'monthly' as StaffPayType,
     monthly_amount: 0, bank: '', acno: '', ifsc: '', acname: '', is_active: true, leaving_date: '',
   })
+}
+
+function staffSalaryHistory(s: Staff) {
+  return [...normalizeSalaryHistory(s)].sort((a, b) => b.effective_period.localeCompare(a.effective_period))
+}
+
+function openSalaryIncrement(s: Staff) {
+  incrementStaffId.value = s.id
+  incrementStaffName.value = s.name
+  incrementForm.effective_period = currentPeriod()
+  incrementForm.monthly_amount = staffSalaryForPeriod(s, currentPeriod())
+  incrementForm.note = ''
+  showSalaryIncrementModal.value = true
+}
+
+async function saveSalaryIncrement() {
+  if (!incrementStaffId.value) return
+  const amount = Math.max(0, Number(incrementForm.monthly_amount) || 0)
+  if (amount <= 0) return alert('Salary amount required')
+  const res = await store.setStaffSalary(
+    incrementStaffId.value,
+    incrementForm.effective_period,
+    amount,
+    incrementForm.note.trim(),
+  )
+  if (res.error) return alert(res.error)
+  showSalaryIncrementModal.value = false
+}
+
+function editingStaffRecord(): Staff | undefined {
+  if (!editingStaffId.value) return undefined
+  return store.staffList.find((s) => s.id === editingStaffId.value)
 }
 
 function openAddStaff() {
@@ -181,9 +226,10 @@ function openAddStaff() {
 
 function openEditStaff(s: Staff) {
   editingStaffId.value = s.id
+  salaryEffectiveMonth.value = currentPeriod()
   Object.assign(staffForm, {
     name: s.name, phone: s.phone, designation: s.designation, pay_type: s.pay_type,
-    monthly_amount: s.monthly_amount, bank: s.bank, acno: s.acno, ifsc: s.ifsc,
+    monthly_amount: staffSalaryForPeriod(s, currentPeriod()), bank: s.bank, acno: s.acno, ifsc: s.ifsc,
     acname: s.acname, is_active: s.is_active, leaving_date: s.leaving_date || '',
   })
   showStaffModal.value = true
@@ -192,12 +238,13 @@ function openEditStaff(s: Staff) {
 async function saveStaff() {
   if (!staffForm.name.trim()) return alert('Name required')
   const leaving_date = staffForm.leaving_date || ''
+  const monthly_amount = Math.max(0, Number(staffForm.monthly_amount) || 0)
   const payload: NewStaff = {
     name: staffForm.name.trim(),
     phone: staffForm.phone.trim(),
     designation: staffForm.designation.trim(),
     pay_type: staffForm.pay_type,
-    monthly_amount: Math.max(0, Number(staffForm.monthly_amount) || 0),
+    monthly_amount,
     bank: staffForm.bank.trim(),
     acno: staffForm.acno.trim(),
     ifsc: staffForm.ifsc.trim().toUpperCase(),
@@ -206,7 +253,20 @@ async function saveStaff() {
     is_active: leaving_date ? false : staffForm.is_active,
   }
   if (editingStaffId.value) {
-    await store.updateStaff(editingStaffId.value, payload)
+    const existing = editingStaffRecord()
+    const { monthly_amount: _m, ...rest } = payload
+    await store.updateStaff(editingStaffId.value, rest)
+    const prevForMonth = existing
+      ? staffSalaryForPeriod(existing, salaryEffectiveMonth.value)
+      : monthly_amount
+    if (monthly_amount !== prevForMonth) {
+      const res = await store.setStaffSalary(
+        editingStaffId.value,
+        salaryEffectiveMonth.value,
+        monthly_amount,
+      )
+      if (res.error) return alert(res.error)
+    }
   } else {
     const res = await store.addStaff(payload)
     if ('error' in res) return alert(res.error)
@@ -658,7 +718,8 @@ onMounted(async () => {
           <div class="text-xs text-slate-500 mt-1">
             {{ s.designation || '—' }} ·
             <span class="font-semibold">{{ s.pay_type === 'monthly' ? 'Monthly' : 'Daily wage' }}</span>
-            · ₹{{ s.monthly_amount.toLocaleString('en-IN') }}/mo
+            · ₹{{ staffSalaryForPeriod(s, currentPeriod()).toLocaleString('en-IN') }}/mo
+            <span v-if="staffSalaryHistory(s).length > 1" class="text-slate-400">(revised)</span>
           </div>
           <div v-if="s.pay_type === 'daily_wage'" class="text-xs text-emerald-700 mt-1">
             Daily ₹{{ s.daily_wage }} · Hourly ₹{{ s.hourly_wage }}
@@ -668,7 +729,8 @@ onMounted(async () => {
           </div>
           <div v-if="s.phone" class="text-xs text-slate-400 mt-0.5">{{ s.phone }}</div>
         </div>
-        <div class="flex gap-2">
+        <div class="flex gap-2 flex-wrap">
+          <button class="pp-btn pp-btn-ghost !py-1.5" @click="openSalaryIncrement(s)">Salary</button>
           <button class="pp-btn pp-btn-ghost !py-1.5" @click="openEditStaff(s)">Edit</button>
           <button class="pp-btn pp-btn-danger !py-1.5" @click="store.removeStaff(s.id)">Remove</button>
         </div>
@@ -1197,6 +1259,26 @@ onMounted(async () => {
             Daily ₹{{ wagePreview.daily_wage }} · Hourly ₹{{ wagePreview.hourly_wage }} (rounded up)
           </p>
         </div>
+        <div v-if="editingStaffId">
+          <label class="pp-label">Salary effective from (month)</label>
+          <input v-model="salaryEffectiveMonth" type="month" class="pp-input" />
+          <p class="text-xs text-slate-500 mt-1">
+            Salary badalne par yeh month select karo — us month se nayi salary payroll me count hogi. Pehle ke months purani salary se rahenge.
+          </p>
+          <div v-if="editingStaffRecord() && staffSalaryHistory(editingStaffRecord()!).length" class="mt-3 rounded-lg border border-slate-200 p-3">
+            <div class="text-xs font-semibold text-slate-600 mb-2">Salary history</div>
+            <ul class="space-y-1 text-xs">
+              <li
+                v-for="h in staffSalaryHistory(editingStaffRecord()!)"
+                :key="h.effective_period"
+                class="flex justify-between gap-2"
+              >
+                <span>{{ h.effective_period === '0000-01' ? 'Initial' : periodLabel(h.effective_period) }}</span>
+                <span class="font-semibold">₹{{ h.monthly_amount.toLocaleString('en-IN') }}</span>
+              </li>
+            </ul>
+          </div>
+        </div>
         <details class="text-sm">
           <summary class="cursor-pointer text-slate-500 font-semibold">Bank (for transfer)</summary>
           <div class="grid grid-cols-1 gap-2 mt-2">
@@ -1222,6 +1304,34 @@ onMounted(async () => {
         <div class="flex justify-end gap-2 pt-2">
           <button class="pp-btn pp-btn-ghost" @click="showStaffModal = false">Cancel</button>
           <button class="pp-btn pp-btn-primary" @click="saveStaff">Save</button>
+        </div>
+      </div>
+    </PpModal>
+
+    <PpModal
+      v-if="showSalaryIncrementModal"
+      :title="`Salary — ${incrementStaffName}`"
+      @close="showSalaryIncrementModal = false"
+    >
+      <div class="space-y-3">
+        <div>
+          <label class="pp-label">Effective from (month)</label>
+          <input v-model="incrementForm.effective_period" type="month" class="pp-input" />
+          <p class="text-xs text-slate-500 mt-1">
+            Is month se nayi salary payroll me lagegi — increment ya decrement dono.
+          </p>
+        </div>
+        <div>
+          <label class="pp-label">New monthly salary ₹</label>
+          <input v-model.number="incrementForm.monthly_amount" type="number" min="0" class="pp-input" />
+        </div>
+        <div>
+          <label class="pp-label">Note (optional)</label>
+          <input v-model="incrementForm.note" class="pp-input" placeholder="e.g. Annual increment" />
+        </div>
+        <div class="flex justify-end gap-2 pt-2">
+          <button class="pp-btn pp-btn-ghost" @click="showSalaryIncrementModal = false">Cancel</button>
+          <button class="pp-btn pp-btn-primary" @click="saveSalaryIncrement">Save</button>
         </div>
       </div>
     </PpModal>

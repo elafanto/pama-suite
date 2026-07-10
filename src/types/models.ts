@@ -264,6 +264,13 @@ export interface StaffLinePayment {
   mode: PayrollPaymentMode
 }
 
+export interface StaffSalaryEntry {
+  /** First payroll month this amount applies (YYYY-MM). */
+  effective_period: string
+  monthly_amount: number
+  note?: string
+}
+
 export interface Staff extends BaseRecord {
   name: string
   phone: string
@@ -271,6 +278,8 @@ export interface Staff extends BaseRecord {
   pay_type: StaffPayType
   /** Monthly salary (monthly staff) or monthly equivalent for daily wage (÷26). */
   monthly_amount: number
+  /** Salary revisions — payroll uses the latest entry where effective_period ≤ run month. */
+  salary_history?: StaffSalaryEntry[]
   daily_wage: number
   hourly_wage: number
   bank: string

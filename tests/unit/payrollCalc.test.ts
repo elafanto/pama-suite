@@ -19,6 +19,8 @@ import {
   lineBalanceDue,
   periodLastDate,
   sortAdvanceItems,
+  staffSalaryForPeriod,
+  staffWithSalaryForPeriod,
   summarizeDayHours,
 } from '@/services/payrollCalc'
 import { buildStaffLedger } from '@/services/staffLedger'
@@ -51,6 +53,65 @@ describe('deriveWageRates', () => {
   it('divides monthly by 26 and 8 with ceil to rupee', () => {
     expect(deriveWageRates(26000)).toEqual({ daily_wage: 1000, hourly_wage: 125 })
     expect(deriveWageRates(25000)).toEqual({ daily_wage: 962, hourly_wage: 121 })
+  })
+})
+
+describe('staffSalaryForPeriod', () => {
+  const staff: Pick<Staff, 'monthly_amount' | 'salary_history'> = {
+    monthly_amount: 30000,
+    salary_history: [
+      { effective_period: '2026-01', monthly_amount: 25000 },
+      { effective_period: '2026-04', monthly_amount: 28000 },
+      { effective_period: '2026-07', monthly_amount: 30000 },
+    ],
+  }
+
+  it('uses salary before first revision from fallback / earliest entry', () => {
+    expect(staffSalaryForPeriod(staff, '2025-12')).toBe(25000)
+    expect(staffSalaryForPeriod(staff, '2026-01')).toBe(25000)
+    expect(staffSalaryForPeriod(staff, '2026-03')).toBe(25000)
+  })
+
+  it('uses revised salary from effective month onward', () => {
+    expect(staffSalaryForPeriod(staff, '2026-04')).toBe(28000)
+    expect(staffSalaryForPeriod(staff, '2026-06')).toBe(28000)
+    expect(staffSalaryForPeriod(staff, '2026-07')).toBe(30000)
+    expect(staffSalaryForPeriod(staff, '2026-12')).toBe(30000)
+  })
+
+  it('supports salary decrease', () => {
+    const decreased = {
+      monthly_amount: 22000,
+      salary_history: [
+        { effective_period: '2026-01', monthly_amount: 25000 },
+        { effective_period: '2026-05', monthly_amount: 22000 },
+      ],
+    }
+    expect(staffSalaryForPeriod(decreased, '2026-04')).toBe(25000)
+    expect(staffSalaryForPeriod(decreased, '2026-05')).toBe(22000)
+  })
+
+  it('falls back to monthly_amount for legacy staff without history', () => {
+    expect(staffSalaryForPeriod({ monthly_amount: 18000 }, '2026-06')).toBe(18000)
+  })
+})
+
+describe('staffWithSalaryForPeriod', () => {
+  it('derives wage rates from period salary', () => {
+    const staff = {
+      id: '1',
+      monthly_amount: 30000,
+      salary_history: [
+        { effective_period: '2026-01', monthly_amount: 26000 },
+        { effective_period: '2026-06', monthly_amount: 30000 },
+      ],
+    } as Staff
+    const may = staffWithSalaryForPeriod(staff, '2026-05')
+    expect(may.monthly_amount).toBe(26000)
+    expect(may.daily_wage).toBe(1000)
+    const jul = staffWithSalaryForPeriod(staff, '2026-07')
+    expect(jul.monthly_amount).toBe(30000)
+    expect(jul.daily_wage).toBe(1154)
   })
 })
 

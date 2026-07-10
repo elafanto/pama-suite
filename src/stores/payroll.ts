@@ -25,8 +25,12 @@ import {
   periodLabel,
   periodLastDate,
   resolveRunAdvanceRange,
+  staffDisplayRates,
+  staffSalaryForPeriod,
+  staffWithSalaryForPeriod,
   sumLinePayments,
   sumPayrollLines,
+  upsertSalaryHistoryEntry,
 } from '@/services/payrollCalc'
 import { postAdvanceVoucher, postSalaryVoucher } from '@/services/payrollVoucher'
 import { dedupeAllPayrollRuns, pickBestPayrollRun } from '@/services/payrollRuns'
@@ -149,7 +153,7 @@ export const usePayrollStore = defineStore('payroll', () => {
     }
 
     return buildPayrollLine(
-      staff,
+      staffWithSalaryForPeriod(staff, run.period),
       dayHours,
       legacyMarks,
       run.year,
@@ -191,9 +195,13 @@ export const usePayrollStore = defineStore('payroll', () => {
     }
     const rates = deriveWageRates(data.monthly_amount)
     const leaving_date = (data.leaving_date || '').trim()
+    const joinPeriod = currentPeriod()
+    const monthly = Math.max(0, Number(data.monthly_amount) || 0)
     const rec = await staffRepo.create({
       ...data,
       firm_id: firm.activeFirmId,
+      monthly_amount: monthly,
+      salary_history: [{ effective_period: joinPeriod, monthly_amount: monthly }],
       daily_wage: rates.daily_wage,
       hourly_wage: rates.hourly_wage,
       leaving_date,
@@ -208,8 +216,6 @@ export const usePayrollStore = defineStore('payroll', () => {
   async function updateStaff(id: string, patch: Partial<Staff>) {
     const existing = await staffRepo.get(id)
     if (!existing) return
-    const monthly = patch.monthly_amount ?? existing.monthly_amount
-    const rates = deriveWageRates(monthly)
     const leaving_date =
       patch.leaving_date !== undefined ? (patch.leaving_date || '').trim() : (existing.leaving_date || '')
     const is_active = leaving_date
@@ -217,15 +223,55 @@ export const usePayrollStore = defineStore('payroll', () => {
       : patch.is_active !== undefined
         ? patch.is_active
         : existing.is_active
+    const { monthly_amount: _m, daily_wage: _d, hourly_wage: _h, salary_history: _h2, ...rest } = patch
+    const merged = { ...existing, ...rest, leaving_date, is_active }
+    const rates = staffDisplayRates(merged)
     await staffRepo.update(id, {
-      ...patch,
+      ...rest,
       leaving_date,
       is_active,
+      monthly_amount: rates.monthly_amount,
       daily_wage: rates.daily_wage,
       hourly_wage: rates.hourly_wage,
     })
     await load()
     void syncPayrollToCloudIfReady()
+  }
+
+  async function setStaffSalary(
+    staffId: string,
+    effectivePeriod: string,
+    monthlyAmount: number,
+    note = '',
+  ): Promise<{ error?: string }> {
+    const existing = await staffRepo.get(staffId)
+    if (!existing) return { error: 'Staff not found' }
+    const period = effectivePeriod.slice(0, 7)
+    if (!/^\d{4}-\d{2}$/.test(period)) return { error: 'Invalid month' }
+    const history = upsertSalaryHistoryEntry(existing.salary_history ?? [], {
+      effective_period: period,
+      monthly_amount: Math.max(0, Number(monthlyAmount) || 0),
+      note,
+    })
+    const merged = { ...existing, salary_history: history }
+    const rates = staffDisplayRates(merged)
+    await staffRepo.update(staffId, {
+      salary_history: history,
+      monthly_amount: rates.monthly_amount,
+      daily_wage: rates.daily_wage,
+      hourly_wage: rates.hourly_wage,
+    })
+    const firm = useFirmStore()
+    await logActivity(
+      firm.activeFirmId,
+      'update',
+      'staff',
+      staffId,
+      `Salary ${periodLabel(period)}: ₹${rates.monthly_amount.toLocaleString('en-IN')}`,
+    )
+    await load()
+    void syncPayrollToCloudIfReady()
+    return {}
   }
 
   async function removeStaff(id: string) {
@@ -691,6 +737,7 @@ export const usePayrollStore = defineStore('payroll', () => {
     load,
     addStaff,
     updateStaff,
+    setStaffSalary,
     removeStaff,
     recordAdvance,
     updateAdvance,

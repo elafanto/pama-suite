@@ -8,6 +8,7 @@ import type {
   StaffPayType,
   PayrollAdvanceItem,
   PayrollRun,
+  StaffSalaryEntry,
 } from '@/types/models'
 
 export const PAYROLL_WORKING_DAYS = 26
@@ -25,6 +26,73 @@ export function deriveWageRates(monthlyAmount: number): { daily_wage: number; ho
   const daily_wage = monthly > 0 ? ceilRupee(monthly / PAYROLL_WORKING_DAYS) : 0
   const hourly_wage = daily_wage > 0 ? ceilRupee(daily_wage / PAYROLL_HOURS_PER_DAY) : 0
   return { daily_wage, hourly_wage }
+}
+
+const SALARY_HISTORY_FALLBACK_PERIOD = '0000-01'
+
+/** Ordered salary revisions; legacy staff without history get one synthetic entry. */
+export function normalizeSalaryHistory(
+  staff: Pick<Staff, 'monthly_amount' | 'salary_history'>,
+): StaffSalaryEntry[] {
+  const raw = (staff.salary_history ?? []).filter((e) => e.effective_period?.length >= 7)
+  if (raw.length) {
+    return [...raw].sort((a, b) => a.effective_period.localeCompare(b.effective_period))
+  }
+  const monthly = Math.max(0, Number(staff.monthly_amount) || 0)
+  if (monthly > 0) {
+    return [{ effective_period: SALARY_HISTORY_FALLBACK_PERIOD, monthly_amount: monthly }]
+  }
+  return []
+}
+
+/** Monthly salary effective for a payroll period (latest revision on or before that month). */
+export function staffSalaryForPeriod(
+  staff: Pick<Staff, 'monthly_amount' | 'salary_history'>,
+  period: string,
+): number {
+  const p = period.slice(0, 7)
+  const history = normalizeSalaryHistory(staff)
+  let best: StaffSalaryEntry | undefined
+  for (const entry of history) {
+    if (entry.effective_period <= p) {
+      if (!best || entry.effective_period > best.effective_period) best = entry
+    }
+  }
+  if (best) return best.monthly_amount
+  if (history.length) return history[0].monthly_amount
+  return Math.max(0, Number(staff.monthly_amount) || 0)
+}
+
+/** Staff record with monthly/daily/hourly rates resolved for a payroll month. */
+export function staffWithSalaryForPeriod(staff: Staff, period: string): Staff {
+  const monthly_amount = staffSalaryForPeriod(staff, period)
+  const rates = deriveWageRates(monthly_amount)
+  return { ...staff, monthly_amount, daily_wage: rates.daily_wage, hourly_wage: rates.hourly_wage }
+}
+
+export function staffDisplayRates(
+  staff: Pick<Staff, 'monthly_amount' | 'salary_history'>,
+  refPeriod = currentPeriod(),
+): { monthly_amount: number; daily_wage: number; hourly_wage: number } {
+  const monthly_amount = staffSalaryForPeriod(staff, refPeriod)
+  return { monthly_amount, ...deriveWageRates(monthly_amount) }
+}
+
+export function upsertSalaryHistoryEntry(
+  history: StaffSalaryEntry[],
+  entry: StaffSalaryEntry,
+): StaffSalaryEntry[] {
+  const period = entry.effective_period.slice(0, 7)
+  const next = history.filter((e) => e.effective_period !== SALARY_HISTORY_FALLBACK_PERIOD)
+  const idx = next.findIndex((e) => e.effective_period === period)
+  const row: StaffSalaryEntry = {
+    effective_period: period,
+    monthly_amount: Math.max(0, Number(entry.monthly_amount) || 0),
+    note: (entry.note || '').trim() || undefined,
+  }
+  if (idx >= 0) next[idx] = row
+  else next.push(row)
+  return next.sort((a, b) => a.effective_period.localeCompare(b.effective_period))
 }
 
 export function periodLabel(period: string): string {
