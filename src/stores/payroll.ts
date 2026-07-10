@@ -8,13 +8,14 @@ import {
   MAX_STAFF,
   advancePayrollPeriod,
   advanceTotalForPeriod,
-  advancesForSalaryCycle,
+  advancesForAdjustment,
   advancesForStaffInPeriod,
-  advanceTotalForSalaryCycle,
-  buildAdvanceItems,
+  advanceTotalForAdjustment,
+  buildAdvanceItemsForAdjustment,
   buildPayrollLine,
   currentPeriod,
   dayFromPreset,
+  defaultAdvanceRangeForSalaryDate,
   defaultSalaryDateForPeriod,
   deriveLinePayStatus,
   deriveWageRates,
@@ -23,7 +24,7 @@ import {
   normalizeDayHours,
   normalizePayrollLine,
   periodLabel,
-  resolveRunSalaryDate,
+  resolveRunAdjustmentConfig,
   sumLinePayments,
   sumPayrollLines,
 } from '@/services/payrollCalc'
@@ -75,6 +76,13 @@ const runRepo = createRepo<PayrollRun>(db.payroll_runs)
 
 export type NewStaff = Omit<Staff, 'id' | 'firm_id' | 'created_at' | 'updated_at' | 'is_deleted' | '_dirty' | 'daily_wage' | 'hourly_wage'>
 
+export type RecalculateRunOptions = {
+  salaryDate: string
+  adjustmentPeriod: string
+  advanceFrom: string
+  advanceTo: string
+}
+
 export const usePayrollStore = defineStore('payroll', () => {
   const staffList = ref<Staff[]>([])
   const advances = ref<StaffAdvance[]>([])
@@ -112,10 +120,23 @@ export const usePayrollStore = defineStore('payroll', () => {
     return advanceTotalForPeriod(advances.value, staffId, period)
   }
 
-  function salaryCycleAdvanceBundle(staffId: string, salaryDate: string, payrollPeriod: string) {
-    const items = buildAdvanceItems(advances.value, staffId, salaryDate, payrollPeriod)
-    const total = advanceTotalForSalaryCycle(advances.value, staffId, salaryDate, payrollPeriod)
-    return { items, total }
+  function adjustmentAdvanceBundle(staffId: string, run: PayrollRun) {
+    const { adjustmentPeriod, advanceFrom, advanceTo } = resolveRunAdjustmentConfig(run)
+    const items = buildAdvanceItemsForAdjustment(
+      advances.value,
+      staffId,
+      adjustmentPeriod,
+      advanceFrom,
+      advanceTo,
+    )
+    const total = advanceTotalForAdjustment(
+      advances.value,
+      staffId,
+      adjustmentPeriod,
+      advanceFrom,
+      advanceTo,
+    )
+    return { items, total, adjustmentPeriod }
   }
 
   function buildLineForStaff(
@@ -126,12 +147,11 @@ export const usePayrollStore = defineStore('payroll', () => {
     existing?: PayrollLine,
     applySalaryAdvances = false,
   ): PayrollLine {
-    const salaryDate = resolveRunSalaryDate(run)
     let items: PayrollLine['advance_items'] = []
     let total = 0
 
     if (applySalaryAdvances) {
-      const bundle = salaryCycleAdvanceBundle(staff.id, salaryDate, run.period)
+      const bundle = adjustmentAdvanceBundle(staff.id, run)
       items = bundle.items
       total = bundle.total
     } else if (
@@ -447,7 +467,7 @@ export const usePayrollStore = defineStore('payroll', () => {
     return { ok: true }
   }
 
-  async function syncRunAdvanceAppliedFlags(period: string, lines: PayrollLine[]) {
+  async function syncRunAdvanceAppliedFlags(adjustmentPeriod: string, lines: PayrollLine[]) {
     const staffIds = new Set(lines.map((l) => l.staff_id))
     const toApplyIds = new Set<string>()
     for (const line of lines) {
@@ -457,9 +477,9 @@ export const usePayrollStore = defineStore('payroll', () => {
     for (const adv of advances.value) {
       if (!staffIds.has(adv.staff_id)) continue
       const shouldApply = toApplyIds.has(adv.id)
-      const wasAppliedHere = adv.applied_period === period
+      const wasAppliedHere = adv.applied_period === adjustmentPeriod
       if (shouldApply && !wasAppliedHere) {
-        await advanceRepo.update(adv.id, { applied_period: period })
+        await advanceRepo.update(adv.id, { applied_period: adjustmentPeriod })
       } else if (!shouldApply && wasAppliedHere) {
         await advanceRepo.update(adv.id, { applied_period: '' })
       }
@@ -467,17 +487,35 @@ export const usePayrollStore = defineStore('payroll', () => {
     await load()
   }
 
-  async function recalculateRun(period: string, salaryDate?: string) {
+  async function recalculateRun(period: string, opts: RecalculateRunOptions) {
     const run = await ensureRun(period)
     if (run.status === 'paid') return { error: 'Month already paid' }
+    const { salaryDate, adjustmentPeriod, advanceFrom, advanceTo } = opts
     if (!salaryDate?.trim()) return { error: 'Salary day select karein' }
+    if (!adjustmentPeriod?.trim()) return { error: 'Adjustment month select karein' }
+    if (!advanceFrom?.trim() || !advanceTo?.trim()) return { error: 'Advance from / to select karein' }
+    if (advanceFrom > advanceTo) return { error: 'Advance from, to se pehle honi chahiye' }
 
-    await runRepo.update(run.id, { salary_date: salaryDate, payment_date: salaryDate })
+    await runRepo.update(run.id, {
+      salary_date: salaryDate,
+      payment_date: salaryDate,
+      adjustment_period: adjustmentPeriod,
+      advance_from: advanceFrom,
+      advance_to: advanceTo,
+    })
     await load()
 
     const fresh = await getRunForPeriod(period)
     if (!fresh) return { error: 'Payroll run not found' }
-    const runForCalc = { ...fresh, salary_date: salaryDate, payment_date: salaryDate, status: 'finalized' as const }
+    const runForCalc = {
+      ...fresh,
+      salary_date: salaryDate,
+      payment_date: salaryDate,
+      adjustment_period: adjustmentPeriod,
+      advance_from: advanceFrom,
+      advance_to: advanceTo,
+      status: 'finalized' as const,
+    }
 
     const lines = staffForPeriod(period).map((s) => {
       const existing = fresh.lines.find((l) => l.staff_id === s.id)
@@ -492,26 +530,44 @@ export const usePayrollStore = defineStore('payroll', () => {
       )
     })
     await persistRunLines(fresh, lines, 'finalized')
-    await syncRunAdvanceAppliedFlags(period, lines)
+    await syncRunAdvanceAppliedFlags(adjustmentPeriod, lines)
     void syncPayrollToCloudIfReady()
     return { ok: true }
   }
 
   async function updateRunSalaryDate(period: string, salaryDate: string) {
-    return recalculateRun(period, salaryDate)
+    const run = await getRunForPeriod(period)
+    const cfg = run ? resolveRunAdjustmentConfig(run) : {
+      adjustmentPeriod: period,
+      advanceFrom: defaultAdvanceRangeForSalaryDate(salaryDate).from,
+      advanceTo: salaryDate,
+    }
+    return recalculateRun(period, {
+      salaryDate,
+      adjustmentPeriod: cfg.adjustmentPeriod,
+      advanceFrom: cfg.advanceFrom,
+      advanceTo: cfg.advanceTo,
+    })
   }
 
-  async function markSalaryCycleAdvancesApplied(
+  async function markAdjustmentAdvancesApplied(
     staffId: string,
-    period: string,
-    salaryDate: string,
+    adjustmentPeriod: string,
+    advanceFrom: string,
+    advanceTo: string,
     amount: number,
   ) {
-    const open = advancesForSalaryCycle(advances.value, staffId, salaryDate, period)
+    const open = advancesForAdjustment(
+      advances.value,
+      staffId,
+      adjustmentPeriod,
+      advanceFrom,
+      advanceTo,
+    )
     let remaining = amount
     for (const adv of open) {
       if (remaining <= 0) break
-      await advanceRepo.update(adv.id, { applied_period: period })
+      await advanceRepo.update(adv.id, { applied_period: adjustmentPeriod })
       remaining -= adv.amount
     }
   }
@@ -550,7 +606,14 @@ export const usePayrollStore = defineStore('payroll', () => {
     })
 
     if (pay_status === 'paid' && line.advance_deduction > 0) {
-      await markSalaryCycleAdvancesApplied(staffId, period, resolveRunSalaryDate(run), line.advance_deduction)
+      const cfg = resolveRunAdjustmentConfig(run)
+      await markAdjustmentAdvancesApplied(
+        staffId,
+        cfg.adjustmentPeriod,
+        cfg.advanceFrom,
+        cfg.advanceTo,
+        line.advance_deduction,
+      )
     }
 
     await persistRunLines(run, lines)
@@ -639,7 +702,7 @@ export const usePayrollStore = defineStore('payroll', () => {
     ensureRun,
     bulkMarkDays,
     updateRunLine,
-    salaryCycleAdvanceBundle,
+    adjustmentAdvanceBundle,
     updateRunSalaryDate,
     recalculateRun,
     payStaffLine,

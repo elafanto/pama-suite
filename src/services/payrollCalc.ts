@@ -127,8 +127,71 @@ export function salaryCycleStartDate(salaryDate: string): string {
   return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-${String(prev.getDate()).padStart(2, '0')}`
 }
 
-/** Unapplied advances from cycle start through salary date (inclusive).
- *  Also includes advances already applied to payrollPeriod (same month re-calc). */
+/** Default advance range from salary day (same day prior month → salary day). */
+export function defaultAdvanceRangeForSalaryDate(salaryDate: string): { from: string; to: string } {
+  return { from: salaryCycleStartDate(salaryDate), to: salaryDate }
+}
+
+export function resolveRunAdjustmentConfig(
+  run: Pick<PayrollRun, 'period' | 'adjustment_period' | 'advance_from' | 'advance_to' | 'salary_date' | 'payment_date'>,
+): { adjustmentPeriod: string; advanceFrom: string; advanceTo: string } {
+  const salaryDate = resolveRunSalaryDate(run)
+  const defaults = defaultAdvanceRangeForSalaryDate(salaryDate)
+  return {
+    adjustmentPeriod: run.adjustment_period || run.period,
+    advanceFrom: run.advance_from || defaults.from,
+    advanceTo: run.advance_to || defaults.to,
+  }
+}
+
+/** Unapplied advances in date range for the selected adjustment month.
+ *  Also includes advances already applied to the same adjustment month (re-calc). */
+export function advancesForAdjustment(
+  advances: AdvanceCalcRow[],
+  staffId: string,
+  adjustmentPeriod: string,
+  fromDate: string,
+  toDate: string,
+) {
+  if (!adjustmentPeriod || !fromDate || !toDate) return []
+  return advances
+    .filter((a) => {
+      if (a.staff_id !== staffId || a.date < fromDate || a.date > toDate) return false
+      const targetMonth = advancePayrollPeriod(a) || adjustmentPeriod
+      if (targetMonth !== adjustmentPeriod) return false
+      if (!a.applied_period) return true
+      return a.applied_period === adjustmentPeriod
+    })
+    .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))
+}
+
+export function advanceTotalForAdjustment(
+  advances: AdvanceCalcRow[],
+  staffId: string,
+  adjustmentPeriod: string,
+  fromDate: string,
+  toDate: string,
+): number {
+  return advancesForAdjustment(advances, staffId, adjustmentPeriod, fromDate, toDate)
+    .reduce((s, a) => s + a.amount, 0)
+}
+
+export function buildAdvanceItemsForAdjustment(
+  advances: AdvanceCalcRow[],
+  staffId: string,
+  adjustmentPeriod: string,
+  fromDate: string,
+  toDate: string,
+): PayrollAdvanceItem[] {
+  return advancesForAdjustment(advances, staffId, adjustmentPeriod, fromDate, toDate).map((a) => ({
+    advance_id: a.id,
+    date: a.date,
+    amount: a.amount,
+    narration: a.narration || '',
+  }))
+}
+
+/** @deprecated Use advancesForAdjustment with explicit from/to range. */
 export function advancesForSalaryCycle(
   advances: AdvanceCalcRow[],
   staffId: string,

@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   advancePayrollPeriod,
   advanceTotalForPeriod,
+  advanceTotalForAdjustment,
   advanceTotalForSalaryCycle,
   advancesForStaffInPeriod,
+  advancesForAdjustment,
   advancesForSalaryCycle,
   advanceAdjustedInLabel,
+  buildAdvanceItemsForAdjustment,
   buildAdvanceItems,
   buildPayrollLine,
   calcEarnedFromHours,
@@ -177,6 +180,49 @@ describe('buildPayrollLine', () => {
     expect(line.net_pay).toBe(0)
     expect(line.pay_status).toBe('pending')
     expect(lineBalanceDue(line)).toBe(0)
+  })
+})
+
+describe('adjustment advances (from/to + month)', () => {
+  const base = {
+    firm_id: 'f1',
+    staff_id: 's1',
+    staff_name: 'R',
+    mode: 'cash' as const,
+    narration: '',
+    created_at: '',
+    updated_at: '',
+    is_deleted: false,
+  }
+  const advances: StaffAdvance[] = [
+    { ...base, id: 'a0', date: '2026-06-09', amount: 1000, payroll_period: '2026-06' },
+    { ...base, id: 'a1', date: '2026-06-10', amount: 2000, payroll_period: '2026-06' },
+    { ...base, id: 'a2', date: '2026-07-05', amount: 3000, payroll_period: '2026-06' },
+    { ...base, id: 'a3', date: '2026-07-11', amount: 5000, payroll_period: '2026-06' },
+    { ...base, id: 'a5', date: '2026-06-15', amount: 800, payroll_period: '2026-07' },
+    { ...base, id: 'a4', date: '2026-06-20', amount: 1500, applied_period: '2026-05', payroll_period: '2026-06' },
+  ]
+
+  const from = '2026-06-10'
+  const to = '2026-07-10'
+  const month = '2026-06'
+
+  it('includes advances in date range for adjustment month only', () => {
+    expect(advancesForAdjustment(advances, 's1', month, from, to).map((a) => a.id)).toEqual(['a1', 'a2'])
+    expect(advanceTotalForAdjustment(advances, 's1', month, from, to)).toBe(5000)
+    expect(buildAdvanceItemsForAdjustment(advances, 's1', month, from, to)).toEqual([
+      { advance_id: 'a1', date: '2026-06-10', amount: 2000, narration: '' },
+      { advance_id: 'a2', date: '2026-07-05', amount: 3000, narration: '' },
+    ])
+  })
+
+  it('excludes advances tagged for another adjustment month', () => {
+    expect(advancesForAdjustment(advances, 's1', month, '2026-06-01', '2026-07-31').some((a) => a.id === 'a5')).toBe(false)
+  })
+
+  it('keeps advances applied to the same adjustment month on re-calc', () => {
+    const adjusted = advances.map((a) => (a.id === 'a1' ? { ...a, applied_period: '2026-06' } : a))
+    expect(advancesForAdjustment(adjusted, 's1', month, from, to).map((a) => a.id)).toEqual(['a1', 'a2'])
   })
 })
 
