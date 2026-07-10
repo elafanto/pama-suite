@@ -513,6 +513,53 @@ export const usePayrollStore = defineStore('payroll', () => {
     return { ok: true }
   }
 
+  async function resetAdvanceAdjustments(salaryPeriod: string) {
+    const firm = useFirmStore()
+    if (!salaryPeriod?.trim()) return { error: 'Month select karein' }
+
+    const run = await getRunForPeriod(salaryPeriod)
+    if (run?.status === 'paid') return { error: 'Is month ki salary paid hai — reset nahi ho sakta' }
+
+    const toReset = advances.value.filter((a) => a.applied_period === salaryPeriod)
+    const runHasAdvances = run?.lines.some((l) => (l.advance_deduction || 0) > 0) ?? false
+    if (!toReset.length && !runHasAdvances) {
+      return { error: 'Is month ke koi adjusted advance nahi mile' }
+    }
+
+    for (const adv of toReset) {
+      await advanceRepo.update(adv.id, { applied_period: '' })
+    }
+
+    if (run) {
+      const draftRun = { ...run, status: 'draft' as const }
+      const staffById = new Map(staffForPeriod(salaryPeriod).map((s) => [s.id, s]))
+      const lines = run.lines.map((line) => {
+        if (line.pay_status === 'paid') return line
+        const staff = staffById.get(line.staff_id)
+        if (!staff) return line
+        return buildLineForStaff(
+          staff,
+          draftRun,
+          normalizeDayHours(line),
+          line.attendance,
+          { ...line, other_deduction: line.other_deduction },
+        )
+      })
+      await persistRunLines(run, lines, 'draft')
+    }
+
+    await logActivity(
+      firm.activeFirmId,
+      'update',
+      'payroll_run',
+      run?.id || salaryPeriod,
+      `Advance adjustments reset — ${periodLabel(salaryPeriod)}`,
+    )
+    await load()
+    void syncPayrollToCloudIfReady()
+    return { ok: true, count: toReset.length }
+  }
+
   async function markRangeAdvancesApplied(
     staffId: string,
     salaryPeriod: string,
@@ -655,6 +702,7 @@ export const usePayrollStore = defineStore('payroll', () => {
     updateRunLine,
     rangeAdvanceBundle,
     recalculateRun,
+    resetAdvanceAdjustments,
     payStaffLine,
     payRun,
     currentPeriod,

@@ -79,6 +79,7 @@ const payslipStaffId = ref('')
 const range = defaultAdvanceRangeForPeriod(currentPeriod())
 const advanceFrom = ref(range.from)
 const advanceTo = ref(range.to)
+const resetAdvanceMonth = ref(currentPeriod())
 const paymentMode = ref<PayrollPaymentMode>('transfer')
 const paymentDate = ref(new Date().toISOString().slice(0, 10))
 
@@ -219,6 +220,7 @@ function syncAdvanceRangeDefaults() {
 watch(period, () => {
   selectedBulkDays.value = new Set()
   attendanceEditMode.value = false
+  resetAdvanceMonth.value = period.value
   syncAdvanceRangeDefaults()
   void ensurePeriodRun()
 })
@@ -483,6 +485,23 @@ const cycleAdvances = computed(() => {
     (a) => a.date >= advanceFrom.value && a.date <= advanceTo.value,
   )
 })
+
+const adjustedAdvancesForMonth = computed(() =>
+  store.advances.filter((a) => a.applied_period === resetAdvanceMonth.value),
+)
+
+async function resetAdvanceAdjustments() {
+  const count = adjustedAdvancesForMonth.value.length
+  const run = store.runs.find((r) => r.period === resetAdvanceMonth.value && !r.is_deleted)
+  const msg = count
+    ? `${periodLabel(resetAdvanceMonth.value)} ke ${count} adjusted advance reset karein? Dubara Calculate karna hoga.`
+    : `${periodLabel(resetAdvanceMonth.value)} ki salary se advance adjustment hata dein? Dubara Calculate karna hoga.`
+  if (run?.status === 'partial' && !confirm(`${msg}\n\nNote: kuch staff ko partial payment ho chuki hai.`)) return
+  else if (!confirm(msg)) return
+  const res = await store.resetAdvanceAdjustments(resetAdvanceMonth.value)
+  if (res && 'error' in res) alert(res.error)
+  else alert(`Reset ho gaya — ${'count' in res ? res.count : 0} advance dubara pending.`)
+}
 
 function openStaffPay(lineStaffId: string, balance: number) {
   staffPayStaffId.value = lineStaffId
@@ -957,6 +976,27 @@ onMounted(async () => {
 
     <!-- ADVANCE -->
     <section v-else-if="tab === 'advance'" class="space-y-3">
+      <div class="pp-card p-3 bg-amber-50 border border-amber-200 flex flex-wrap items-end gap-2">
+        <div>
+          <label class="pp-label !mb-1">Reset adjusted advances — month</label>
+          <input v-model="resetAdvanceMonth" type="month" class="pp-input !w-auto" />
+        </div>
+        <button
+          type="button"
+          class="pp-btn pp-btn-danger !py-1.5"
+          @click="resetAdvanceAdjustments"
+        >
+          Reset adjusted
+        </button>
+        <p class="text-xs text-amber-800 w-full">
+          <template v-if="adjustedAdvancesForMonth.length">
+            {{ periodLabel(resetAdvanceMonth) }} me {{ adjustedAdvancesForMonth.length }} advance adjusted mark hain — reset par pending ho jayenge.
+          </template>
+          <template v-else>
+            {{ periodLabel(resetAdvanceMonth) }} me koi adjusted advance nahi; phir bhi salary run se advance cut hata sakte hain.
+          </template>
+        </p>
+      </div>
       <div class="flex flex-wrap gap-2 items-center justify-between">
         <button class="pp-btn pp-btn-primary" @click="openAdvance">+ Record advance</button>
         <p class="text-xs text-slate-500">Calculate par {{ advanceFrom }} se {{ advanceTo }} tak ke advances {{ periodLabel(period) }} salary me adjust honge.</p>
@@ -971,7 +1011,8 @@ onMounted(async () => {
         </div>
         <div class="text-right flex flex-col items-end gap-1">
           <div class="font-bold">₹{{ a.amount.toLocaleString('en-IN') }}</div>
-          <span v-if="!a.applied_period" class="text-xs text-amber-600">Pending — {{ periodLabel(period) }} salary</span>
+          <span v-if="!a.applied_period" class="text-xs text-amber-600">Pending adjust</span>
+          <span v-else class="text-xs text-slate-400">Edit/delete band — pehle reset karein</span>
           <div v-if="!a.applied_period" class="flex gap-1">
             <button type="button" class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs" @click="openEditAdvance(a)">Edit</button>
             <button type="button" class="pp-btn pp-btn-danger !py-1 !px-2 text-xs" @click="deleteAdvance(a.id)">Delete</button>
