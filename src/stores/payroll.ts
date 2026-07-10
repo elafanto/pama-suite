@@ -52,6 +52,13 @@ function deriveRunStatus(lines: PayrollLine[]): PayrollRunStatus {
   return 'draft'
 }
 
+function resolveRunStatus(run: PayrollRun, lines: PayrollLine[]): PayrollRunStatus {
+  const derived = deriveRunStatus(lines)
+  if (derived === 'paid' || derived === 'partial') return derived
+  if (run.status === 'finalized') return 'finalized'
+  return derived
+}
+
 function preserveLinePayFields(line: PayrollLine) {
   return {
     payments: line.payments ?? [],
@@ -91,7 +98,7 @@ export const usePayrollStore = defineStore('payroll', () => {
     runs.value = (await runRepo.all(firm.activeFirmId))
       .map((run) => {
         const lines = normalizeRunLines(run)
-        return { ...run, lines, status: deriveRunStatus(lines) }
+        return { ...run, lines, status: resolveRunStatus(run, lines) }
       })
       .sort((a, b) => b.period.localeCompare(a.period))
     loaded.value = true
@@ -117,9 +124,24 @@ export const usePayrollStore = defineStore('payroll', () => {
     dayHours: Record<string, DayAttendance> | undefined,
     legacyMarks: Record<string, AttendanceMark | ''> | undefined,
     existing?: PayrollLine,
+    applySalaryAdvances = false,
   ): PayrollLine {
     const salaryDate = resolveRunSalaryDate(run)
-    const { items, total } = salaryCycleAdvanceBundle(staff.id, salaryDate, run.period)
+    let items: PayrollLine['advance_items'] = []
+    let total = 0
+
+    if (applySalaryAdvances) {
+      const bundle = salaryCycleAdvanceBundle(staff.id, salaryDate, run.period)
+      items = bundle.items
+      total = bundle.total
+    } else if (
+      (run.status === 'finalized' || run.status === 'partial' || run.status === 'paid')
+      && existing
+    ) {
+      items = existing.advance_items ?? []
+      total = existing.advance_deduction ?? 0
+    }
+
     return buildPayrollLine(
       staff,
       dayHours,
@@ -299,7 +321,7 @@ export const usePayrollStore = defineStore('payroll', () => {
     if (!matches.length) return undefined
     const run = pickBestPayrollRun(matches)
     const lines = normalizeRunLines(run)
-    return { ...run, lines, status: deriveRunStatus(lines) }
+    return { ...run, lines, status: resolveRunStatus(run, lines) }
   }
 
   async function syncRunStaff(run: PayrollRun): Promise<PayrollRun> {
@@ -445,33 +467,38 @@ export const usePayrollStore = defineStore('payroll', () => {
     await load()
   }
 
-  async function recalculateRun(period: string) {
+  async function recalculateRun(period: string, salaryDate?: string) {
     const run = await ensureRun(period)
     if (run.status === 'paid') return { error: 'Month already paid' }
+    if (!salaryDate?.trim()) return { error: 'Salary day select karein' }
+
+    await runRepo.update(run.id, { salary_date: salaryDate, payment_date: salaryDate })
+    await load()
+
+    const fresh = await getRunForPeriod(period)
+    if (!fresh) return { error: 'Payroll run not found' }
+    const runForCalc = { ...fresh, salary_date: salaryDate, payment_date: salaryDate, status: 'finalized' as const }
 
     const lines = staffForPeriod(period).map((s) => {
-      const existing = run.lines.find((l) => l.staff_id === s.id)
+      const existing = fresh.lines.find((l) => l.staff_id === s.id)
       if (existing?.pay_status === 'paid') return existing
       return buildLineForStaff(
         s,
-        run,
+        runForCalc,
         existing ? normalizeDayHours(existing) : {},
         existing?.attendance,
         existing,
+        true,
       )
     })
-    await persistRunLines(run, lines, 'finalized')
+    await persistRunLines(fresh, lines, 'finalized')
     await syncRunAdvanceAppliedFlags(period, lines)
     void syncPayrollToCloudIfReady()
     return { ok: true }
   }
 
   async function updateRunSalaryDate(period: string, salaryDate: string) {
-    const run = await ensureRun(period)
-    if (run.status === 'paid') return { error: 'Month already paid' }
-    await runRepo.update(run.id, { salary_date: salaryDate, payment_date: salaryDate })
-    await load()
-    return recalculateRun(period)
+    return recalculateRun(period, salaryDate)
   }
 
   async function markSalaryCycleAdvancesApplied(

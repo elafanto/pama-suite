@@ -218,23 +218,13 @@ watch(period, () => {
   void ensurePeriodRun()
 })
 
-watch(salaryDate, async (next, prev) => {
-  if (!next || next === prev) return
-  paymentDate.value = next
-  await ensurePeriodRun()
-  const run = currentRun.value
-  if (!run || run.period !== period.value) return
-  if (run.status === 'paid') return
-  if (run.salary_date === next) return
-  const res = await store.updateRunSalaryDate(period.value, next)
-  if (res && 'error' in res) alert(res.error)
-})
-
 watch(currentRun, (run) => {
   if (!run) return
   const resolved = resolveRunSalaryDate(run)
   if (salaryDate.value !== resolved) salaryDate.value = resolved
-  paymentDate.value = resolved
+  if (run.status === 'finalized' || run.status === 'partial' || run.status === 'paid') {
+    paymentDate.value = resolved
+  }
 }, { immediate: true })
 watch(tab, (t) => {
   if (t !== 'attendance') attendanceEditMode.value = false
@@ -390,9 +380,11 @@ async function setOtherDeduction(staffId: string, amount: number) {
   await store.updateRunLine(period.value, staffId, { other_deduction: Math.max(0, amount) })
 }
 
-async function recalculate() {
-  const res = await store.recalculateRun(period.value)
+async function calculateSalary() {
+  if (!salaryDate.value) return alert('Salary day select karein.')
+  const res = await store.recalculateRun(period.value, salaryDate.value)
   if (res && 'error' in res) alert(res.error)
+  else paymentDate.value = salaryDate.value
 }
 
 function staffHoursMessage(staffId: string): string | null {
@@ -474,14 +466,12 @@ async function saveAdvance() {
     : await store.recordAdvance(payload)
   if ('error' in res) return alert(res.error)
   showAdvanceModal.value = false
-  await store.recalculateRun(period.value)
 }
 
 async function deleteAdvance(id: string) {
   if (!confirm('Ye advance delete karein?')) return
   const res = await store.removeAdvance(id)
   if ('error' in res) return alert(res.error)
-  await store.recalculateRun(period.value)
 }
 
 const cycleAdvances = computed(() => {
@@ -565,6 +555,14 @@ onMounted(async () => {
       <input v-model="period" type="month" class="pp-input !w-auto" />
       <label class="text-sm font-semibold text-slate-600">Salary day</label>
       <input v-model="salaryDate" type="date" class="pp-input !w-auto" :disabled="currentRun?.status === 'paid'" />
+      <button
+        type="button"
+        class="pp-btn pp-btn-primary !py-1.5"
+        :disabled="currentRun?.status === 'paid'"
+        @click="calculateSalary"
+      >
+        Calculate
+      </button>
       <span v-if="salaryDate" class="text-xs text-slate-500">
         Advance window: {{ salaryCycleStartDate(salaryDate) }} → {{ salaryDate }}
       </span>
@@ -818,8 +816,13 @@ onMounted(async () => {
 
     <!-- SALARY -->
     <section v-else-if="tab === 'salary'" class="space-y-4">
-      <div class="flex flex-wrap gap-2">
-        <button class="pp-btn pp-btn-ghost" :disabled="currentRun?.status === 'paid'" @click="recalculate">Recalculate</button>
+      <div class="flex flex-wrap gap-2 items-center">
+        <p v-if="currentRun?.status === 'draft'" class="text-xs text-amber-700">
+          Salary month + salary day select karke upar <strong>Calculate</strong> dabayein — tab tak ke advances is month ki salary me adjust honge.
+        </p>
+        <p v-else-if="currentRun?.status === 'finalized'" class="text-xs text-emerald-700">
+          Calculated — salary day tak ke advances adjust ho chuke hain. Salary day badle to dubara Calculate dabayein.
+        </p>
         <button
           v-if="currentRun"
           type="button"
@@ -947,7 +950,7 @@ onMounted(async () => {
     <section v-else-if="tab === 'advance'" class="space-y-3">
       <div class="flex flex-wrap gap-2 items-center justify-between">
         <button class="pp-btn pp-btn-primary" @click="openAdvance">+ Record advance</button>
-        <p class="text-xs text-slate-500">Salary day tak ke advances ({{ salaryCycleStartDate(salaryDate) }} se {{ salaryDate }}) is month ki salary me adjust honge.</p>
+        <p class="text-xs text-slate-500">Calculate dabane par salary day ({{ salaryDate }}) tak ke advances ({{ salaryCycleStartDate(salaryDate) }} se) is month ki salary me adjust honge.</p>
       </div>
       <div v-if="cycleAdvances.length === 0" class="pp-card p-6 text-center text-slate-400">Is salary cycle me koi advance nahi.</div>
       <div v-for="a in cycleAdvances" :key="a.id" class="pp-card p-3 flex justify-between gap-2 flex-wrap text-sm">
