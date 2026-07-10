@@ -176,11 +176,55 @@ export function sumLinePayments(line: Pick<PayrollLine, 'payments' | 'paid_amoun
 }
 
 export function lineBalanceDue(line: Pick<PayrollLine, 'net_pay' | 'payments' | 'paid_amount'>): number {
-  return Math.max(0, line.net_pay - sumLinePayments(line))
+  return line.net_pay - sumLinePayments(line)
+}
+
+export function advanceExceedsEarned(line: Pick<PayrollLine, 'earned' | 'advance_deduction'>): boolean {
+  return (line.advance_deduction || 0) > (line.earned || 0)
+}
+
+export function advanceOverEarnedAmount(line: Pick<PayrollLine, 'earned' | 'advance_deduction'>): number {
+  return Math.max(0, (line.advance_deduction || 0) - (line.earned || 0))
+}
+
+export function formatPayrollMoney(amount: number): string {
+  const n = Math.round(Number(amount) || 0)
+  if (n < 0) return `− ₹${Math.abs(n).toLocaleString('en-IN')}`
+  return `₹${n.toLocaleString('en-IN')}`
+}
+
+export type AdvanceSortMode = 'date' | 'amount'
+
+export function sortAdvanceItems<T extends { date: string; amount: number; advance_id?: string }>(
+  items: T[],
+  mode: AdvanceSortMode,
+): T[] {
+  const copy = [...items]
+  if (mode === 'amount') {
+    return copy.sort((a, b) => b.amount - a.amount || a.date.localeCompare(b.date))
+  }
+  return copy.sort(
+    (a, b) => a.date.localeCompare(b.date) || (a.advance_id || '').localeCompare(b.advance_id || ''),
+  )
+}
+
+export function sortStaffAdvances<T extends { date: string; amount: number; id: string }>(
+  items: T[],
+  mode: AdvanceSortMode,
+): T[] {
+  const copy = [...items]
+  if (mode === 'amount') {
+    return copy.sort((a, b) => b.amount - a.amount || a.date.localeCompare(b.date))
+  }
+  return copy.sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))
 }
 
 export function deriveLinePayStatus(line: Pick<PayrollLine, 'net_pay' | 'payments' | 'paid_amount'>): StaffLinePayStatus {
   const paid = sumLinePayments(line)
+  if (line.net_pay <= 0) {
+    if (paid <= 0) return line.net_pay === 0 ? 'paid' : 'pending'
+    return 'partial'
+  }
   if (paid <= 0) return 'pending'
   if (paid >= line.net_pay) return 'paid'
   return 'partial'
@@ -426,12 +470,12 @@ export function buildPayrollLine(
 
   const summary = summarizeDayHours(day_hours, dim)
   const earned = calcEarnedFromHours(staff.pay_type, staff.monthly_amount, staff.hourly_wage, summary)
-  const adv = Math.min(Math.max(0, advanceDeduction), earned)
-  const other = Math.min(Math.max(0, otherDeduction), Math.max(0, earned - adv))
-  const net = Math.max(0, earned - adv - other)
+  const adv = Math.max(0, advanceDeduction)
+  const other = Math.min(Math.max(0, otherDeduction), Math.max(0, earned))
+  const net = earned - adv - other
   const payments = existing?.payments ? [...existing.payments] : []
   const paid_amount = payments.length ? sumLinePayments({ payments, paid_amount: 0 }) : Math.max(0, existing?.paid_amount || 0)
-  const cappedPaid = Math.min(paid_amount, net)
+  const cappedPaid = net > 0 ? Math.min(paid_amount, net) : 0
   const pay_status = deriveLinePayStatus({ net_pay: net, paid_amount: cappedPaid, payments })
 
   return {

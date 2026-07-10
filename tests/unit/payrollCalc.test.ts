@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   advanceAdjustedInLabel,
+  advanceExceedsEarned,
+  advanceOverEarnedAmount,
   advancePayrollPeriod,
   advanceTotalForPeriod,
   advanceTotalInRange,
@@ -12,9 +14,11 @@ import {
   dayFromPreset,
   defaultAdvanceRangeForPeriod,
   deriveWageRates,
+  formatPayrollMoney,
   isStaffInPeriod,
   lineBalanceDue,
   periodLastDate,
+  sortAdvanceItems,
   summarizeDayHours,
 } from '@/services/payrollCalc'
 import { buildStaffLedger } from '@/services/staffLedger'
@@ -167,13 +171,14 @@ describe('buildPayrollLine', () => {
     is_deleted: false,
   }
 
-  it('nets advance against earned without exceeding earned', () => {
+  it('nets full advance when equal to earned', () => {
     const line = buildPayrollLine(staff, hoursForDays(25, 1), undefined, 2026, 6, 30000, 0)
     expect(line.earned).toBe(25000)
-    expect(line.advance_deduction).toBe(25000)
-    expect(line.net_pay).toBe(0)
-    expect(line.pay_status).toBe('pending')
-    expect(lineBalanceDue(line)).toBe(0)
+    expect(line.advance_deduction).toBe(30000)
+    expect(line.net_pay).toBe(-5000)
+    expect(advanceExceedsEarned(line)).toBe(true)
+    expect(advanceOverEarnedAmount(line)).toBe(5000)
+    expect(formatPayrollMoney(lineBalanceDue(line))).toBe('− ₹5,000')
   })
 })
 
@@ -221,6 +226,15 @@ describe('advance date range for salary month', () => {
 
   it('formats adjusted-in label for display', () => {
     expect(advanceAdjustedInLabel('2026-06')).toBe('Adjusted in salary of June 2026')
+  })
+
+  it('sorts advances by date or amount', () => {
+    const items = [
+      { advance_id: 'a', date: '2026-06-20', amount: 1000, narration: '' },
+      { advance_id: 'b', date: '2026-06-05', amount: 3000, narration: '' },
+    ]
+    expect(sortAdvanceItems(items, 'date').map((i) => i.advance_id)).toEqual(['b', 'a'])
+    expect(sortAdvanceItems(items, 'amount').map((i) => i.advance_id)).toEqual(['b', 'a'])
   })
 })
 

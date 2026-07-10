@@ -4,11 +4,14 @@ import PpModal from '@/components/PpModal.vue'
 import { usePayrollStore, type NewStaff } from '@/stores/payroll'
 import { useFirmStore } from '@/stores/firm'
 import type { DayAttendance, PayrollPaymentMode, Staff, StaffAdvance, StaffPayType } from '@/types/models'
+import type { AdvanceSortMode } from '@/services/payrollCalc'
 import {
   MAX_STAFF,
   PAYROLL_HOURS_PER_DAY,
   PAYROLL_WORKING_DAYS,
   advanceAdjustedInLabel,
+  advanceExceedsEarned,
+  advanceOverEarnedAmount,
   calcOffDutyHours,
   currentPeriod,
   dayCellClass,
@@ -18,11 +21,14 @@ import {
   defaultAdvanceRangeForPeriod,
   deriveWageRates,
   emptyDay,
+  formatPayrollMoney,
   isSunday,
   lineBalanceDue,
   normalizeDayHours,
   periodLabel,
   resolveRunAdvanceRange,
+  sortAdvanceItems,
+  sortStaffAdvances,
   sumDaySalaryExpense,
   sundayDayKeys,
 } from '@/services/payrollCalc'
@@ -80,6 +86,7 @@ const range = defaultAdvanceRangeForPeriod(currentPeriod())
 const advanceFrom = ref(range.from)
 const advanceTo = ref(range.to)
 const resetAdvanceMonth = ref(currentPeriod())
+const advanceSortMode = ref<AdvanceSortMode>('date')
 const paymentMode = ref<PayrollPaymentMode>('transfer')
 const paymentDate = ref(new Date().toISOString().slice(0, 10))
 
@@ -486,6 +493,10 @@ const cycleAdvances = computed(() => {
   )
 })
 
+const sortedCycleAdvances = computed(() =>
+  sortStaffAdvances(cycleAdvances.value, advanceSortMode.value),
+)
+
 const adjustedAdvancesForMonth = computed(() =>
   store.advances.filter((a) => a.applied_period === resetAdvanceMonth.value),
 )
@@ -538,6 +549,7 @@ function downloadCurrentPayslipPdf() {
     firmStore.activeFirm,
     `Payslip_${payslipLine.value.staff_name}_${period.value}.pdf`,
     { from: advanceFrom.value, to: advanceTo.value },
+    advanceSortMode.value,
   )
 }
 
@@ -549,12 +561,18 @@ function downloadAllPayslipsPdf() {
     firmStore.activeFirm,
     undefined,
     { from: advanceFrom.value, to: advanceTo.value },
+    advanceSortMode.value,
   )
 }
 
 const payslipLine = computed(() => {
   if (!payslipStaffId.value || !currentRun.value) return null
   return currentRun.value.lines.find((l) => l.staff_id === payslipStaffId.value) || null
+})
+
+const payslipAdvanceItems = computed(() => {
+  if (!payslipLine.value?.advance_items?.length) return []
+  return sortAdvanceItems(payslipLine.value.advance_items, advanceSortMode.value)
 })
 
 onMounted(async () => {
@@ -586,6 +604,11 @@ onMounted(async () => {
       <input v-model="advanceFrom" type="date" class="pp-input !w-auto" :disabled="currentRun?.status === 'paid'" />
       <label class="text-sm font-semibold text-slate-600">Advance to</label>
       <input v-model="advanceTo" type="date" class="pp-input !w-auto" :disabled="currentRun?.status === 'paid'" />
+      <label class="text-sm font-semibold text-slate-600">Advance sort</label>
+      <select v-model="advanceSortMode" class="pp-input !w-auto">
+        <option value="date">Date wise</option>
+        <option value="amount">Amount wise</option>
+      </select>
       <button
         type="button"
         class="pp-btn pp-btn-primary !py-1.5"
@@ -877,7 +900,9 @@ onMounted(async () => {
           </div>
           <div class="pp-card p-3 text-center bg-emerald-50 border-emerald-200">
             <div class="text-xs text-emerald-700">Net pay</div>
-            <div class="font-bold text-emerald-800">₹{{ currentRun.total_net.toLocaleString('en-IN') }}</div>
+            <div class="font-bold" :class="currentRun.total_net < 0 ? 'text-rose-700' : 'text-emerald-800'">
+              {{ formatPayrollMoney(currentRun.total_net) }}
+            </div>
           </div>
         </div>
 
@@ -919,7 +944,10 @@ onMounted(async () => {
                 <td class="px-2 py-2 text-right text-xs">{{ line.total_ot_hours ?? 0 }}</td>
                 <td class="px-2 py-2 text-right text-xs font-semibold">{{ line.total_paid_hours ?? 0 }}</td>
                 <td class="px-2 py-2 text-right">₹{{ line.earned.toLocaleString('en-IN') }}</td>
-                <td class="px-2 py-2 text-right text-amber-700">₹{{ line.advance_deduction.toLocaleString('en-IN') }}</td>
+                <td class="px-2 py-2 text-right" :class="advanceExceedsEarned(line) ? 'text-rose-700 font-semibold' : 'text-amber-700'">
+                  ₹{{ line.advance_deduction.toLocaleString('en-IN') }}
+                  <span v-if="advanceExceedsEarned(line)" class="block text-[10px]">salary se zyada</span>
+                </td>
                 <td class="px-2 py-2 text-right">
                   <input
                     type="number"
@@ -930,11 +958,14 @@ onMounted(async () => {
                     @change="setOtherDeduction(line.staff_id, Number(($event.target as HTMLInputElement).value))"
                   />
                 </td>
-                <td class="px-3 py-2 text-right font-bold">₹{{ line.net_pay.toLocaleString('en-IN') }}</td>
+                <td class="px-3 py-2 text-right font-bold" :class="line.net_pay < 0 ? 'text-rose-700' : ''">₹{{ line.net_pay.toLocaleString('en-IN') }}</td>
                 <td class="px-2 py-2 text-right text-emerald-700">₹{{ (line.paid_amount || 0).toLocaleString('en-IN') }}</td>
-                <td class="px-2 py-2 text-right font-semibold text-amber-800">₹{{ lineBalanceDue(line).toLocaleString('en-IN') }}</td>
+                <td class="px-2 py-2 text-right font-semibold" :class="lineBalanceDue(line) < 0 ? 'text-rose-700' : 'text-amber-800'">
+                  {{ formatPayrollMoney(lineBalanceDue(line)) }}
+                </td>
                 <td class="px-3 py-2 text-right">
                   <span v-if="line.pay_status === 'paid'" class="text-xs text-emerald-700 font-semibold">Done</span>
+                  <span v-else-if="lineBalanceDue(line) < 0" class="text-xs text-rose-600 font-semibold">Recovery</span>
                   <button
                     v-else-if="lineBalanceDue(line) > 0"
                     type="button"
@@ -1001,8 +1032,8 @@ onMounted(async () => {
         <button class="pp-btn pp-btn-primary" @click="openAdvance">+ Record advance</button>
         <p class="text-xs text-slate-500">Calculate par {{ advanceFrom }} se {{ advanceTo }} tak ke advances {{ periodLabel(period) }} salary me adjust honge.</p>
       </div>
-      <div v-if="cycleAdvances.length === 0" class="pp-card p-6 text-center text-slate-400">Is salary cycle me koi advance nahi.</div>
-      <div v-for="a in cycleAdvances" :key="a.id" class="pp-card p-3 flex justify-between gap-2 flex-wrap text-sm">
+      <div v-if="sortedCycleAdvances.length === 0" class="pp-card p-6 text-center text-slate-400">Is range me koi advance nahi.</div>
+      <div v-for="a in sortedCycleAdvances" :key="a.id" class="pp-card p-3 flex justify-between gap-2 flex-wrap text-sm">
         <div>
           <span class="font-semibold text-navy">{{ a.staff_name }}</span>
           <span class="text-slate-500 ml-2">{{ a.date }}</span>
@@ -1101,21 +1132,35 @@ onMounted(async () => {
         <table class="w-full text-sm border-t border-slate-200">
           <tbody>
             <tr><td class="py-2">Gross earned</td><td class="py-2 text-right font-semibold">₹{{ payslipLine.earned.toLocaleString('en-IN') }}</td></tr>
-            <template v-if="payslipLine.advance_items?.length">
-              <tr v-for="adv in payslipLine.advance_items" :key="adv.advance_id">
+            <template v-if="payslipAdvanceItems.length">
+              <tr v-for="adv in payslipAdvanceItems" :key="adv.advance_id">
                 <td class="py-2 text-amber-700">Advance {{ adv.date }}<span v-if="adv.narration" class="text-slate-400"> · {{ adv.narration }}</span></td>
                 <td class="py-2 text-right">− ₹{{ adv.amount.toLocaleString('en-IN') }}</td>
               </tr>
-              <tr v-if="payslipLine.advance_items.length > 1">
+              <tr v-if="payslipAdvanceItems.length > 1">
                 <td class="py-2 font-semibold text-amber-800">Total advance</td>
-                <td class="py-2 text-right font-semibold">− ₹{{ payslipLine.advance_deduction.toLocaleString('en-IN') }}</td>
+                <td class="py-2 text-right font-semibold">− ₹{{ payslipAdvanceItems.reduce((s, a) => s + a.amount, 0).toLocaleString('en-IN') }}</td>
               </tr>
             </template>
             <tr v-else-if="payslipLine.advance_deduction"><td class="py-2 text-amber-700">Advance deduction</td><td class="py-2 text-right">− ₹{{ payslipLine.advance_deduction.toLocaleString('en-IN') }}</td></tr>
+            <tr v-if="advanceExceedsEarned(payslipLine)" class="text-rose-700">
+              <td class="py-2 font-semibold">Advance salary se zyada</td>
+              <td class="py-2 text-right font-semibold">₹{{ advanceOverEarnedAmount(payslipLine).toLocaleString('en-IN') }} (recovery)</td>
+            </tr>
             <tr v-if="payslipLine.other_deduction"><td class="py-2">Other deduction</td><td class="py-2 text-right">− ₹{{ payslipLine.other_deduction.toLocaleString('en-IN') }}</td></tr>
-            <tr class="border-t-2 border-navy font-bold text-base"><td class="py-3">Net pay</td><td class="py-3 text-right text-emerald-800">₹{{ payslipLine.net_pay.toLocaleString('en-IN') }}</td></tr>
+            <tr class="border-t-2 border-navy font-bold text-base">
+              <td class="py-3">Net pay</td>
+              <td class="py-3 text-right" :class="payslipLine.net_pay < 0 ? 'text-rose-700' : 'text-emerald-800'">{{ formatPayrollMoney(payslipLine.net_pay) }}</td>
+            </tr>
             <tr v-if="payslipLine.paid_amount"><td class="py-2 text-emerald-700">Paid</td><td class="py-2 text-right">₹{{ payslipLine.paid_amount.toLocaleString('en-IN') }}</td></tr>
-            <tr v-if="lineBalanceDue(payslipLine) > 0"><td class="py-2 text-amber-800">Balance due</td><td class="py-2 text-right font-bold">₹{{ lineBalanceDue(payslipLine).toLocaleString('en-IN') }}</td></tr>
+            <tr v-if="lineBalanceDue(payslipLine) !== 0">
+              <td class="py-2" :class="lineBalanceDue(payslipLine) < 0 ? 'text-rose-700' : 'text-amber-800'">
+                {{ lineBalanceDue(payslipLine) < 0 ? 'Staff se recovery due' : 'Balance due' }}
+              </td>
+              <td class="py-2 text-right font-bold" :class="lineBalanceDue(payslipLine) < 0 ? 'text-rose-700' : 'text-amber-800'">
+                {{ formatPayrollMoney(lineBalanceDue(payslipLine)) }}
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>

@@ -1,9 +1,15 @@
 import { jsPDF } from 'jspdf'
-import { lineBalanceDue, periodLabel } from '@/services/payrollCalc'
+import { advanceExceedsEarned, advanceOverEarnedAmount, lineBalanceDue, periodLabel, sortAdvanceItems, type AdvanceSortMode } from '@/services/payrollCalc'
 import type { Firm, PayrollLine } from '@/types/models'
 
 function money(n: number) {
   return `Rs ${Math.round(Number(n) || 0).toLocaleString('en-IN')}`
+}
+
+function moneySigned(n: number) {
+  const v = Math.round(Number(n) || 0)
+  if (v < 0) return `- Rs ${Math.abs(v).toLocaleString('en-IN')}`
+  return money(v)
 }
 
 export function payrollPayTypeLabel(payType: PayrollLine['pay_type']): string {
@@ -16,6 +22,7 @@ function addPayslipPage(
   period: string,
   firm?: Firm | null,
   advanceRange?: { from: string; to: string },
+  advanceSort: AdvanceSortMode = 'date',
 ) {
   const PW = pdf.internal.pageSize.getWidth()
   const PH = pdf.internal.pageSize.getHeight()
@@ -71,23 +78,30 @@ function addPayslipPage(
     ['Gross earned', money(line.earned)],
   ]
   if (line.advance_items?.length) {
-    for (const adv of line.advance_items) {
+    const items = sortAdvanceItems(line.advance_items, advanceSort)
+    for (const adv of items) {
       const label = adv.narration
         ? `Advance ${adv.date} (${adv.narration})`
         : `Advance ${adv.date}`
       rows.push([label, `- ${money(adv.amount)}`])
     }
-    if (line.advance_items.length > 1) {
-      rows.push(['Total advance', `- ${money(line.advance_deduction)}`, true])
+    if (items.length > 1) {
+      const advTotal = items.reduce((s, a) => s + a.amount, 0)
+      rows.push(['Total advance', `- ${money(advTotal)}`, true])
     }
   } else if (line.advance_deduction) {
     rows.push(['Advance deduction', `- ${money(line.advance_deduction)}`])
   }
+  if (advanceExceedsEarned(line)) {
+    rows.push(['Advance exceeds salary', `${money(advanceOverEarnedAmount(line))} recovery`, true])
+  }
   if (line.other_deduction) rows.push(['Other deduction', `- ${money(line.other_deduction)}`])
-  rows.push(['Net pay', money(line.net_pay), true])
+  rows.push(['Net pay', moneySigned(line.net_pay), true])
   if (line.paid_amount) rows.push(['Paid', money(line.paid_amount)])
   const balance = lineBalanceDue(line)
-  if (balance > 0) rows.push(['Balance due', money(balance), true])
+  if (balance !== 0) {
+    rows.push([balance < 0 ? 'Staff recovery due' : 'Balance due', moneySigned(balance), true])
+  }
 
   const rowH = 10
   const labelW = 95
@@ -114,6 +128,7 @@ export function downloadPayrollPayslipsPdf(
   firm?: Firm | null,
   filename?: string,
   advanceRange?: { from: string; to: string },
+  advanceSort: AdvanceSortMode = 'date',
 ) {
   const validLines = lines.filter(Boolean)
   if (!validLines.length) return
@@ -121,7 +136,7 @@ export function downloadPayrollPayslipsPdf(
   const pdf = new jsPDF({ unit: 'mm', format: 'a4' })
   validLines.forEach((line, idx) => {
     if (idx > 0) pdf.addPage()
-    addPayslipPage(pdf, line, period, firm, advanceRange)
+    addPayslipPage(pdf, line, period, firm, advanceRange, advanceSort)
   })
   pdf.save(filename || `Payslips_${period}_${validLines.length}.pdf`)
 }

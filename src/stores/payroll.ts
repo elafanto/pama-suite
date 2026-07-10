@@ -590,6 +590,9 @@ export const usePayrollStore = defineStore('payroll', () => {
     if (line.pay_status === 'paid') return { error: 'Already fully paid' }
 
     const balance = lineBalanceDue(line)
+    if (balance <= 0) {
+      return { error: line.net_pay < 0 ? 'Advance salary se zyada — payment nahi, recovery due' : 'Nothing to pay' }
+    }
     const payAmt = Math.min(Math.max(0, Number(amount) || 0), balance)
     if (payAmt <= 0) return { error: 'Enter payment amount' }
 
