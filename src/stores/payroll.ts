@@ -26,7 +26,6 @@ import {
   periodLastDate,
   resolveRunAdvanceRange,
   staffDisplayRates,
-  staffSalaryForPeriod,
   staffWithSalaryForPeriod,
   sumLinePayments,
   sumPayrollLines,

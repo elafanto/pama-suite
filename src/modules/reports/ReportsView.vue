@@ -11,6 +11,7 @@ import {
   filterInvoices, gstrB2B, gstrB2C, gstrHsnSummary, outstandingAging,
   cashBookFromVouchers, ewayInvoices, itemSalesReport, getStateName, getStateCode,
 } from '@/services/reports'
+import { downloadGstrOfflineExcel, periodMonthBounds } from '@/services/gstrExport'
 import { recentActivity } from '@/services/activityLog'
 import { displayGstinForInvoice } from '@/services/invoiceDisplay'
 import type { ActivityLog } from '@/types/models'
@@ -19,6 +20,7 @@ import type { Invoice } from '@/types/models'
 const tab = ref<'b2b' | 'b2c' | 'hsn' | 'items' | 'outstanding' | 'cashbook' | 'eway' | 'activity' | 'deleted'>('b2b')
 const from = ref('')
 const to = ref('')
+const gstrMonth = ref(new Date().toISOString().slice(0, 7))
 
 const invoiceStore = useInvoiceStore()
 const partyStore = usePartyStore()
@@ -171,6 +173,23 @@ function exportItemSales() {
     ['Item', 'Bills', 'Qty', 'Value'],
     itemRows.value.map(r => [r.name, String(r.count), n2(r.qty), n2(r.value)]))
 }
+
+function exportGstrOffline() {
+  const res = downloadGstrOfflineExcel({
+    invoices: invoiceStore.list.filter((i) => i.firm_id === firmStore.activeFirmId),
+    period: gstrMonth.value,
+    gstin: firmStore.activeFirm?.gst || '',
+    firmName: firmStore.activeFirm?.name,
+  })
+  if (!res.ok) {
+    alert(res.error)
+    return
+  }
+  const bounds = periodMonthBounds(gstrMonth.value)
+  from.value = bounds.from
+  to.value = bounds.to
+  alert(`GSTR-1 Excel downloaded (${gstrMonth.value})\nB2B rows: ${res.b2bCount} · HSN rows: ${res.hsnCount}`)
+}
 </script>
 
 <template>
@@ -181,6 +200,13 @@ function exportItemSales() {
         <p class="text-sm text-slate-500">GSTR-1, Outstanding, Cash Book &amp; more</p>
       </div>
       <div class="flex gap-2 flex-wrap items-end">
+        <div>
+          <label class="pp-label">GSTR month</label>
+          <input v-model="gstrMonth" type="month" class="pp-input !w-40" />
+        </div>
+        <button class="pp-btn pp-btn-primary !py-2" type="button" @click="exportGstrOffline">
+          📥 GSTR-1 Excel (offline)
+        </button>
         <div><label class="pp-label">From</label><input v-model="from" type="date" class="pp-input !w-36" /></div>
         <div><label class="pp-label">To</label><input v-model="to" type="date" class="pp-input !w-36" /></div>
       </div>
@@ -197,7 +223,10 @@ function exportItemSales() {
 
     <!-- GSTR B2B -->
     <div v-if="tab === 'b2b'" class="pp-card overflow-x-auto">
-      <p class="text-xs text-slate-500 mb-3 p-3 bg-blue-50 rounded">B2B invoices with buyer GSTIN — GSTR-1 Table 4A</p>
+      <p class="text-xs text-slate-500 mb-3 p-3 bg-blue-50 rounded">
+        B2B invoices with buyer GSTIN — GSTR-1 Table 4A.
+        <strong>GSTR-1 Excel (offline)</strong> button se month-wise <code>b2b,sez,de</code> + <code>hsn(b2b)</code> sheets GST portal format me download hongi.
+      </p>
       <table class="w-full text-sm">
         <thead><tr class="border-b"><th class="text-left p-2">Date</th><th>Invoice</th><th>Buyer</th><th>GSTIN</th><th>POS</th><th class="text-right">Taxable</th><th class="text-right">Tax</th><th class="text-right">Total</th></tr></thead>
         <tbody>
