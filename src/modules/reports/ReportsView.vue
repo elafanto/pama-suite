@@ -188,7 +188,7 @@ function exportGstrOffline() {
   const bounds = periodMonthBounds(gstrMonth.value)
   from.value = bounds.from
   to.value = bounds.to
-  alert(`GSTR-1 Excel downloaded (${gstrMonth.value})\nB2B rows: ${res.b2bCount} · HSN rows: ${res.hsnCount}`)
+  alert(`2 files downloaded (${gstrMonth.value}):\n1. ${res.b2bFile} — ${res.b2bCount} rows\n2. ${res.hsnFile} — ${res.hsnCount} rows`)
 }
 </script>
 
@@ -225,7 +225,7 @@ function exportGstrOffline() {
     <div v-if="tab === 'b2b'" class="pp-card overflow-x-auto">
       <p class="text-xs text-slate-500 mb-3 p-3 bg-blue-50 rounded">
         B2B invoices with buyer GSTIN — GSTR-1 Table 4A.
-        <strong>GSTR-1 Excel (offline)</strong> button se month-wise <code>b2b,sez,de</code> + <code>hsn(b2b)</code> sheets GST portal format me download hongi.
+        <strong>GSTR-1 Excel (offline)</strong> se month-wise alag files: <code>b2b,sez,de</code> aur <code>hsn(b2b)</code> — GST portal format.
       </p>
       <table class="w-full text-sm">
         <thead><tr class="border-b"><th class="text-left p-2">Date</th><th>Invoice</th><th>Buyer</th><th>GSTIN</th><th>POS</th><th class="text-right">Taxable</th><th class="text-right">Tax</th><th class="text-right">Total</th></tr></thead>

@@ -257,21 +257,23 @@ export function periodMonthBounds(period: string): { from: string; to: string } 
   return { from: `${p}-01`, to: `${p}-${String(last).padStart(2, '0')}` }
 }
 
-export function buildGstrOfflineWorkbook(b2bRows: GstrB2BExportRow[], hsnRows: GstrHsnExportRow[]): XLSX.WorkBook {
+export function buildGstrB2BWorkbook(b2bRows: GstrB2BExportRow[]): XLSX.WorkBook {
   const wb = XLSX.utils.book_new()
-
-  const b2bSheet = XLSX.utils.aoa_to_sheet([
+  const sheet = XLSX.utils.aoa_to_sheet([
     [...B2B_HEADERS],
     ...b2bRows.map(b2bRowToArray),
   ])
-  XLSX.utils.book_append_sheet(wb, b2bSheet, 'b2b,sez,de')
+  XLSX.utils.book_append_sheet(wb, sheet, 'b2b,sez,de')
+  return wb
+}
 
-  const hsnSheet = XLSX.utils.aoa_to_sheet([
+export function buildGstrHsnWorkbook(hsnRows: GstrHsnExportRow[]): XLSX.WorkBook {
+  const wb = XLSX.utils.book_new()
+  const sheet = XLSX.utils.aoa_to_sheet([
     [...HSN_HEADERS],
     ...hsnRows.map(hsnRowToArray),
   ])
-  XLSX.utils.book_append_sheet(wb, hsnSheet, 'hsn(b2b)')
-
+  XLSX.utils.book_append_sheet(wb, sheet, 'hsn(b2b)')
   return wb
 }
 
@@ -280,7 +282,7 @@ export function downloadGstrOfflineExcel(opts: {
   period: string
   gstin: string
   firmName?: string
-}): { ok: true; b2bCount: number; hsnCount: number } | { ok: false; error: string } {
+}): { ok: true; b2bCount: number; hsnCount: number; b2bFile: string; hsnFile: string } | { ok: false; error: string } {
   const gstin = (opts.gstin || '').trim().toUpperCase()
   if (!gstin) return { ok: false, error: 'Firm GSTIN missing — add it in Settings → Firm profile.' }
 
@@ -292,12 +294,15 @@ export function downloadGstrOfflineExcel(opts: {
 
   const b2bRows = buildGstrB2BExportRows(monthInvoices)
   const hsnRows = buildGstrHsnB2BExportRows(monthInvoices)
-  const wb = buildGstrOfflineWorkbook(b2bRows, hsnRows)
 
   const fp = opts.period.replace('-', '')
   const safeGstin = gstin.replace(/[^A-Z0-9]/gi, '')
-  const filename = `GSTR1_offline_${safeGstin}_${fp}.xlsx`
-  XLSX.writeFile(wb, filename)
+  const b2bFile = `b2b,sez,de_${safeGstin}_${fp}.xlsx`
+  const hsnFile = `hsn(b2b)_${safeGstin}_${fp}.xlsx`
 
-  return { ok: true, b2bCount: b2bRows.length, hsnCount: hsnRows.length }
+  XLSX.writeFile(buildGstrB2BWorkbook(b2bRows), b2bFile)
+  // Brief gap so the browser allows a second download in the same click.
+  setTimeout(() => XLSX.writeFile(buildGstrHsnWorkbook(hsnRows), hsnFile), 350)
+
+  return { ok: true, b2bCount: b2bRows.length, hsnCount: hsnRows.length, b2bFile, hsnFile }
 }
