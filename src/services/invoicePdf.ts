@@ -614,16 +614,35 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
   pdf.text('Authorised Signatory', sigX + footHalf / 2, PH - M - 5, { align: 'center' })
 }
 
+export type InvoicePdfCopy = 'office' | 'transporter' | 'recipient'
+
+export const INVOICE_PDF_COPY_OPTIONS: { value: InvoicePdfCopy; label: string }[] = [
+  { value: 'office', label: 'Office copy' },
+  { value: 'transporter', label: 'Transporter copy' },
+  { value: 'recipient', label: 'Recipient copy' },
+]
+
+const INVOICE_PDF_COPY_META: Record<InvoicePdfCopy, { label: string; sub: string }> = {
+  recipient: { label: 'ORIGINAL', sub: 'For Buyer' },
+  transporter: { label: 'DUPLICATE', sub: 'For Transporter' },
+  office: { label: 'TRIPLICATE', sub: 'For Office Use' },
+}
+
+const INVOICE_PDF_ALL_COPIES = [
+  INVOICE_PDF_COPY_META.recipient,
+  INVOICE_PDF_COPY_META.transporter,
+  INVOICE_PDF_COPY_META.office,
+]
+
+export function invoicePdfCopyMeta(copy: InvoicePdfCopy = 'office') {
+  return INVOICE_PDF_COPY_META[copy]
+}
+
 export function generateInvoicePdf(invoice: Invoice, firm: Firm, partyLookup?: PartyLookup): jsPDF {
   const b = toPdfBill(invoice, partyLookup)
   const f = toPdfFirm(firm)
   const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true })
-  const copies = [
-    { label: 'ORIGINAL', sub: 'For Buyer' },
-    { label: 'DUPLICATE', sub: 'For Transporter' },
-    { label: 'TRIPLICATE', sub: 'For Office Use' },
-  ]
-  copies.forEach((copy, i) => {
+  INVOICE_PDF_ALL_COPIES.forEach((copy, i) => {
     if (i > 0) pdf.addPage()
     drawInvoiceOnPDF(pdf, b, f, copy.label, copy.sub)
   })
@@ -652,25 +671,20 @@ export async function bulkDownloadInvoicePdf(
   invoices: Invoice[],
   firm: Firm,
   partyLookup?: PartyLookup,
+  copy: InvoicePdfCopy = 'office',
 ): Promise<number> {
   if (!invoices.length) return 0
   const f = toPdfFirm(firm)
   const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true })
+  const copyMeta = invoicePdfCopyMeta(copy)
   let firstPage = true
   for (const inv of invoices) {
     const b = toPdfBill(inv, partyLookup)
-    const copies = [
-      { label: 'ORIGINAL', sub: 'For Buyer' },
-      { label: 'DUPLICATE', sub: 'For Transporter' },
-      { label: 'TRIPLICATE', sub: 'For Office Use' },
-    ]
-    for (const copy of copies) {
-      if (!firstPage) pdf.addPage()
-      firstPage = false
-      drawInvoiceOnPDF(pdf, b, f, copy.label, copy.sub)
-    }
+    if (!firstPage) pdf.addPage()
+    firstPage = false
+    drawInvoiceOnPDF(pdf, b, f, copyMeta.label, copyMeta.sub)
   }
   const n = new Date().toISOString().slice(0, 10)
-  pdf.save(`Invoices_Bulk_${n}_${invoices.length}.pdf`)
+  pdf.save(`Invoices_Bulk_${copy}_${n}_${invoices.length}.pdf`)
   return invoices.length
 }

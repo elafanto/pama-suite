@@ -10,7 +10,7 @@ import { getStateName, getStateCode, isGstinValid, formatGstin } from '@/service
 import { numberToWords } from '@/services/numberToWords'
 import { openStatementPrint } from '@/services/billingStatements'
 import { getEwayEligibility, downloadEwayJson } from '@/services/ewayBill'
-import { downloadInvoicePdf, bulkDownloadInvoicePdf } from '@/services/invoicePdf'
+import { downloadInvoicePdf, bulkDownloadInvoicePdf, INVOICE_PDF_COPY_OPTIONS, type InvoicePdfCopy } from '@/services/invoicePdf'
 import { resolveFirmSignature } from '@/services/firmSignature'
 import { resolveLivePartyDetails, resolveLiveShipDetails, type PartyLookup } from '@/services/invoiceDisplay'
 import { peekBillNo } from '@/services/invoiceNumber'
@@ -58,6 +58,7 @@ const histFrom = ref('')
 const histTo = ref('')
 const histCustomer = ref('')
 const selectedHistoryIds = ref<string[]>([])
+const bulkPdfCopy = ref<InvoicePdfCopy>('office')
 const showStatementModal = ref(false)
 const stmtFrom = ref('')
 const stmtTo = ref('')
@@ -627,8 +628,9 @@ async function bulkDownloadPDF() {
   const selected = invoiceStore.list.filter((b) => selectedHistoryIds.value.includes(b.id))
   if (!selected.length) return alert('Selected bills nahi mile')
   try {
-    const n = await bulkDownloadInvoicePdf(selected, firm, partyLookup)
-    alert(`${n} PDF download ho gaye`)
+    const n = await bulkDownloadInvoicePdf(selected, firm, partyLookup, bulkPdfCopy.value)
+    const copyLabel = INVOICE_PDF_COPY_OPTIONS.find((o) => o.value === bulkPdfCopy.value)?.label || 'Office copy'
+    alert(`${n} ${copyLabel} PDF download ho gaye`)
   } catch (e: any) {
     alert('Bulk PDF failed: ' + (e?.message || 'unknown error'))
   }
@@ -1477,6 +1479,16 @@ onMounted(async () => {
           <option value="PAID">Paid</option>
           <option value="PARTIAL">Partial</option>
           <option value="UNPAID">Unpaid</option>
+        </select>
+        <select
+          v-if="selectedHistoryIds.length"
+          v-model="bulkPdfCopy"
+          class="pp-input max-w-[160px] !text-xs"
+          title="Kaun si copy print karni hai"
+        >
+          <option v-for="opt in INVOICE_PDF_COPY_OPTIONS" :key="opt.value" :value="opt.value">
+            {{ opt.label }}
+          </option>
         </select>
         <button
           v-if="selectedHistoryIds.length"
