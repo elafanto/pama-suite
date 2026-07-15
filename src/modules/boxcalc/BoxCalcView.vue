@@ -37,6 +37,7 @@ import {
 } from '@/services/boxcalcUi'
 import { openJobCardPrintWindow } from '@/services/jobCard'
 import { exportAll, downloadBackup } from '@/services/backup'
+import { downloadBoxCalcExcel } from '@/services/boxCalcExcel'
 import PpModal from '@/components/PpModal.vue'
 import BoxCalcComparePanel from '@/components/boxcalc/BoxCalcComparePanel.vue'
 import BoxCalcResults from '@/components/boxcalc/BoxCalcResults.vue'
@@ -439,6 +440,17 @@ function printFromRecipe(rec: Recipe) {
 }
 
 function printResults() { window.print() }
+
+function exportCalculationExcel() {
+  if (!results.value) return alert('Pehle calculate karo!')
+  if (form.calcMode !== 'box') return alert('Excel formula sheet abhi Box (RSC) calculation ke liye hai.')
+  try {
+    const filename = downloadBoxCalcExcel(form, results.value, sheetSettingsStore.settings)
+    alert(`Excel downloaded: ${filename}`)
+  } catch (e: any) {
+    alert('Excel export failed: ' + (e?.message || 'unknown error'))
+  }
+}
 
 async function exportBoxcalcData() {
   try {
@@ -929,6 +941,7 @@ onMounted(async () => {
         @save="openSaveModal"
         @job-card="openJobCardModal"
         @print="printResults"
+        @excel="exportCalculationExcel"
         @export-backup="exportBoxcalcData"
         @invoice="createSalesInvoice"
         @whatsapp="showWhatsAppModal = true"

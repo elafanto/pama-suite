@@ -20,6 +20,7 @@ defineEmits<{
   save: []
   jobCard: []
   print: []
+  excel: []
   exportBackup: []
   invoice: []
   whatsapp: []
@@ -243,6 +244,7 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
       <button type="button" class="pp-btn pp-btn-success" @click="$emit('save')">Save Recipe</button>
       <button type="button" class="pp-btn pp-btn-primary" @click="$emit('jobCard')">Job Card</button>
       <button type="button" class="pp-btn pp-btn-ghost" @click="$emit('print')">Print</button>
+      <button type="button" class="pp-btn pp-btn-ghost" @click="$emit('excel')">Excel Formula Sheet</button>
       <button type="button" class="pp-btn pp-btn-ghost" @click="$emit('exportBackup')">Export Backup</button>
       <button type="button" class="pp-btn pp-btn-primary" @click="$emit('invoice')">Create Invoice</button>
       <button type="button" class="pp-btn pp-btn-ghost" @click="$emit('catalogue')">Add to Catalogue</button>
