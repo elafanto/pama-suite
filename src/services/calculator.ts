@@ -145,6 +145,17 @@ export const SAFETY_FACTORS = {
 // a flat sheet — about a 20% fluting loss. Tune to match your lab readings.
 export const BS_COMBINED_FACTOR = 0.8
 
+/** Up to 400 g uses single-pin stitching; heavier boxes use double-pin stitching. */
+export const AUTO_DOUBLE_PIN_THRESHOLD_GM = 400
+
+export function resolvePinHeadType(
+  boxWeightGm: number,
+  override?: 'single' | 'double' | '',
+): 'single' | 'double' {
+  if (override === 'single' || override === 'double') return override
+  return boxWeightGm > AUTO_DOUBLE_PIN_THRESHOLD_GM ? 'double' : 'single'
+}
+
 // Adhesive Defaults
 export const ADHESIVE_DEFAULTS = {
   starch: {
@@ -753,32 +764,45 @@ export function calculate(input: CalcInput) {
   const paperWeightTotal = layerWeights.reduce((sum, l) => sum + l.weightGm, 0)
   const starchGm = sheetAreaM2 * (input.starchGSM || 7) * (input.layers.length - 1)
 
+  const sheetGsmTotal = input.layers.reduce((sum, l) => sum + l.gsm * (l.takeUp || 1.0), 0)
+  const starchGsmPerArea = (input.starchGSM || 7) * (input.layers.length - 1)
+  const combinedGsmPerArea = sheetGsmTotal + starchGsmPerArea
+  const netSheetWeightGm = sheetAreaM2 * combinedGsmPerArea
+  const slotWasteAreaM2 = (4 * innerW * MACHINE_LIMITS.slotBladeWidthMM) / 1000000
+  const slotWasteGm = slotWasteAreaM2 * combinedGsmPerArea
+  const boxWeightBeforeJoiningGm = Math.max(0, netSheetWeightGm - slotWasteGm)
+
   let joiningWeightGm = 0
   let pinCost = 0
   let joiningCost = 0
   const joiningMethod: CalcJoiningInput = input.joining || { method: 'stitching' }
   let pinInfo: {
-    pins: number; headType: string; spacing: number; weightPerPin: number; wireRate: number
+    pins: number; stitchPoints: number; headType: string; spacing: number
+    weightPerPin: number; wireRate: number; basisWeightGm: number
   } | null = null
 
   if (joiningMethod.method === 'stitching' || joiningMethod.method === 'both') {
     const stitchingDefaults = ADHESIVE_DEFAULTS.stitching
     const wireRate = parseFloat(String(joiningMethod.wireRate)) || stitchingDefaults.wireRate || 120
-    const headType = joiningMethod.pinHeadType || (parseInt(input.ply) >= 5 ? 'double' : 'single')
+    const headType = resolvePinHeadType(boxWeightBeforeJoiningGm, joiningMethod.pinHeadType)
     const spacing = stitchingDefaults.spacing[headType] || 60
     const minPins = stitchingDefaults.minPins || 3
-    const pins = Math.max(minPins, Math.ceil(outerH / spacing))
+    const stitchPoints = Math.max(minPins, Math.ceil(outerH / spacing))
+    const pins = stitchPoints * (headType === 'double' ? 2 : 1)
     const weightPerPin = stitchingDefaults.weightPerPin[headType] || 0.5
 
     pinInfo = {
       pins,
+      stitchPoints,
       headType,
       spacing,
       weightPerPin,
       wireRate,
+      basisWeightGm: boxWeightBeforeJoiningGm,
     }
 
-    const stitchGm = pins * weightPerPin
+    // weightPerPin represents one single/double stitch point, preserving wire usage.
+    const stitchGm = stitchPoints * weightPerPin
     joiningWeightGm += stitchGm
     pinCost += (stitchGm / 1000) * wireRate
   }
@@ -793,16 +817,11 @@ export function calculate(input: CalcInput) {
   }
 
   // Big Sheet — 2-D nesting: width N_w × length N_l boxes per big sheet
-  const sheetGsmTotal = input.layers.reduce((sum, l) => sum + l.gsm * (l.takeUp || 1.0), 0)
-  const starchGsmPerArea = (input.starchGSM || 7) * (input.layers.length - 1)
-  const combinedGsmPerArea = sheetGsmTotal + starchGsmPerArea
-
   const reelWidthM = reelInfo.reelWidthMM / 1000
   const bigSheetLengthM = bigSheetLength / 1000           // N_l × (blank+trim)
 
   const bigSheetAreaM2 = reelWidthM * bigSheetLengthM     // total board area
   const bigSheetWeightGm = bigSheetAreaM2 * combinedGsmPerArea
-  const netSheetWeightGm = sheetAreaM2 * combinedGsmPerArea   // one box blank
   const sheetWeightGm = bigSheetWeightGm / boxesPerBig    // per-box share (÷ N_w×N_l)
 
   // Trim: side trim (width) + cut-off trim (length) together
@@ -810,10 +829,6 @@ export function calculate(input: CalcInput) {
   const totalTrimWeightGm = totalTrimAreaM2 * combinedGsmPerArea
   const trimPerBoxGm = totalTrimWeightGm / boxesPerBig
   const trimPercent = bigSheetWeightGm > 0 ? (totalTrimWeightGm / bigSheetWeightGm) * 100 : 0
-
-  // Slot waste
-  const slotWasteAreaM2 = (4 * innerW * MACHINE_LIMITS.slotBladeWidthMM) / 1000000
-  const slotWasteGm = slotWasteAreaM2 * combinedGsmPerArea
 
   // Final Box Net weight (net sheet minus slot waste + pins/glues)
   const boxWeightGm = netSheetWeightGm - slotWasteGm + joiningWeightGm

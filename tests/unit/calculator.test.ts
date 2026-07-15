@@ -5,6 +5,7 @@ import {
   getTakeUp,
   estimateReelLength,
   resolveConversionSlab,
+  resolvePinHeadType,
   DEFAULT_CONVERSION_SLABS,
 } from '@/services/calculator'
 
@@ -55,6 +56,23 @@ describe('resolveConversionSlab', () => {
     expect(resolveConversionSlab(500, slabs).ratePerKg).toBe(6)
     expect(resolveConversionSlab(999, slabs).ratePerKg).toBe(6)
     expect(resolveConversionSlab(1000, slabs).ratePerKg).toBe(5)
+  })
+})
+
+describe('resolvePinHeadType', () => {
+  it('uses single pin up to and including 400 g', () => {
+    expect(resolvePinHeadType(399.99)).toBe('single')
+    expect(resolvePinHeadType(400)).toBe('single')
+  })
+
+  it('uses double pin above 400 g', () => {
+    expect(resolvePinHeadType(400.01)).toBe('double')
+    expect(resolvePinHeadType(850)).toBe('double')
+  })
+
+  it('respects an explicit manual selection', () => {
+    expect(resolvePinHeadType(800, 'single')).toBe('single')
+    expect(resolvePinHeadType(200, 'double')).toBe('double')
   })
 })
 
@@ -156,6 +174,13 @@ describe('calculate — 3-ply RSC (inner dims)', () => {
   it('keeps debit/credit-free order totals consistent with quantity', () => {
     expect(res.order.quantity).toBe(1000)
     expect(res.order.totalValue).toBeCloseTo(res.cost.sellingPrice * 1000, 4)
+  })
+
+  it('auto-selects pin type by box weight and reports physical pin count', () => {
+    const pin = res.pinInfo
+    expect(pin).toBeTruthy()
+    expect(pin.headType).toBe(pin.basisWeightGm > 400 ? 'double' : 'single')
+    expect(pin.pins).toBe(pin.stitchPoints * (pin.headType === 'double' ? 2 : 1))
   })
 })
 

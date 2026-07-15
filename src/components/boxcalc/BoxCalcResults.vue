@@ -252,7 +252,13 @@ const costRowsAfterMaterial = computed((): CostDualRow[] => {
     <div v-if="results?.pinInfo && form.joining.method !== 'fevicol'" class="pp-card p-4 bg-blue-50 border-blue-200">
       <h4 class="font-bold text-blue-900 text-sm mb-1">Pin / Stitching Info</h4>
       <div class="text-sm text-blue-800">
-        {{ results.pinInfo.pins }} pins ({{ results.pinInfo.headType }} head, {{ results.pinInfo.spacing }}mm spacing)
+        {{ results.pinInfo.pins }} pins
+        ({{ results.pinInfo.headType }}, {{ results.pinInfo.stitchPoints }} stitch points,
+        {{ results.pinInfo.spacing }}mm spacing)
+      </div>
+      <div class="text-[11px] text-blue-600 mt-1">
+        Auto basis: {{ fmt(results.pinInfo.basisWeightGm, 1) }} g box weight
+        — up to 400 g single, above 400 g double.
       </div>
     </div>
 

@@ -778,6 +778,9 @@ onMounted(async () => {
             </div>
             <div v-if="form.joining.method !== 'fevicol'" class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
               <div class="text-xs font-bold mb-2">Stitching</div>
+              <p class="text-[11px] text-blue-700 mb-2">
+                Auto: box weight ≤ 400 g = single pin, &gt; 400 g = double pin.
+              </p>
               <div class="grid grid-cols-3 gap-1 mb-2">
                 <button v-for="p in ['', 'single', 'double'] as const" :key="p" type="button"
                   :class="['py-1 rounded text-xs', form.joining.pinHeadType === p ? 'bg-blue-600 text-white' : 'bg-white border']"
