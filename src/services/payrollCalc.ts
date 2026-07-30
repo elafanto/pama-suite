@@ -13,7 +13,7 @@ import type {
 
 export const PAYROLL_WORKING_DAYS = 26
 export const PAYROLL_HOURS_PER_DAY = 8
-export const MAX_STAFF = 15
+export const MAX_STAFF = 50
 
 export function ceilRupee(n: number): number {
   if (!Number.isFinite(n) || n <= 0) return 0
