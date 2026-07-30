@@ -22,6 +22,8 @@ import {
   staffSalaryForPeriod,
   staffWithSalaryForPeriod,
   summarizeDayHours,
+  isStaffEmployedOnDay,
+  unpaidDaysOutsideEmployment,
 } from '@/services/payrollCalc'
 import { buildStaffLedger } from '@/services/staffLedger'
 import type { DayAttendance, Staff, StaffAdvance } from '@/types/models'
@@ -380,5 +382,57 @@ describe('isStaffInPeriod — leaving date', () => {
     expect(
       isStaffInPeriod({ is_active: false, is_deleted: false, leaving_date: '2026-06-20' }, '2026-06'),
     ).toBe(true)
+  })
+})
+
+describe('joining date — mid-month staff', () => {
+  it('hides staff from months before joining', () => {
+    const s = { is_active: true, is_deleted: false, joining_date: '2026-07-03' }
+    expect(isStaffInPeriod(s, '2026-06')).toBe(false)
+    expect(isStaffInPeriod(s, '2026-07')).toBe(true)
+  })
+
+  it('blocks attendance before joining day', () => {
+    const s = { joining_date: '2026-07-03' }
+    expect(isStaffEmployedOnDay(s, 2026, 7, '01')).toBe(false)
+    expect(isStaffEmployedOnDay(s, 2026, 7, '02')).toBe(false)
+    expect(isStaffEmployedOnDay(s, 2026, 7, '03')).toBe(true)
+    expect(isStaffEmployedOnDay(s, 2026, 7, '30')).toBe(true)
+  })
+
+  it('counts unpaid weekdays before joining for monthly deduction', () => {
+    // July 2026: join on 3rd (Fri). Days 1=Wed, 2=Thu unpaid; no Sunday in 1–2.
+    expect(unpaidDaysOutsideEmployment({ joining_date: '2026-07-03' }, 2026, 7)).toBe(2)
+  })
+
+  it('deducts pre-join weekdays from monthly earned pay', () => {
+    const monthly = 26000
+    const { daily_wage, hourly_wage } = deriveWageRates(monthly)
+    const staff = {
+      id: 's1',
+      name: 'New',
+      phone: '',
+      designation: '',
+      pay_type: 'monthly' as const,
+      monthly_amount: monthly,
+      daily_wage,
+      hourly_wage,
+      bank: '',
+      acno: '',
+      ifsc: '',
+      acname: '',
+      is_active: true,
+      joining_date: '2026-07-03',
+      firm_id: 'f1',
+      created_at: '',
+      updated_at: '',
+      is_deleted: false,
+    }
+    // Mark only from join day onward as present for a few days — pre-join weekdays still cut pay.
+    const hours = hoursForDays(20)
+    const line = buildPayrollLine(staff, hours, undefined, 2026, 7, 0, 0)
+    const fullMonth = calcEarnedFromHours('monthly', monthly, hourly_wage, summarizeDayHours(hoursForDays(26), 31))
+    expect(line.earned).toBeLessThan(fullMonth)
+    expect(line.earned).toBe(monthly - 2 * daily_wage)
   })
 })

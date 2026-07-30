@@ -19,6 +19,8 @@ import {
   deriveLinePayStatus,
   deriveWageRates,
   filterStaffForPeriod,
+  filterDayHoursToEmployment,
+  isStaffEmployedOnDay,
   lineBalanceDue,
   normalizeDayHours,
   normalizePayrollLine,
@@ -194,20 +196,28 @@ export const usePayrollStore = defineStore('payroll', () => {
     }
     const rates = deriveWageRates(data.monthly_amount)
     const leaving_date = (data.leaving_date || '').trim()
-    const joinPeriod = currentPeriod()
+    const joining_date = (data.joining_date || '').trim()
+    const salaryStartPeriod = (joining_date.slice(0, 7) || currentPeriod()).slice(0, 7)
     const monthly = Math.max(0, Number(data.monthly_amount) || 0)
     const rec = await staffRepo.create({
       ...data,
       firm_id: firm.activeFirmId,
       monthly_amount: monthly,
-      salary_history: [{ effective_period: joinPeriod, monthly_amount: monthly }],
+      salary_history: [{ effective_period: salaryStartPeriod, monthly_amount: monthly }],
       daily_wage: rates.daily_wage,
       hourly_wage: rates.hourly_wage,
+      joining_date,
       leaving_date,
       is_active: leaving_date ? false : data.is_active !== false,
     } as any)
     await logActivity(firm.activeFirmId, 'create', 'staff', rec.id, `Staff ${rec.name} added`)
     await load()
+    // Mid-month joiners must appear on this month's attendance run immediately.
+    try {
+      await ensureRun(salaryStartPeriod)
+      const nowPeriod = currentPeriod()
+      if (nowPeriod !== salaryStartPeriod) await ensureRun(nowPeriod)
+    } catch { /* run sync best-effort */ }
     void syncPayrollToCloudIfReady()
     return rec
   }
@@ -217,16 +227,19 @@ export const usePayrollStore = defineStore('payroll', () => {
     if (!existing) return
     const leaving_date =
       patch.leaving_date !== undefined ? (patch.leaving_date || '').trim() : (existing.leaving_date || '')
+    const joining_date =
+      patch.joining_date !== undefined ? (patch.joining_date || '').trim() : (existing.joining_date || '')
     const is_active = leaving_date
       ? false
       : patch.is_active !== undefined
         ? patch.is_active
         : existing.is_active
     const { monthly_amount: _m, daily_wage: _d, hourly_wage: _h, salary_history: _h2, ...rest } = patch
-    const merged = { ...existing, ...rest, leaving_date, is_active }
+    const merged = { ...existing, ...rest, joining_date, leaving_date, is_active }
     const rates = staffDisplayRates(merged)
     await staffRepo.update(id, {
       ...rest,
+      joining_date,
       leaving_date,
       is_active,
       monthly_amount: rates.monthly_amount,
@@ -234,6 +247,12 @@ export const usePayrollStore = defineStore('payroll', () => {
       hourly_wage: rates.hourly_wage,
     })
     await load()
+    try {
+      const syncPeriod = (joining_date.slice(0, 7) || currentPeriod()).slice(0, 7)
+      await ensureRun(syncPeriod)
+      const nowPeriod = currentPeriod()
+      if (nowPeriod !== syncPeriod) await ensureRun(nowPeriod)
+    } catch { /* best-effort */ }
     void syncPayrollToCloudIfReady()
   }
 
@@ -457,14 +476,20 @@ export const usePayrollStore = defineStore('payroll', () => {
       .map((line) => {
         const staff = staffById.get(line.staff_id)!
         const day_hours = { ...normalizeDayHours(line) }
-        for (const d of days) day_hours[d] = { ...stamp }
+        for (const d of days) {
+          if (!isStaffEmployedOnDay(staff, run.year, run.month, d)) continue
+          day_hours[d] = { ...stamp }
+        }
         return buildLineForStaff(staff, run, day_hours, line.attendance, line)
       })
 
     for (const staff of eligible) {
       if (lines.some((l) => l.staff_id === staff.id)) continue
       const day_hours: Record<string, DayAttendance> = {}
-      for (const d of days) day_hours[d] = { ...stamp }
+      for (const d of days) {
+        if (!isStaffEmployedOnDay(staff, run.year, run.month, d)) continue
+        day_hours[d] = { ...stamp }
+      }
       lines.push(buildLineForStaff(staff, run, day_hours, undefined))
     }
 
@@ -491,10 +516,27 @@ export const usePayrollStore = defineStore('payroll', () => {
       .map((line) => {
         if (line.staff_id !== staffId) return line
         if (line.pay_status === 'paid') return line
-        const day_hours = patch.day_hours ?? normalizeDayHours(line)
+        const day_hours = filterDayHoursToEmployment(
+          patch.day_hours ?? normalizeDayHours(line),
+          staff,
+          run.year,
+          run.month,
+        )
         const other = patch.other_deduction ?? line.other_deduction
         return buildLineForStaff(staff, run, day_hours, line.attendance, { ...line, other_deduction: other })
       })
+
+    // New staff added mid-month: ensureRun should sync them, but if the line
+    // is still missing, append it so attendance saves instead of silently no-op.
+    if (!lines.some((l) => l.staff_id === staffId)) {
+      const day_hours = filterDayHoursToEmployment(
+        patch.day_hours ?? {},
+        staff,
+        run.year,
+        run.month,
+      )
+      lines.push(buildLineForStaff(staff, run, day_hours, undefined))
+    }
 
     await persistRunLines(run, lines)
     void syncPayrollToCloudIfReady()

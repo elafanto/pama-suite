@@ -22,6 +22,7 @@ import {
   deriveWageRates,
   emptyDay,
   formatPayrollMoney,
+  isStaffEmployedOnDay,
   isSunday,
   lineBalanceDue,
   normalizeDayHours,
@@ -64,6 +65,7 @@ const staffForm = reactive({
   ifsc: '',
   acname: '',
   is_active: true,
+  joining_date: '',
   leaving_date: '',
 })
 
@@ -178,7 +180,7 @@ function blankStaff() {
   salaryEffectiveMonth.value = currentPeriod()
   Object.assign(staffForm, {
     name: '', phone: '', designation: '', pay_type: 'monthly' as StaffPayType,
-    monthly_amount: 0, bank: '', acno: '', ifsc: '', acname: '', is_active: true, leaving_date: '',
+    monthly_amount: 0, bank: '', acno: '', ifsc: '', acname: '', is_active: true, joining_date: '', leaving_date: '',
   })
 }
 
@@ -230,14 +232,18 @@ function openEditStaff(s: Staff) {
   Object.assign(staffForm, {
     name: s.name, phone: s.phone, designation: s.designation, pay_type: s.pay_type,
     monthly_amount: staffSalaryForPeriod(s, currentPeriod()), bank: s.bank, acno: s.acno, ifsc: s.ifsc,
-    acname: s.acname, is_active: s.is_active, leaving_date: s.leaving_date || '',
+    acname: s.acname, is_active: s.is_active, joining_date: s.joining_date || '', leaving_date: s.leaving_date || '',
   })
   showStaffModal.value = true
 }
 
 async function saveStaff() {
   if (!staffForm.name.trim()) return alert('Name required')
+  const joining_date = staffForm.joining_date || ''
   const leaving_date = staffForm.leaving_date || ''
+  if (joining_date && leaving_date && leaving_date < joining_date) {
+    return alert('Leaving date joining date se pehle nahi ho sakti.')
+  }
   const monthly_amount = Math.max(0, Number(staffForm.monthly_amount) || 0)
   const payload: NewStaff = {
     name: staffForm.name.trim(),
@@ -249,6 +255,7 @@ async function saveStaff() {
     acno: staffForm.acno.trim(),
     ifsc: staffForm.ifsc.trim().toUpperCase(),
     acname: staffForm.acname.trim() || staffForm.name.trim(),
+    joining_date,
     leaving_date,
     is_active: leaving_date ? false : staffForm.is_active,
   }
@@ -309,7 +316,9 @@ const canEditAttendance = computed(
 
 function startAttendanceEdit() {
   if (currentRun.value?.status === 'paid') return alert('Month paid — attendance locked.')
-  attendanceEditMode.value = true
+  void ensurePeriodRun().then(() => {
+    attendanceEditMode.value = true
+  })
 }
 
 function stopAttendanceEdit() {
@@ -362,6 +371,9 @@ async function bulkAllSundays() {
 function openDayActionMenu(staffId: string, day: string) {
   if (!canEditAttendance.value) return
   const staff = periodStaff.value.find((s) => s.id === staffId)
+  if (staff && !isStaffEmployedOnDay(staff, selYear.value, selMonth.value, day)) {
+    return alert('Is din staff employed nahi tha (joining/leaving date check karein).')
+  }
   dayActionStaffId.value = staffId
   dayActionDay.value = day
   dayActionStaffName.value = staff?.name || ''
@@ -371,6 +383,10 @@ function openDayActionMenu(staffId: string, day: string) {
 async function applyStaffDayPreset(preset: 'full' | 'absent' | 'holiday' | 'sunday' | 'clear') {
   const staffId = dayActionStaffId.value
   const day = dayActionDay.value
+  const staff = periodStaff.value.find((s) => s.id === staffId)
+  if (staff && !isStaffEmployedOnDay(staff, selYear.value, selMonth.value, day) && preset !== 'clear') {
+    return alert('Joining date se pehle / leaving date ke baad attendance nahi lagegi.')
+  }
   const line = lineFor(staffId)
   const hours = line ? { ...normalizeDayHours(line) } : {}
 
@@ -388,7 +404,8 @@ async function applyStaffDayPreset(preset: 'full' | 'absent' | 'holiday' | 'sund
     hours[day] = { ...dayFromPreset(preset) }
   }
 
-  await store.updateRunLine(period.value, staffId, { day_hours: hours })
+  const res = await store.updateRunLine(period.value, staffId, { day_hours: hours })
+  if (res && 'error' in res) alert(res.error)
   showDayActionModal.value = false
 }
 
@@ -712,6 +729,7 @@ onMounted(async () => {
         <div class="min-w-0 flex-1">
           <div class="font-bold text-navy flex items-center gap-2 flex-wrap">
             {{ s.name }}
+            <span v-if="s.joining_date" class="pp-badge bg-sky-100 text-sky-700">Joined {{ fmtLeavingDate(s.joining_date) }}</span>
             <span v-if="s.leaving_date" class="pp-badge bg-rose-100 text-rose-700">Left {{ fmtLeavingDate(s.leaving_date) }}</span>
             <span v-else-if="!s.is_active" class="pp-badge bg-slate-200 text-slate-600">Inactive</span>
           </div>
@@ -869,10 +887,13 @@ onMounted(async () => {
                 v-for="d in dayCols"
                 :key="d"
                 class="border border-slate-200 p-0.5"
-                :class="isSunday(selYear, selMonth, d) ? 'bg-indigo-50/50' : ''"
+                :class="[
+                  isSunday(selYear, selMonth, d) ? 'bg-indigo-50/50' : '',
+                  !isStaffEmployedOnDay(s, selYear, selMonth, d) ? 'bg-slate-100' : '',
+                ]"
               >
                 <button
-                  v-if="canEditAttendance"
+                  v-if="canEditAttendance && isStaffEmployedOnDay(s, selYear, selMonth, d)"
                   type="button"
                   class="min-w-8 h-8 px-0.5 rounded text-[9px] font-bold flex items-center justify-center"
                   :class="dayCellClass(dayFor(s.id, d))"
@@ -880,6 +901,13 @@ onMounted(async () => {
                 >
                   {{ dayCellLabel(dayFor(s.id, d)) }}
                 </button>
+                <span
+                  v-else-if="!isStaffEmployedOnDay(s, selYear, selMonth, d)"
+                  class="min-w-8 h-8 px-0.5 rounded text-[9px] font-bold flex items-center justify-center text-slate-300"
+                  title="Joining se pehle / leaving ke baad — attendance nahi"
+                >
+                  —
+                </span>
                 <span
                   v-else
                   class="min-w-8 h-8 px-0.5 rounded text-[9px] font-bold flex items-center justify-center"
@@ -924,6 +952,7 @@ onMounted(async () => {
       </div>
       <p v-if="periodStaff.length > 0" class="text-[10px] text-slate-400 px-1">
         Har din = paid hours × hourly wage. Sunday weekly off unpaid (÷26 me pehle se); Sunday par duty/OT ho to pay milega.
+        Joining date se pehle / leaving date ke baad cells <strong>—</strong> dikhenge — wahan attendance nahi lagegi.
       </p>
     </section>
 
@@ -1288,6 +1317,13 @@ onMounted(async () => {
             <input v-model="staffForm.acname" class="pp-input" placeholder="Account name" />
           </div>
         </details>
+        <div>
+          <label class="pp-label">Joining date</label>
+          <input v-model="staffForm.joining_date" type="date" class="pp-input" />
+          <p class="text-xs text-slate-500 mt-1">
+            Mid-month join ho to joining date daalo — us din se pehle attendance nahi lagegi, monthly salary me un dinon ka cut hoga.
+          </p>
+        </div>
         <div>
           <label class="pp-label">Leaving date</label>
           <input v-model="staffForm.leaving_date" type="date" class="pp-input" />

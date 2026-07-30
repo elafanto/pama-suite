@@ -113,25 +113,91 @@ export function staffLeavingPeriod(leavingDate: string | undefined | null): stri
   return leavingDate.slice(0, 7)
 }
 
+/** YYYY-MM from joining_date, or null if not set. */
+export function staffJoiningPeriod(joiningDate: string | undefined | null): string | null {
+  if (!joiningDate || joiningDate.length < 7) return null
+  return joiningDate.slice(0, 7)
+}
+
 /**
- * Staff appears in a payroll period if still employed that month.
+ * Staff appears in a payroll period if employed that month.
+ * Joining month is included (from joining day); months before join are hidden.
  * Leaving month is included; from the next month they are hidden.
  */
 export function isStaffInPeriod(
-  staff: Pick<Staff, 'is_active' | 'leaving_date' | 'is_deleted'>,
+  staff: Pick<Staff, 'is_active' | 'joining_date' | 'leaving_date' | 'is_deleted'>,
   period: string,
 ): boolean {
   if (staff.is_deleted) return false
+  const joinPeriod = staffJoiningPeriod(staff.joining_date)
+  if (joinPeriod && period < joinPeriod) return false
   const leavePeriod = staffLeavingPeriod(staff.leaving_date)
   if (leavePeriod) return period <= leavePeriod
   return staff.is_active !== false
 }
 
-export function filterStaffForPeriod<T extends Pick<Staff, 'is_active' | 'leaving_date' | 'is_deleted'>>(
+export function filterStaffForPeriod<T extends Pick<Staff, 'is_active' | 'joining_date' | 'leaving_date' | 'is_deleted'>>(
   staffList: T[],
   period: string,
 ): T[] {
   return staffList.filter((s) => isStaffInPeriod(s, period))
+}
+
+/** Full calendar date YYYY-MM-DD for a payroll day key. */
+export function periodDayDate(year: number, month: number, dayKey: string): string {
+  return `${year}-${String(month).padStart(2, '0')}-${String(dayKey).padStart(2, '0')}`
+}
+
+/**
+ * True when staff can work / mark attendance on this calendar day.
+ * Days before joining_date and after leaving_date are excluded.
+ */
+export function isStaffEmployedOnDay(
+  staff: Pick<Staff, 'joining_date' | 'leaving_date'>,
+  year: number,
+  month: number,
+  dayKey: string,
+): boolean {
+  const date = periodDayDate(year, month, dayKey)
+  const join = (staff.joining_date || '').trim()
+  if (join && date < join.slice(0, 10)) return false
+  const leave = (staff.leaving_date || '').trim()
+  if (leave && date > leave.slice(0, 10)) return false
+  return true
+}
+
+/** Drop attendance marks outside the joining–leaving window. */
+export function filterDayHoursToEmployment(
+  dayHours: Record<string, DayAttendance>,
+  staff: Pick<Staff, 'joining_date' | 'leaving_date'>,
+  year: number,
+  month: number,
+): Record<string, DayAttendance> {
+  const out: Record<string, DayAttendance> = {}
+  for (const [day, mark] of Object.entries(dayHours)) {
+    if (isStaffEmployedOnDay(staff, year, month, day)) out[day] = mark
+  }
+  return out
+}
+
+/**
+ * Weekdays in this month outside employment (before join / after leave).
+ * Used so monthly salary deducts those days (÷26 daily), without counting Sundays.
+ */
+export function unpaidDaysOutsideEmployment(
+  staff: Pick<Staff, 'joining_date' | 'leaving_date'>,
+  year: number,
+  month: number,
+): number {
+  const dim = daysInMonth(year, month)
+  let count = 0
+  for (let d = 1; d <= dim; d++) {
+    const key = String(d).padStart(2, '0')
+    if (isStaffEmployedOnDay(staff, year, month, key)) continue
+    if (isSunday(year, month, key)) continue
+    count++
+  }
+  return count
 }
 
 export function daysInMonth(year: number, month: number): number {
@@ -531,13 +597,23 @@ export function buildPayrollLine(
   advanceItems: PayrollAdvanceItem[] = [],
 ): PayrollLine {
   const dim = daysInMonth(year, month)
-  const day_hours =
+  const rawHours =
     dayHoursInput && Object.keys(dayHoursInput).length > 0
       ? { ...dayHoursInput }
       : migrateMarksToDayHours(legacyMarks)
+  const day_hours = filterDayHoursToEmployment(rawHours, staff, year, month)
 
   const summary = summarizeDayHours(day_hours, dim)
-  const earned = calcEarnedFromHours(staff.pay_type, staff.monthly_amount, staff.hourly_wage, summary)
+  const outsideDays = unpaidDaysOutsideEmployment(staff, year, month)
+  const summaryForPay =
+    outsideDays > 0 && staff.pay_type === 'monthly'
+      ? {
+          ...summary,
+          days_absent: summary.days_absent + outsideDays,
+          total_off_unpaid_hours: summary.total_off_unpaid_hours + outsideDays * PAYROLL_HOURS_PER_DAY,
+        }
+      : summary
+  const earned = calcEarnedFromHours(staff.pay_type, staff.monthly_amount, staff.hourly_wage, summaryForPay)
   const adv = Math.max(0, advanceDeduction)
   const other = Math.min(Math.max(0, otherDeduction), Math.max(0, earned))
   const net = earned - adv - other

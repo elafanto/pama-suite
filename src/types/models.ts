@@ -287,6 +287,8 @@ export interface Staff extends BaseRecord {
   ifsc: string
   acname: string
   is_active: boolean
+  /** First working day (YYYY-MM-DD). Staff appears from joining month; days before join are not markable. */
+  joining_date?: string
   /** Last working day (YYYY-MM-DD). Staff stays in that month's payroll, hidden from later months. */
   leaving_date?: string
 }
