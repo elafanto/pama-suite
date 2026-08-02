@@ -145,12 +145,21 @@ export function filterStaffForPeriod<T extends Pick<Staff, 'is_active' | 'joinin
 
 /** Full calendar date YYYY-MM-DD for a payroll day key. */
 export function periodDayDate(year: number, month: number, dayKey: string): string {
-  return `${year}-${String(month).padStart(2, '0')}-${String(dayKey).padStart(2, '0')}`
+  const y = Number(year)
+  const m = Number(month)
+  const d = String(dayKey || '').padStart(2, '0')
+  if (!y || !m || !/^\d{2}$/.test(d)) return ''
+  return `${y}-${String(m).padStart(2, '0')}-${d}`
+}
+
+function isValidIsoDate(value: string | undefined | null): value is string {
+  return !!value && /^\d{4}-\d{2}-\d{2}$/.test(value.trim())
 }
 
 /**
  * True when staff can work / mark attendance on this calendar day.
  * Days before joining_date and after leaving_date are excluded.
+ * Invalid / missing joining-leaving dates = employed (no block).
  */
 export function isStaffEmployedOnDay(
   staff: Pick<Staff, 'joining_date' | 'leaving_date'>,
@@ -159,10 +168,11 @@ export function isStaffEmployedOnDay(
   dayKey: string,
 ): boolean {
   const date = periodDayDate(year, month, dayKey)
+  if (!date) return true
   const join = (staff.joining_date || '').trim()
-  if (join && date < join.slice(0, 10)) return false
+  if (isValidIsoDate(join) && date < join) return false
   const leave = (staff.leaving_date || '').trim()
-  if (leave && date > leave.slice(0, 10)) return false
+  if (isValidIsoDate(leave) && date > leave) return false
   return true
 }
 

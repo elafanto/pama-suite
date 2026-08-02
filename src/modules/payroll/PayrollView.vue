@@ -316,8 +316,11 @@ const canEditAttendance = computed(
 
 function startAttendanceEdit() {
   if (currentRun.value?.status === 'paid') return alert('Month paid — attendance locked.')
-  void ensurePeriodRun().then(() => {
-    attendanceEditMode.value = true
+  // Enable edit immediately — do not block on ensureRun (hang/fail was locking everyone out).
+  attendanceEditMode.value = true
+  void ensurePeriodRun().catch((e: any) => {
+    console.error(e)
+    alert('Attendance run sync issue: ' + (e?.message || 'unknown error'))
   })
 }
 
@@ -452,7 +455,8 @@ async function saveDayModal() {
     ot_hours: Math.max(0, Number(dayForm.ot_hours) || 0),
     kind: duty === null ? undefined : duty >= PAYROLL_HOURS_PER_DAY && !dayForm.ot_hours ? 'work' : 'work',
   }
-  await store.updateRunLine(period.value, dayModalStaffId.value, { day_hours: hours })
+  const res = await store.updateRunLine(period.value, dayModalStaffId.value, { day_hours: hours })
+  if (res && 'error' in res) return alert(res.error)
   showDayModal.value = false
 }
 
@@ -460,7 +464,8 @@ async function clearDayModal() {
   const line = lineFor(dayModalStaffId.value)
   const hours = line ? { ...normalizeDayHours(line) } : {}
   delete hours[dayModalDay.value]
-  await store.updateRunLine(period.value, dayModalStaffId.value, { day_hours: hours })
+  const res = await store.updateRunLine(period.value, dayModalStaffId.value, { day_hours: hours })
+  if (res && 'error' in res) return alert(res.error)
   showDayModal.value = false
 }
 

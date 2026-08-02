@@ -404,7 +404,8 @@ export const usePayrollStore = defineStore('payroll', () => {
 
     const lines: PayrollLine[] = [
       ...kept.map((line) => {
-        const staff = eligible.find((s) => s.id === line.staff_id)!
+        const staff = eligible.find((s) => s.id === line.staff_id)
+        if (!staff) return line
         return buildLineForStaff(staff, run, normalizeDayHours(line), line.attendance, line)
       }),
       ...missing.map((s) => buildLineForStaff(s, run, {}, undefined)),
@@ -525,6 +526,11 @@ export const usePayrollStore = defineStore('payroll', () => {
         const other = patch.other_deduction ?? line.other_deduction
         return buildLineForStaff(staff, run, day_hours, line.attendance, { ...line, other_deduction: other })
       })
+
+    const target = lines.find((l) => l.staff_id === staffId)
+    if (target?.pay_status === 'paid' && patch.day_hours) {
+      return { error: 'Is staff ki salary paid hai — attendance change nahi hogi.' }
+    }
 
     // New staff added mid-month: ensureRun should sync them, but if the line
     // is still missing, append it so attendance saves instead of silently no-op.
