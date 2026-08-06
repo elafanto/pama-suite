@@ -5,7 +5,7 @@ import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useProductionStore } from '@/stores/production'
-import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveReelFeedWeight, findSameConfigActiveReels, generateCopyReelNumbers, filterReelsForDeletion, filterReelLinkedMovements, STAGE_LABELS, STOCK_LABELS, type ConsumableStockType } from '@/services/production'
+import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveRemainingWeightUpdate, generateCopyReelNumbers, filterReelsForDeletion, filterReelLinkedMovements, STAGE_LABELS, STOCK_LABELS, type ConsumableStockType } from '@/services/production'
 import type { PaperType, ProductionStage, ProductionStockType, ReelStock } from '@/types/models'
 
 const firmStore = useFirmStore()
@@ -73,16 +73,8 @@ const consumableFeedForm = reactive({
   notes: '',
 })
 
-const reelConsumptionForm = reactive({
-  date: new Date().toISOString().slice(0, 10),
-  reel_id: '',
-  mode: 'partial' as 'full' | 'partial',
-  used_weight: 0,
-  job_id: '',
-  reason: 'Plant feed',
-  notes: '',
-  batchSameConfig: false,
-})
+const selectedReelIds = ref<string[]>([])
+const remainingDrafts = reactive<Record<string, number>>({})
 
 const manualReelForm = reactive({
   date: new Date().toISOString().slice(0, 10),
@@ -104,7 +96,7 @@ const reelFilters = reactive({
   bf: '',
   deckle: '',
   color: '',
-  status: 'all',
+  status: 'active',
 })
 
 const reelCleanupForm = reactive({
@@ -133,12 +125,6 @@ const stockTypes = Object.keys(STOCK_LABELS) as ProductionStockType[]
 const openJobs = computed(() => production.jobs.filter((j) => j.status !== 'closed' && j.status !== 'dispatched'))
 const selectedJob = computed(() => production.jobs.find((j) => j.id === stageForm.job_id) || null)
 const activeReels = computed(() => production.reels.filter((r) => r.status === 'active' && r.current_weight > 0))
-const selectedFeedReel = computed(() => production.reels.find((r) => r.id === reelConsumptionForm.reel_id) || null)
-const sameConfigFeedReels = computed(() => {
-  const selected = selectedFeedReel.value
-  if (!selected) return [] as typeof production.reels
-  return findSameConfigActiveReels(production.reels, selected, { firmId: firmStore.activeFirmId })
-})
 const manualReelCopyPreview = computed(() => {
   const base = manualReelForm.reel_no.trim()
   const copies = Math.max(1, Math.floor(Number(manualReelForm.copies) || 1))
@@ -167,6 +153,16 @@ const filteredReels = computed(() => production.reels.filter((reel) =>
   (!reelFilters.color || normalizeReelColor(reel.color) === reelFilters.color) &&
   (reelFilters.status === 'all' || reel.status === reelFilters.status),
 ))
+const selectableFilteredReels = computed(() =>
+  filteredReels.value.filter((r) => r.status === 'active' && (Number(r.current_weight) || 0) > 0),
+)
+const allSelectableChecked = computed(() => {
+  const ids = selectableFilteredReels.value.map((r) => r.id)
+  return ids.length > 0 && ids.every((id) => selectedReelIds.value.includes(id))
+})
+const selectedActiveReels = computed(() =>
+  production.reels.filter((r) => selectedReelIds.value.includes(r.id) && r.status === 'active' && (Number(r.current_weight) || 0) > 0),
+)
 const consumedReelsForCleanup = computed(() => filterReelsForDeletion(production.reels, { consumedOnly: true }))
 const reelsBeforeDateForCleanup = computed(() => {
   const before = reelCleanupForm.beforeDate.trim()
@@ -176,6 +172,23 @@ const reelsBeforeDateForCleanup = computed(() => {
     consumedOnly: reelCleanupForm.consumedOnlyBeforeDate,
   })
 })
+
+watch(
+  () => production.reels.map((r) => `${r.id}:${r.current_weight}`).join('|'),
+  () => {
+    for (const reel of production.reels) {
+      if (reel.status === 'active') {
+        remainingDrafts[reel.id] = Number(reel.current_weight) || 0
+      } else {
+        delete remainingDrafts[reel.id]
+      }
+    }
+    selectedReelIds.value = selectedReelIds.value.filter((id) =>
+      production.reels.some((r) => r.id === id && r.status === 'active' && !r.is_deleted),
+    )
+  },
+  { immediate: true },
+)
 const balanceRows = computed(() => {
   const bal = productionBalance(production.movements, firmStore.activeFirmId, selectedJobId.value || undefined)
   return stockTypes.map((type) => ({ type, label: STOCK_LABELS[type], ...bal[type] }))
@@ -481,23 +494,27 @@ async function saveConsumableFeed() {
   })
 }
 
-function selectReelForFeed(reelId: string) {
-  reelConsumptionForm.reel_id = reelId
-  reelConsumptionForm.mode = 'partial'
-  reelConsumptionForm.batchSameConfig = false
-  const reel = production.reels.find((r) => r.id === reelId)
-  reelConsumptionForm.used_weight = reel ? Number(reel.current_weight) || 0 : 0
-  activeTab.value = 'reels'
+function toggleSelectReel(reelId: string, checked: boolean) {
+  if (checked) {
+    if (!selectedReelIds.value.includes(reelId)) selectedReelIds.value = [...selectedReelIds.value, reelId]
+  } else {
+    selectedReelIds.value = selectedReelIds.value.filter((id) => id !== reelId)
+  }
 }
 
-function clearFeedIfDeleted(reelIds: string[]) {
-  if (reelIds.includes(reelConsumptionForm.reel_id)) {
-    Object.assign(reelConsumptionForm, {
-      reel_id: '',
-      used_weight: 0,
-      batchSameConfig: false,
-    })
+function toggleSelectAllFiltered(checked: boolean) {
+  const ids = selectableFilteredReels.value.map((r) => r.id)
+  if (checked) {
+    selectedReelIds.value = Array.from(new Set([...selectedReelIds.value, ...ids]))
+  } else {
+    const drop = new Set(ids)
+    selectedReelIds.value = selectedReelIds.value.filter((id) => !drop.has(id))
   }
+}
+
+function clearSelection(reelIds: string[]) {
+  const drop = new Set(reelIds)
+  selectedReelIds.value = selectedReelIds.value.filter((id) => !drop.has(id))
 }
 
 async function deleteOneReel(reel: ReelStock) {
@@ -511,7 +528,7 @@ async function deleteOneReel(reel: ReelStock) {
   if (!ok) return
   try {
     const result = await production.deleteReel(reel.id)
-    clearFeedIfDeleted([reel.id])
+    clearSelection([reel.id])
     alert(result.reelsDeleted
       ? `Reel deleted (${result.movementsDeleted} movements).`
       : 'Reel delete nahi hui.')
@@ -530,7 +547,7 @@ async function deleteAllConsumedReels() {
   if (!ok) return
   try {
     const result = await production.deleteConsumedReels()
-    clearFeedIfDeleted(result.reelIds)
+    clearSelection(result.reelIds)
     alert(`${result.reelsDeleted} consumed reels deleted (${result.movementsDeleted} movements).`)
   } catch (err: any) {
     alert(err?.message || 'Consumed reels delete nahi ho payin.')
@@ -556,10 +573,71 @@ async function deleteReelsBeforeDateAction() {
     const result = await production.deleteReelsBeforeDate(before, {
       consumedOnly: reelCleanupForm.consumedOnlyBeforeDate,
     })
-    clearFeedIfDeleted(result.reelIds)
+    clearSelection(result.reelIds)
     alert(`${result.reelsDeleted} reels deleted (${result.movementsDeleted} movements).`)
   } catch (err: any) {
     alert(err?.message || 'Old reels delete nahi ho payin.')
+  }
+}
+
+async function resetAllReelStockAction() {
+  const total = production.reels.length
+  if (!total) return alert('Koi reel stock nahi hai.')
+  const typed = prompt(
+    `SAARI reel stock soft-delete?\n\n${total} reels (active + consumed) + linked movements.\nPurchase bills / payroll / invoices SAFE.\n\nConfirm ke liye RESET type karein:`,
+  )
+  if (typed === null) return
+  if (String(typed).trim().toUpperCase() !== 'RESET') {
+    return alert('Cancel — RESET type nahi kiya.')
+  }
+  try {
+    const result = await production.resetAllReelStock()
+    selectedReelIds.value = []
+    alert(`Reset done: ${result.reelsDeleted} reels, ${result.movementsDeleted} movements deleted.\nAb naya setup Add Reel se shuru karein.`)
+  } catch (err: any) {
+    alert(err?.message || 'Reset fail.')
+  }
+}
+
+async function updateReelRemainingAction(reel: ReelStock) {
+  if (reel.status !== 'active') return
+  const current = Number(reel.current_weight) || 0
+  const remaining = Number(remainingDrafts[reel.id])
+  let used = 0
+  try {
+    ;({ used } = resolveRemainingWeightUpdate(current, remaining))
+  } catch (err: any) {
+    return alert(err?.message || 'Invalid remaining weight')
+  }
+  const ok = confirm(
+    remaining <= 0
+      ? `Reel ${reel.reel_no} FULL consume?\n\n${n2(current)} KG → 0 (Consumed)`
+      : `Reel ${reel.reel_no}: ${n2(current)} → ${n2(remaining)} KG?\n\nConsume ${n2(used)} KG`,
+  )
+  if (!ok) return
+  try {
+    await production.updateReelRemaining(reel.id, remaining)
+    if (remaining <= 0) clearSelection([reel.id])
+  } catch (err: any) {
+    alert(err?.message || 'Remaining update nahi hua.')
+  }
+}
+
+async function fullConsumeSelectedAction() {
+  const targets = selectedActiveReels.value
+  if (!targets.length) return alert('Pehle active reels select karo (checkbox).')
+  const total = targets.reduce((s, r) => s + (Number(r.current_weight) || 0), 0)
+  const nos = targets.map((r) => r.reel_no).join(', ')
+  const ok = confirm(
+    `Full consume selected?\n\n${targets.length} reels: ${nos}\nTotal ${n2(total)} KG → 0 (Consumed)`,
+  )
+  if (!ok) return
+  try {
+    await production.fullConsumeSelected(targets.map((r) => r.id))
+    clearSelection(targets.map((r) => r.id))
+    alert(`${targets.length} reels full consumed.`)
+  } catch (err: any) {
+    alert(err?.message || 'Full consume fail.')
   }
 }
 
@@ -613,90 +691,6 @@ async function saveManualReel() {
     color: 'NS',
     opening_weight: 0,
     rate: 0,
-  })
-}
-
-async function saveReelConsumption() {
-  if (!reelConsumptionForm.reel_id) return alert('Paper reel select karo')
-  const selectedReel = selectedFeedReel.value
-  if (!selectedReel) return alert('Selected reel stock nahi mila')
-
-  const batch = reelConsumptionForm.batchSameConfig
-  const targets = batch ? sameConfigFeedReels.value : [selectedReel]
-  if (!targets.length) return alert('Feed ke liye active reel nahi mili')
-
-  if (batch && targets.length === 1) {
-    // still fine — just one matching reel
-  }
-
-  try {
-    for (const reel of targets) {
-      resolveReelFeedWeight(
-        reelConsumptionForm.mode,
-        Number(reel.current_weight) || 0,
-        reelConsumptionForm.used_weight,
-      )
-    }
-  } catch (err: any) {
-    return alert(err?.message || 'Invalid feed weight')
-  }
-
-  const totalAvail = targets.reduce((sum, r) => sum + (Number(r.current_weight) || 0), 0)
-  const perReelUsed = reelConsumptionForm.mode === 'full'
-    ? null
-    : resolveReelFeedWeight('partial', Number(targets[0].current_weight) || 0, reelConsumptionForm.used_weight)
-  const totalUsed = reelConsumptionForm.mode === 'full'
-    ? totalAvail
-    : (perReelUsed || 0) * targets.length
-  const nos = targets.map((r) => r.reel_no).join(', ')
-  const configLabel = `${paperTypeOf(selectedReel)} / ${selectedReel.deckle_size} / ${selectedReel.gsm} GSM / ${selectedReel.bf} BF / ${normalizeReelColor(selectedReel.color)}`
-
-  const ok = confirm(
-    batch && targets.length > 1
-      ? (reelConsumptionForm.mode === 'full'
-        ? `SAME CONFIG batch FULL consume?\n\nConfig: ${configLabel}\nReels (${targets.length}): ${nos}\n\nTotal ${n2(totalAvail)} KG → Consumed`
-        : `SAME CONFIG batch feed?\n\nConfig: ${configLabel}\nReels (${targets.length}): ${nos}\n\nHar reel se ${n2(perReelUsed || 0)} KG × ${targets.length} = ${n2(totalUsed)} KG`)
-      : (reelConsumptionForm.mode === 'full'
-        ? `Reel ${selectedReel.reel_no} FULL consume?\n\n${n2(Number(selectedReel.current_weight) || 0)} KG → Consumed`
-        : `Reel ${selectedReel.reel_no} se ${n2(perReelUsed || 0)} KG feed?\n\nAvailable ${n2(Number(selectedReel.current_weight) || 0)} → Remaining ${n2(Math.max(0, (Number(selectedReel.current_weight) || 0) - (perReelUsed || 0)))}${(Number(selectedReel.current_weight) || 0) - (perReelUsed || 0) <= 0 ? ' (Consumed)' : ''}`),
-  )
-  if (!ok) return
-
-  try {
-    if (batch && targets.length > 1) {
-      await production.feedReelsBatch({
-        reel_ids: targets.map((r) => r.id),
-        date: reelConsumptionForm.date,
-        mode: reelConsumptionForm.mode,
-        used_weight: reelConsumptionForm.used_weight,
-        job_id: reelConsumptionForm.job_id || undefined,
-        reason: reelConsumptionForm.reason,
-        notes: reelConsumptionForm.notes,
-      })
-    } else {
-      await production.feedReel({
-        reel_id: reelConsumptionForm.reel_id,
-        date: reelConsumptionForm.date,
-        mode: reelConsumptionForm.mode,
-        used_weight: reelConsumptionForm.used_weight,
-        job_id: reelConsumptionForm.job_id || undefined,
-        reason: reelConsumptionForm.reason,
-        notes: reelConsumptionForm.notes,
-      })
-    }
-  } catch (err: any) {
-    alert(err?.message || 'Paper reel feed save nahi ho payi.')
-    return
-  }
-  Object.assign(reelConsumptionForm, {
-    date: new Date().toISOString().slice(0, 10),
-    reel_id: '',
-    mode: 'partial' as const,
-    used_weight: 0,
-    job_id: '',
-    reason: 'Plant feed',
-    notes: '',
-    batchSameConfig: false,
   })
 }
 
@@ -1023,11 +1017,24 @@ onMounted(async () => {
         <div class="flex flex-col gap-2 border-b pb-3 mb-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h2 class="font-semibold">Paper Reel Stock</h2>
-            <p class="text-xs text-slate-500">Normal inventory se alag reel-wise Kraft/Duplex stock aur movement tracking.</p>
+            <p class="text-xs text-slate-500">
+              Add se stock. List se tick → Full consume. Remaining KG cell → Update (partial).
+            </p>
           </div>
-          <RouterLink to="/purchases" class="pp-btn pp-btn-ghost !py-1.5 !px-3 text-xs no-underline">
-            Add from Purchase
-          </RouterLink>
+          <div class="flex flex-wrap gap-2">
+            <button
+              type="button"
+              class="pp-btn pp-btn-primary !py-1.5 !px-3 text-xs"
+              :disabled="!selectedActiveReels.length"
+              :class="{ 'opacity-50': !selectedActiveReels.length }"
+              @click="fullConsumeSelectedAction"
+            >
+              Full consume selected ({{ selectedActiveReels.length }})
+            </button>
+            <RouterLink to="/purchases" class="pp-btn pp-btn-ghost !py-1.5 !px-3 text-xs no-underline">
+              Add from Purchase
+            </RouterLink>
+          </div>
         </div>
         <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
         <div>
@@ -1075,47 +1082,77 @@ onMounted(async () => {
         </div>
       </div>
       <div class="overflow-x-auto">
-        <table class="w-full text-sm min-w-[1180px]">
+        <table class="w-full text-sm min-w-[1280px]">
           <thead class="text-xs uppercase text-slate-500 bg-slate-50">
             <tr>
+              <th class="p-3 text-center w-10">
+                <input
+                  type="checkbox"
+                  :checked="allSelectableChecked"
+                  :disabled="!selectableFilteredReels.length"
+                  @change="toggleSelectAllFiltered(($event.target as HTMLInputElement).checked)"
+                />
+              </th>
               <th class="p-3 text-left">Reel No</th>
               <th class="p-3 text-left">Type</th>
-              <th class="p-3 text-left">Bill No</th>
               <th class="p-3 text-left">Mill</th>
               <th class="p-3 text-left">Deckle</th>
               <th class="p-3 text-left">GSM / BF</th>
               <th class="p-3 text-left">Color</th>
               <th class="p-3 text-right">Opening KG</th>
               <th class="p-3 text-right">Current KG</th>
+              <th class="p-3 text-right">Remaining KG</th>
               <th class="p-3 text-center">Status</th>
               <th class="p-3 text-right">Action</th>
             </tr>
           </thead>
           <tbody class="divide-y">
             <tr v-for="reel in filteredReels" :key="reel.id">
+              <td class="p-3 text-center">
+                <input
+                  v-if="reel.status === 'active' && reel.current_weight > 0"
+                  type="checkbox"
+                  :checked="selectedReelIds.includes(reel.id)"
+                  @change="toggleSelectReel(reel.id, ($event.target as HTMLInputElement).checked)"
+                />
+                <span v-else class="text-slate-300">—</span>
+              </td>
               <td class="p-3 font-mono">{{ reel.reel_no }}</td>
               <td class="p-3">
                 <span class="pp-badge" :class="paperTypeOf(reel) === 'DUPLEX' ? 'bg-purple-100 text-purple-800' : 'bg-amber-100 text-amber-800'">
                   {{ paperTypeOf(reel) }}
                 </span>
               </td>
-              <td class="p-3 font-mono">{{ reel.purchase_bill_no || '-' }}</td>
               <td class="p-3">{{ reel.supplier_name }}</td>
               <td class="p-3">{{ reel.deckle_size }}</td>
               <td class="p-3">{{ reel.gsm }} / {{ reel.bf }}</td>
               <td class="p-3">{{ normalizeReelColor(reel.color) }}</td>
               <td class="p-3 text-right font-mono">{{ n2(reel.opening_weight) }}</td>
               <td class="p-3 text-right font-mono">{{ n2(reel.current_weight) }}</td>
+              <td class="p-3 text-right">
+                <input
+                  v-if="reel.status === 'active' && reel.current_weight > 0"
+                  type="number"
+                  min="0"
+                  step="0.001"
+                  class="pp-input !w-24 !py-1 text-right font-mono text-xs"
+                  :value="remainingDrafts[reel.id]"
+                  @input="remainingDrafts[reel.id] = Number(($event.target as HTMLInputElement).value)"
+                  @keydown.enter.prevent="updateReelRemainingAction(reel)"
+                />
+                <span v-else class="font-mono text-slate-400">—</span>
+              </td>
               <td class="p-3 text-center"><span class="pp-badge" :class="reel.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-slate-100'">{{ reel.status }}</span></td>
               <td class="p-3 text-right">
                 <div class="inline-flex flex-wrap items-center justify-end gap-1">
                   <button
                     v-if="reel.status === 'active' && reel.current_weight > 0"
                     type="button"
-                    class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs"
-                    @click="selectReelForFeed(reel.id)"
+                    class="pp-btn pp-btn-primary !py-1 !px-2 text-xs"
+                    title="Remaining KG save (partial / full if 0)"
+                    @click="updateReelRemainingAction(reel)"
                   >
-                    Feed
+                    Update
                   </button>
                   <button
                     type="button"
@@ -1129,7 +1166,7 @@ onMounted(async () => {
               </td>
             </tr>
             <tr v-if="filteredReels.length === 0">
-              <td colspan="11" class="p-8 text-center text-slate-400">Abhi koi reel nahi — right side se Add Reel karein, ya purchase confirm karein.</td>
+              <td colspan="12" class="p-8 text-center text-slate-400">Abhi koi reel nahi — right side se Add Reel karein, ya purchase confirm karein.</td>
             </tr>
           </tbody>
         </table>
@@ -1137,6 +1174,16 @@ onMounted(async () => {
       </div>
 
       <div class="space-y-6">
+        <div class="pp-card p-6 space-y-3">
+          <h2 class="font-semibold border-b pb-2">Reset all reel stock</h2>
+          <p class="text-xs text-slate-500">
+            Fresh setup: saari active + consumed reels soft-delete. Purchase / payroll / invoices safe.
+          </p>
+          <button type="button" class="pp-btn pp-btn-danger w-full" @click="resetAllReelStockAction">
+            Reset all reel stock…
+          </button>
+        </div>
+
         <div class="pp-card p-6 space-y-3">
           <h2 class="font-semibold border-b pb-2">Delete old data</h2>
           <p class="text-xs text-slate-500">
@@ -1183,8 +1230,8 @@ onMounted(async () => {
         </div>
 
         <div class="pp-card p-6 space-y-3">
-          <h2 class="font-semibold border-b pb-2">Add Reel (manual)</h2>
-          <p class="text-xs text-slate-500">Apna custom reel number, mill, size, GSM, BF, color aur weight yahan add karein. Same config ke multiple reels ke liye Copies use karein.</p>
+          <h2 class="font-semibold border-b pb-2">Add Reel (stock)</h2>
+          <p class="text-xs text-slate-500">Ek-ek reel full config ke saath add karein. Same config ke liye Copies use karein. Ye consumption nahi — stock intake hai.</p>
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label class="pp-label">Custom Reel No *</label>
@@ -1250,83 +1297,6 @@ onMounted(async () => {
           <button type="button" class="pp-btn pp-btn-primary w-full" @click="saveManualReel">
             {{ manualReelForm.copies > 1 ? `Add ${Math.max(1, Math.floor(Number(manualReelForm.copies) || 1))} Reels` : 'Add to Stock' }}
           </button>
-        </div>
-
-        <div class="pp-card p-6 space-y-4">
-          <h2 class="font-semibold border-b pb-2">Feed Reel (full / partial)</h2>
-          <div>
-            <label class="pp-label">Date</label>
-            <input v-model="reelConsumptionForm.date" type="date" class="pp-input" />
-          </div>
-          <div>
-            <label class="pp-label">Paper Reel *</label>
-            <select v-model="reelConsumptionForm.reel_id" class="pp-input">
-              <option value="">Select reel</option>
-              <option v-for="reel in activeReels" :key="reel.id" :value="reel.id">
-                {{ reel.reel_no }} - {{ paperTypeOf(reel) }} / {{ reel.deckle_size }} / {{ reel.gsm }} GSM / {{ n2(reel.current_weight) }} KG
-              </option>
-            </select>
-          </div>
-          <label
-            v-if="selectedFeedReel && sameConfigFeedReels.length > 1"
-            class="flex items-start gap-2 text-sm rounded border border-amber-200 bg-amber-50 p-3 cursor-pointer"
-          >
-            <input v-model="reelConsumptionForm.batchSameConfig" type="checkbox" class="mt-0.5" />
-            <span>
-              <span class="font-semibold">Feed all same-config reels ({{ sameConfigFeedReels.length }})</span>
-              <span class="block text-xs text-slate-600 mt-1">
-                Same type/deckle/GSM/BF/color:
-                {{ sameConfigFeedReels.map((r) => r.reel_no).join(', ') }}
-                — total {{ n2(sameConfigFeedReels.reduce((s, r) => s + (Number(r.current_weight) || 0), 0)) }} KG.
-                Partial = same KG har reel se; Full = sab consume.
-              </span>
-            </span>
-          </label>
-          <div>
-            <label class="pp-label">Feed mode *</label>
-            <select v-model="reelConsumptionForm.mode" class="pp-input">
-              <option value="partial">Partial — weight update</option>
-              <option value="full">Full consume — mark consumed</option>
-            </select>
-          </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="pp-label">
-                {{ reelConsumptionForm.batchSameConfig && sameConfigFeedReels.length > 1 ? 'Used Weight KG * (each reel)' : 'Used Weight KG *' }}
-              </label>
-              <input
-                v-model.number="reelConsumptionForm.used_weight"
-                type="number"
-                min="0"
-                step="0.001"
-                class="pp-input text-right"
-                :disabled="reelConsumptionForm.mode === 'full'"
-              />
-            </div>
-            <div>
-              <label class="pp-label">Job (optional)</label>
-              <select v-model="reelConsumptionForm.job_id" class="pp-input">
-                <option value="">No job</option>
-                <option v-for="job in production.jobs" :key="job.id" :value="job.id">{{ job.job_no }}</option>
-              </select>
-            </div>
-          </div>
-          <div>
-            <label class="pp-label">Reason</label>
-            <input v-model="reelConsumptionForm.reason" class="pp-input" placeholder="Plant feed, sample, damage..." />
-          </div>
-          <div>
-            <label class="pp-label">Notes</label>
-            <textarea v-model="reelConsumptionForm.notes" class="pp-input min-h-[80px]" placeholder="Operator, machine, reference..."></textarea>
-          </div>
-          <button type="button" class="pp-btn pp-btn-primary w-full" @click="saveReelConsumption">
-            {{ reelConsumptionForm.batchSameConfig && sameConfigFeedReels.length > 1
-              ? `Confirm Batch Feed (${sameConfigFeedReels.length})`
-              : 'Confirm Feed' }}
-          </button>
-          <p class="text-xs text-slate-500">
-            Partial: current weight update. Full: weight 0 + status consumed. Confirm dialog zaroori hai. Single reel feed default; same-config batch optional.
-          </p>
         </div>
 
         <div class="pp-card p-6">

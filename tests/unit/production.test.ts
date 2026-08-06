@@ -15,6 +15,7 @@ import {
   reelInventorySummary,
   resolveConsumableFeed,
   resolveReelFeedWeight,
+  resolveRemainingWeightUpdate,
 } from '@/services/production'
 
 describe('normalizeReelColor', () => {
@@ -242,5 +243,22 @@ describe('filterReelsForDeletion / filterReelLinkedMovements', () => {
       { id: 'm4', stock_ref_id: 'c', is_deleted: false },
     ] as any
     expect(filterReelLinkedMovements(moves, ['a', 'b'])).toHaveLength(2)
+  })
+})
+
+describe('resolveRemainingWeightUpdate', () => {
+  it('computes used weight from remaining', () => {
+    expect(resolveRemainingWeightUpdate(120, 85)).toEqual({ used: 35, remaining: 85 })
+  })
+
+  it('treats remaining 0 as full consume used = current', () => {
+    expect(resolveRemainingWeightUpdate(120, 0)).toEqual({ used: 120, remaining: 0 })
+  })
+
+  it('rejects remaining above current, negative, empty, or no-op', () => {
+    expect(() => resolveRemainingWeightUpdate(100, 110)).toThrow(/zyada/)
+    expect(() => resolveRemainingWeightUpdate(100, -1)).toThrow(/negative/)
+    expect(() => resolveRemainingWeightUpdate(0, 0)).toThrow(/consumed/)
+    expect(() => resolveRemainingWeightUpdate(100, 100)).toThrow(/barabar/)
   })
 })

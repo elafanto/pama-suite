@@ -742,6 +742,80 @@ export async function softDeleteReelsWithMovements(
   return { reelIds: ids, reelsDeleted, movementsDeleted }
 }
 
+/** Soft-delete every non-deleted reel for a firm (+ linked movements). Purchase bills untouched. */
+export async function resetAllFirmReelStock(firmId: string): Promise<SoftDeleteReelsResult> {
+  const reels = await db.reel_stocks
+    .where('firm_id')
+    .equals(firmId)
+    .filter((r) => !r.is_deleted)
+    .toArray()
+  return softDeleteReelsWithMovements(firmId, reels.map((r) => r.id))
+}
+
+/**
+ * Resolve partial consume from a new remaining weight.
+ * used = current - remaining; remaining === current is a no-op error.
+ */
+export function resolveRemainingWeightUpdate(currentWeight: number, remainingKg: number): {
+  used: number
+  remaining: number
+} {
+  const current = roundWeight(currentWeight)
+  const remaining = roundWeight(remainingKg)
+  if (current <= 0) throw new Error('Reel already consumed')
+  if (remaining < 0) throw new Error('Remaining weight negative nahi ho sakti')
+  if (remaining > current) {
+    throw new Error(`Remaining ${remaining} KG, current ${current} KG se zyada nahi ho sakti`)
+  }
+  if (remaining === current) throw new Error('Koi change nahi — remaining current ke barabar hai')
+  return { used: roundWeight(current - remaining), remaining }
+}
+
+/** Partial consume by setting the new remaining KG on a reel. */
+export async function updateReelRemainingWeight(data: {
+  firm_id: string
+  reel_id: string
+  remaining_kg: number
+  date?: string
+  notes?: string
+}) {
+  if (!data.reel_id) throw new Error('Reel select karo')
+  const reel = await db.reel_stocks.get(data.reel_id)
+  if (!reel || reel.is_deleted || reel.firm_id !== data.firm_id) {
+    throw new Error('Selected reel stock nahi mila')
+  }
+  const { used, remaining } = resolveRemainingWeightUpdate(
+    Number(reel.current_weight) || 0,
+    data.remaining_kg,
+  )
+  const date = data.date || nowISO().slice(0, 10)
+  return consumePaperReel({
+    firm_id: data.firm_id,
+    reel_id: data.reel_id,
+    date,
+    used_weight: used,
+    reason: remaining <= 0 ? 'Full consume via remaining update' : 'Partial via remaining weight',
+    notes: data.notes || `Remaining set to ${remaining} KG (was ${roundWeight(Number(reel.current_weight) || 0)})`,
+  })
+}
+
+/** Full-consume many reels in one batch. */
+export async function fullConsumeReels(data: {
+  firm_id: string
+  reel_ids: string[]
+  date?: string
+  notes?: string
+}) {
+  return feedPaperReelsBatch({
+    firm_id: data.firm_id,
+    reel_ids: data.reel_ids,
+    date: data.date || nowISO().slice(0, 10),
+    mode: 'full',
+    reason: 'Full consume selected',
+    notes: data.notes,
+  })
+}
+
 export type ConsumableStockType = 'glue' | 'ink' | 'stitching_wire'
 
 export interface PurchaseConsumableSpec {

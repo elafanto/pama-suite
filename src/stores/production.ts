@@ -12,9 +12,12 @@ import {
   feedPaperReel,
   feedPaperReelsBatch,
   filterReelsForDeletion,
+  fullConsumeReels,
+  resetAllFirmReelStock,
   saveProductionStage,
   saveStockAdjustment,
   softDeleteReelsWithMovements,
+  updateReelRemainingWeight,
   type ConsumableStockType,
 } from '@/services/production'
 import type { PaperType, ProductionJob, ProductionStageEntry, ProductionStockType, ReelStock, StockMovement } from '@/types/models'
@@ -254,6 +257,57 @@ export const useProductionStore = defineStore('production', () => {
     return deleteReels(targets.map((r) => r.id))
   }
 
+  /** Wipe all firm reel stock (active + consumed) + linked movements. */
+  async function resetAllReelStock() {
+    const firm = useFirmStore()
+    const result = await resetAllFirmReelStock(firm.activeFirmId)
+    if (result.reelsDeleted > 0) {
+      await logActivity(
+        firm.activeFirmId,
+        'delete',
+        'reel_stock',
+        result.reelIds[0] || '',
+        `Reset all reel stock — ${result.reelsDeleted} reels, ${result.movementsDeleted} movements`,
+        { reelIds: result.reelIds, movementsDeleted: result.movementsDeleted },
+      )
+    }
+    await load()
+    return result
+  }
+
+  /** Partial consume by setting remaining KG. */
+  async function updateReelRemaining(reelId: string, remainingKg: number, date?: string) {
+    const firm = useFirmStore()
+    const rec = await updateReelRemainingWeight({
+      firm_id: firm.activeFirmId,
+      reel_id: reelId,
+      remaining_kg: remainingKg,
+      date,
+    })
+    await logActivity(firm.activeFirmId, 'consume', 'reel_stock', reelId, rec.notes || 'Remaining weight updated')
+    await load()
+    return rec
+  }
+
+  /** Full-consume selected reel ids. */
+  async function fullConsumeSelected(reelIds: string[], date?: string) {
+    const firm = useFirmStore()
+    const recs = await fullConsumeReels({
+      firm_id: firm.activeFirmId,
+      reel_ids: reelIds,
+      date,
+    })
+    await logActivity(
+      firm.activeFirmId,
+      'consume',
+      'reel_stock',
+      reelIds[0] || '',
+      `Full consumed ${recs.length} reels`,
+    )
+    await load()
+    return recs
+  }
+
   return {
     jobs,
     stages,
@@ -275,5 +329,8 @@ export const useProductionStore = defineStore('production', () => {
     deleteReels,
     deleteConsumedReels,
     deleteReelsBeforeDate,
+    resetAllReelStock,
+    updateReelRemaining,
+    fullConsumeSelected,
   }
 })
