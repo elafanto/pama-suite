@@ -7,9 +7,10 @@ import { logActivity } from '@/services/activityLog'
 import {
   consumePaperReel,
   createManualConsumable,
-  createManualReel,
+  createManualReels,
   feedConsumable,
   feedPaperReel,
+  feedPaperReelsBatch,
   saveProductionStage,
   saveStockAdjustment,
   type ConsumableStockType,
@@ -116,12 +117,16 @@ export const useProductionStore = defineStore('production', () => {
     supplier_name: string
     supplier_id?: string | null
     date?: string
+    copies?: number
   }) {
     const firm = useFirmStore()
-    const rec = await createManualReel({ ...data, firm_id: firm.activeFirmId })
-    await logActivity(rec.firm_id, 'create', 'reel_stock', rec.id, `Manual reel ${rec.reel_no} added`)
+    const created = await createManualReels({ ...data, firm_id: firm.activeFirmId })
+    const label = created.length === 1
+      ? `Manual reel ${created[0].reel_no} added`
+      : `Manual ${created.length} reels added (${created[0].reel_no}…${created[created.length - 1].reel_no})`
+    await logActivity(created[0].firm_id, 'create', 'reel_stock', created[0].id, label)
     await load()
-    return rec
+    return created
   }
 
   async function feedReel(data: {
@@ -138,6 +143,28 @@ export const useProductionStore = defineStore('production', () => {
     await logActivity(rec.firm_id, 'consume', 'reel_stock', data.reel_id, rec.notes || 'Paper reel fed')
     await load()
     return rec
+  }
+
+  async function feedReelsBatch(data: {
+    reel_ids: string[]
+    date: string
+    mode: 'full' | 'partial'
+    used_weight?: number
+    job_id?: string
+    reason?: string
+    notes?: string
+  }) {
+    const firm = useFirmStore()
+    const recs = await feedPaperReelsBatch({ ...data, firm_id: firm.activeFirmId })
+    await logActivity(
+      firm.activeFirmId,
+      'consume',
+      'reel_stock',
+      data.reel_ids[0] || '',
+      `Batch fed ${recs.length} reels`,
+    )
+    await load()
+    return recs
   }
 
   async function addManualConsumable(data: {
@@ -187,6 +214,7 @@ export const useProductionStore = defineStore('production', () => {
     addReelConsumption,
     addManualReel,
     feedReel,
+    feedReelsBatch,
     addManualConsumable,
     feedConsumableStock,
   }

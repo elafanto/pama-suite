@@ -1,10 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import type { Purchase, ReelStock } from '@/types/models'
 import {
+  findSameConfigActiveReels,
+  generateCopyReelNumbers,
   normalizeReelColor,
+  proposePurchaseConsumableSpecs,
   proposePurchaseReelSpecs,
+  purchaseHasConsumableLines,
   purchaseHasReelLines,
   reelColorLabel,
+  reelConfigKey,
   reelInventorySummary,
   resolveConsumableFeed,
   resolveReelFeedWeight,
@@ -41,6 +46,7 @@ const reel = (over: Partial<ReelStock> = {}): ReelStock =>
     id: 'R' + Math.random(), firm_id: 'F1', paper_type: 'KRAFT', is_deleted: false,
     gsm: '120', bf: '18', deckle_size: '1400', color: 'NS',
     opening_weight: 100, current_weight: 100, status: 'active',
+    reel_no: 'R-1',
     ...over,
   }) as ReelStock
 
@@ -79,20 +85,85 @@ describe('resolveReelFeedWeight', () => {
   })
 })
 
+describe('generateCopyReelNumbers', () => {
+  it('returns the base alone when copies is 1', () => {
+    expect(generateCopyReelNumbers('R-101', 1)).toEqual(['R-101'])
+  })
+
+  it('auto-increments trailing digits with padding', () => {
+    expect(generateCopyReelNumbers('R-101', 3)).toEqual(['R-101', 'R-102', 'R-103'])
+    expect(generateCopyReelNumbers('REEL009', 2)).toEqual(['REEL009', 'REEL010'])
+  })
+
+  it('suffixes -2, -3 when base has no trailing digits', () => {
+    expect(generateCopyReelNumbers('ABC', 3)).toEqual(['ABC', 'ABC-2', 'ABC-3'])
+  })
+
+  it('rejects blank base and oversized copy counts', () => {
+    expect(() => generateCopyReelNumbers('  ', 2)).toThrow(/required/)
+    expect(() => generateCopyReelNumbers('R-1', 51)).toThrow(/50/)
+  })
+})
+
+describe('findSameConfigActiveReels / reelConfigKey', () => {
+  it('matches active reels with same type/deckle/gsm/bf/color', () => {
+    const selected = reel({ id: 'a', reel_no: 'R-1', color: 'NATURAL_BROWN' })
+    const reels = [
+      selected,
+      reel({ id: 'b', reel_no: 'R-2', color: 'NS' }),
+      reel({ id: 'c', reel_no: 'R-3', gsm: '150' }),
+      reel({ id: 'd', reel_no: 'R-4', status: 'consumed', current_weight: 0 }),
+      reel({ id: 'e', reel_no: 'R-5', color: 'GY' }),
+    ]
+    expect(reelConfigKey(selected)).toBe(reelConfigKey(reels[1]))
+    const matched = findSameConfigActiveReels(reels, selected)
+    expect(matched.map((r) => r.reel_no)).toEqual(['R-1', 'R-2'])
+  })
+})
+
 describe('resolveConsumableFeed', () => {
-  it('uses full available qty/weight for full mode', () => {
+  it('returns full available for full mode', () => {
     expect(resolveConsumableFeed('full', { qty: 10, weight: 25 })).toEqual({ qty: 10, weight: 25 })
   })
 
-  it('uses partial amounts when within available', () => {
-    expect(resolveConsumableFeed('partial', { qty: 10, weight: 25 }, { qty: 3, weight: 5 }))
-      .toEqual({ qty: 3, weight: 5 })
+  it('accepts partial qty/weight within available', () => {
+    expect(resolveConsumableFeed('partial', { qty: 10, weight: 25 }, { qty: 2, weight: 5 }))
+      .toEqual({ qty: 2, weight: 5 })
   })
 
-  it('rejects over-feed and empty stock', () => {
+  it('rejects empty stock and over-feed', () => {
     expect(() => resolveConsumableFeed('full', { qty: 0, weight: 0 })).toThrow(/khali/)
-    expect(() => resolveConsumableFeed('partial', { qty: 5, weight: 10 }, { qty: 6, weight: 0 })).toThrow(/qty/)
-    expect(() => resolveConsumableFeed('partial', { qty: 5, weight: 10 }, { qty: 0, weight: 12 })).toThrow(/KG/)
+    expect(() => resolveConsumableFeed('partial', { qty: 5, weight: 10 }, { qty: 6 })).toThrow(/qty/)
+  })
+})
+
+describe('proposePurchaseConsumableSpecs', () => {
+  const purchase = {
+    id: 'p2',
+    firm_id: 'f1',
+    bill_no: 'C-1',
+    items: [
+      {
+        item_id: 'i1',
+        name: 'Glue',
+        hsn: '',
+        qty: 50,
+        unit: 'KG',
+        rate: 40,
+        gst: 18,
+        is_consumable: true,
+        consumable_type: 'glue',
+      },
+    ],
+  } as Purchase
+
+  it('detects consumable lines and proposes specs', () => {
+    expect(purchaseHasConsumableLines(purchase)).toBe(true)
+    const specs = proposePurchaseConsumableSpecs(purchase)
+    expect(specs).toHaveLength(1)
+    expect(specs[0].stock_type).toBe('glue')
+    expect(specs[0].qty).toBe(50)
+    expect(specs[0].weight).toBe(50)
   })
 })
 

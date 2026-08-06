@@ -86,6 +86,67 @@ function reelKey(reelNo: string) {
   return reelNo.trim().toLowerCase()
 }
 
+/** Config fingerprint for batch feed (same deckle/GSM/BF/color/type). */
+export function reelConfigKey(reel: Pick<ReelStock, 'paper_type' | 'deckle_size' | 'gsm' | 'bf' | 'color'>): string {
+  return [
+    normalizePaperType(reel.paper_type),
+    String(reel.deckle_size || '').trim(),
+    String(reel.gsm || '').trim(),
+    String(reel.bf || '').trim(),
+    normalizeReelColor(reel.color),
+  ].join('|')
+}
+
+/** Active reels matching selected reel’s paper config (for one-shot batch feed). */
+export function findSameConfigActiveReels(
+  reels: ReelStock[],
+  selected: Pick<ReelStock, 'paper_type' | 'deckle_size' | 'gsm' | 'bf' | 'color' | 'firm_id'>,
+  opts?: { firmId?: string },
+): ReelStock[] {
+  const key = reelConfigKey(selected)
+  const firmId = opts?.firmId || selected.firm_id
+  return reels
+    .filter((reel) =>
+      !reel.is_deleted &&
+      reel.status === 'active' &&
+      (Number(reel.current_weight) || 0) > 0 &&
+      (!firmId || reel.firm_id === firmId) &&
+      reelConfigKey(reel) === key,
+    )
+    .sort((a, b) => a.reel_no.localeCompare(b.reel_no))
+}
+
+/**
+ * Generate N reel numbers from a base (e.g. R-101 → R-101, R-102…).
+ * Trailing digits auto-increment with zero-padding; otherwise base, base-2, base-3…
+ */
+export function generateCopyReelNumbers(baseReelNo: string, count: number): string[] {
+  const base = String(baseReelNo || '').trim()
+  const n = Math.max(1, Math.floor(Number(count) || 1))
+  if (!base) throw new Error('Custom reel number required')
+  if (n === 1) return [base]
+  if (n > 50) throw new Error('Ek baar me max 50 reels add kar sakte ho')
+
+  const match = base.match(/^(.*?)(\d+)$/)
+  let nos: string[]
+  if (match) {
+    const prefix = match[1]
+    const startNum = Number(match[2])
+    const width = match[2].length
+    nos = Array.from({ length: n }, (_, i) => `${prefix}${String(startNum + i).padStart(width, '0')}`)
+  } else {
+    nos = Array.from({ length: n }, (_, i) => (i === 0 ? base : `${base}-${i + 1}`))
+  }
+
+  const seen = new Set<string>()
+  for (const no of nos) {
+    const key = reelKey(no)
+    if (seen.has(key)) throw new Error(`Duplicate generated reel number: ${no}`)
+    seen.add(key)
+  }
+  return nos
+}
+
 export function purchaseHasReelLines(purchase: Pick<Purchase, 'items'>): boolean {
   return (purchase.items || []).some((row) => row.is_kraft_reel)
 }
@@ -237,65 +298,91 @@ export async function createManualReel(data: {
   supplier_name: string
   supplier_id?: string | null
   date?: string
+  copies?: number
 }) {
-  const reel_no = String(data.reel_no || '').trim()
+  const created = await createManualReels(data)
+  return created[0]
+}
+
+/** Create one or more identical-config reels with auto-incremented reel numbers. */
+export async function createManualReels(data: {
+  firm_id: string
+  reel_no: string
+  paper_type?: PaperType
+  deckle_size: string
+  gsm: string
+  bf: string
+  color: string
+  opening_weight: number
+  rate?: number
+  supplier_name: string
+  supplier_id?: string | null
+  date?: string
+  copies?: number
+}) {
   const opening_weight = roundWeight(data.opening_weight)
-  if (!reel_no) throw new Error('Custom reel number required')
   if (opening_weight <= 0) throw new Error('Reel weight 0 se zyada hona chahiye')
   if (!String(data.deckle_size || '').trim()) throw new Error('Deckle / size required')
   if (!String(data.gsm || '').trim()) throw new Error('GSM required')
   if (!String(data.bf || '').trim()) throw new Error('BF required')
   if (!String(data.supplier_name || '').trim()) throw new Error('Paper mill required')
 
-  await assertUniqueReelNo(data.firm_id, reel_no)
+  const reelNos = generateCopyReelNumbers(data.reel_no, data.copies ?? 1)
+  await assertUniqueReelNosForPurchase(data.firm_id, reelNos.map((reel_no) => ({ reel_no })))
 
   const now = nowISO()
   const paper_type = normalizePaperType(data.paper_type)
   const color = normalizeReelColor(data.color)
   const mill = String(data.supplier_name || '').trim()
-  const reel = plain({
-    id: uid(),
-    firm_id: data.firm_id,
-    reel_no,
-    paper_type,
-    supplier_id: data.supplier_id ?? null,
-    supplier_name: mill,
-    deckle_size: String(data.deckle_size || '').trim(),
-    gsm: String(data.gsm || '').trim(),
-    bf: String(data.bf || '').trim(),
-    color,
-    opening_weight,
-    current_weight: opening_weight,
-    rate: Number(data.rate) || 0,
-    status: 'active' as const,
-    created_at: now,
-    updated_at: now,
-    is_deleted: false,
-    _dirty: true,
-  }) as ReelStock
-
-  const movement = newStockMovement({
-    firm_id: data.firm_id,
-    date: data.date || now.slice(0, 10),
-    source: 'adjustment',
-    ref_id: reel.id,
-    stock_type: 'raw_reel',
-    stock_ref_id: reel.id,
-    qty_in: 1,
-    qty_out: 0,
-    weight_in: opening_weight,
-    weight_out: 0,
-    waste_qty: 0,
-    waste_weight: 0,
-    notes: `Manual reel opening — ${reel_no} (${mill})`,
-  })
+  const date = data.date || now.slice(0, 10)
+  const created: ReelStock[] = []
 
   await db.transaction('rw', db.reel_stocks, db.stock_movements, async () => {
-    await db.reel_stocks.add(reel)
-    await db.stock_movements.add(movement)
+    for (const reel_no of reelNos) {
+      const reel = plain({
+        id: uid(),
+        firm_id: data.firm_id,
+        reel_no,
+        paper_type,
+        supplier_id: data.supplier_id ?? null,
+        supplier_name: mill,
+        deckle_size: String(data.deckle_size || '').trim(),
+        gsm: String(data.gsm || '').trim(),
+        bf: String(data.bf || '').trim(),
+        color,
+        opening_weight,
+        current_weight: opening_weight,
+        rate: Number(data.rate) || 0,
+        status: 'active' as const,
+        created_at: now,
+        updated_at: now,
+        is_deleted: false,
+        _dirty: true,
+      }) as ReelStock
+
+      const movement = newStockMovement({
+        firm_id: data.firm_id,
+        date,
+        source: 'adjustment',
+        ref_id: reel.id,
+        stock_type: 'raw_reel',
+        stock_ref_id: reel.id,
+        qty_in: 1,
+        qty_out: 0,
+        weight_in: opening_weight,
+        weight_out: 0,
+        waste_qty: 0,
+        waste_weight: 0,
+        notes: `Manual reel opening — ${reel_no} (${mill})`,
+      })
+
+      await db.reel_stocks.add(reel)
+      await db.stock_movements.add(movement)
+      created.push(reel)
+    }
   })
 
-  return reel
+  return created
 }
 
 export async function feedPaperReel(data: {
@@ -324,6 +411,40 @@ export async function feedPaperReel(data: {
     reason: data.reason || (data.mode === 'full' ? 'Full reel feed' : 'Partial reel feed'),
     notes: data.notes,
   })
+}
+
+/**
+ * Feed several reels in one shot (same KG each for partial, or full-consume each).
+ * Prefer same-config reel ids from findSameConfigActiveReels.
+ */
+export async function feedPaperReelsBatch(data: {
+  firm_id: string
+  reel_ids: string[]
+  date: string
+  mode: 'full' | 'partial'
+  used_weight?: number
+  job_id?: string
+  reason?: string
+  notes?: string
+}) {
+  const ids = [...new Set((data.reel_ids || []).filter(Boolean))]
+  if (!ids.length) throw new Error('Kam se kam ek reel select karo')
+
+  const results = []
+  for (const reel_id of ids) {
+    const rec = await feedPaperReel({
+      firm_id: data.firm_id,
+      reel_id,
+      date: data.date,
+      mode: data.mode,
+      used_weight: data.used_weight,
+      job_id: data.job_id,
+      reason: data.reason || (data.mode === 'full' ? 'Batch full reel feed' : 'Batch partial reel feed'),
+      notes: data.notes,
+    })
+    results.push(rec)
+  }
+  return results
 }
 
 /** Resolve how much KG to cut for a full or partial feed. */
