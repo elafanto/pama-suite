@@ -1031,6 +1031,14 @@ onMounted(async () => {
             >
               Full consume selected ({{ selectedActiveReels.length }})
             </button>
+            <button
+              type="button"
+              class="pp-btn pp-btn-danger !py-1.5 !px-3 text-xs"
+              title="Saari reel stock soft-delete (purchase bills safe)"
+              @click="resetAllReelStockAction"
+            >
+              Reset all reel stock
+            </button>
             <RouterLink to="/purchases" class="pp-btn pp-btn-ghost !py-1.5 !px-3 text-xs no-underline">
               Add from Purchase
             </RouterLink>
@@ -1174,16 +1182,6 @@ onMounted(async () => {
       </div>
 
       <div class="space-y-6">
-        <div class="pp-card p-6 space-y-3">
-          <h2 class="font-semibold border-b pb-2">Reset all reel stock</h2>
-          <p class="text-xs text-slate-500">
-            Fresh setup: saari active + consumed reels soft-delete. Purchase / payroll / invoices safe.
-          </p>
-          <button type="button" class="pp-btn pp-btn-danger w-full" @click="resetAllReelStockAction">
-            Reset all reel stock…
-          </button>
-        </div>
-
         <div class="pp-card p-6 space-y-3">
           <h2 class="font-semibold border-b pb-2">Delete old data</h2>
           <p class="text-xs text-slate-500">
