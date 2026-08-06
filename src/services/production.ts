@@ -669,6 +669,79 @@ export async function reversePurchaseReels(purchaseId: string) {
   }
 }
 
+/** Active (non-deleted) stock_movements linked to the given reel ids via stock_ref_id. */
+export function filterReelLinkedMovements(movements: StockMovement[], reelIds: Iterable<string>): StockMovement[] {
+  const ids = new Set([...reelIds].filter(Boolean))
+  if (!ids.size) return []
+  return movements.filter((m) => !m.is_deleted && !!m.stock_ref_id && ids.has(m.stock_ref_id))
+}
+
+/**
+ * Select reels for cleanup / bulk soft-delete.
+ * - consumedOnly: status === 'consumed'
+ * - beforeDate (YYYY-MM-DD): reel created_at date on or before this day
+ * Both filters can combine (AND). At least one filter must be set.
+ */
+export function filterReelsForDeletion(
+  reels: ReelStock[],
+  opts: { consumedOnly?: boolean; beforeDate?: string },
+): ReelStock[] {
+  const before = String(opts.beforeDate || '').trim().slice(0, 10)
+  const consumedOnly = !!opts.consumedOnly
+  if (!consumedOnly && !before) return []
+
+  return reels.filter((reel) => {
+    if (reel.is_deleted) return false
+    if (consumedOnly && reel.status !== 'consumed') return false
+    if (before) {
+      const created = String(reel.created_at || '').slice(0, 10)
+      if (!created || created > before) return false
+    }
+    return true
+  })
+}
+
+export interface SoftDeleteReelsResult {
+  reelIds: string[]
+  reelsDeleted: number
+  movementsDeleted: number
+}
+
+/**
+ * Soft-delete paper reels and all stock_movements linked by stock_ref_id.
+ * Purchase bills stay intact — only reel register + movement ledger rows.
+ */
+export async function softDeleteReelsWithMovements(
+  firmId: string,
+  reelIds: string[],
+): Promise<SoftDeleteReelsResult> {
+  const ids = [...new Set((reelIds || []).filter(Boolean))]
+  if (!ids.length) return { reelIds: [], reelsDeleted: 0, movementsDeleted: 0 }
+
+  const now = nowISO()
+  let reelsDeleted = 0
+  let movementsDeleted = 0
+
+  await db.transaction('rw', db.reel_stocks, db.stock_movements, async () => {
+    for (const id of ids) {
+      const reel = await db.reel_stocks.get(id)
+      if (!reel || reel.is_deleted || reel.firm_id !== firmId) continue
+      await db.reel_stocks.put({ ...reel, is_deleted: true, updated_at: now, _dirty: true })
+      reelsDeleted++
+
+      const moves = await db.stock_movements
+        .filter((m) => !m.is_deleted && m.firm_id === firmId && m.stock_ref_id === id)
+        .toArray()
+      for (const m of moves) {
+        await db.stock_movements.put({ ...m, is_deleted: true, updated_at: now, _dirty: true })
+        movementsDeleted++
+      }
+    }
+  })
+
+  return { reelIds: ids, reelsDeleted, movementsDeleted }
+}
+
 export type ConsumableStockType = 'glue' | 'ink' | 'stitching_wire'
 
 export interface PurchaseConsumableSpec {

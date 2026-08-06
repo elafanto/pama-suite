@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import type { Purchase, ReelStock } from '@/types/models'
 import {
   findSameConfigActiveReels,
+  filterReelLinkedMovements,
+  filterReelsForDeletion,
   generateCopyReelNumbers,
   normalizeReelColor,
   proposePurchaseConsumableSpecs,
@@ -205,5 +207,40 @@ describe('proposePurchaseReelSpecs', () => {
     expect(specs[0].opening_weight).toBe(100)
     expect(specs[0].gsm).toBe('120')
     expect(specs[0].bf).toBe('18')
+  })
+})
+
+describe('filterReelsForDeletion / filterReelLinkedMovements', () => {
+  it('selects consumed reels only when consumedOnly is set', () => {
+    const reels = [
+      reel({ id: 'a', status: 'consumed', current_weight: 0 }),
+      reel({ id: 'b', status: 'active', current_weight: 50 }),
+      reel({ id: 'c', status: 'consumed', current_weight: 0, is_deleted: true }),
+    ]
+    expect(filterReelsForDeletion(reels, { consumedOnly: true }).map((r) => r.id)).toEqual(['a'])
+  })
+
+  it('selects reels created on/before beforeDate', () => {
+    const reels = [
+      reel({ id: 'old', created_at: '2025-01-10T10:00:00.000Z', status: 'consumed', current_weight: 0 }),
+      reel({ id: 'mid', created_at: '2025-06-01T10:00:00.000Z', status: 'active' }),
+      reel({ id: 'new', created_at: '2026-01-01T10:00:00.000Z', status: 'consumed', current_weight: 0 }),
+    ]
+    expect(filterReelsForDeletion(reels, { beforeDate: '2025-06-01' }).map((r) => r.id)).toEqual(['old', 'mid'])
+    expect(filterReelsForDeletion(reels, { beforeDate: '2025-06-01', consumedOnly: true }).map((r) => r.id)).toEqual(['old'])
+  })
+
+  it('returns empty when no cleanup filter is provided', () => {
+    expect(filterReelsForDeletion([reel()], {})).toEqual([])
+  })
+
+  it('counts non-deleted movements linked by stock_ref_id', () => {
+    const moves = [
+      { id: 'm1', stock_ref_id: 'a', is_deleted: false },
+      { id: 'm2', stock_ref_id: 'a', is_deleted: true },
+      { id: 'm3', stock_ref_id: 'b', is_deleted: false },
+      { id: 'm4', stock_ref_id: 'c', is_deleted: false },
+    ] as any
+    expect(filterReelLinkedMovements(moves, ['a', 'b'])).toHaveLength(2)
   })
 })

@@ -5,7 +5,7 @@ import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useProductionStore } from '@/stores/production'
-import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveReelFeedWeight, findSameConfigActiveReels, generateCopyReelNumbers, STAGE_LABELS, STOCK_LABELS, type ConsumableStockType } from '@/services/production'
+import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveReelFeedWeight, findSameConfigActiveReels, generateCopyReelNumbers, filterReelsForDeletion, filterReelLinkedMovements, STAGE_LABELS, STOCK_LABELS, type ConsumableStockType } from '@/services/production'
 import type { PaperType, ProductionStage, ProductionStockType, ReelStock } from '@/types/models'
 
 const firmStore = useFirmStore()
@@ -107,6 +107,11 @@ const reelFilters = reactive({
   status: 'all',
 })
 
+const reelCleanupForm = reactive({
+  beforeDate: '',
+  consumedOnlyBeforeDate: true,
+})
+
 const reportFilters = reactive({
   from: '',
   to: '',
@@ -162,6 +167,15 @@ const filteredReels = computed(() => production.reels.filter((reel) =>
   (!reelFilters.color || normalizeReelColor(reel.color) === reelFilters.color) &&
   (reelFilters.status === 'all' || reel.status === reelFilters.status),
 ))
+const consumedReelsForCleanup = computed(() => filterReelsForDeletion(production.reels, { consumedOnly: true }))
+const reelsBeforeDateForCleanup = computed(() => {
+  const before = reelCleanupForm.beforeDate.trim()
+  if (!before) return [] as typeof production.reels
+  return filterReelsForDeletion(production.reels, {
+    beforeDate: before,
+    consumedOnly: reelCleanupForm.consumedOnlyBeforeDate,
+  })
+})
 const balanceRows = computed(() => {
   const bal = productionBalance(production.movements, firmStore.activeFirmId, selectedJobId.value || undefined)
   return stockTypes.map((type) => ({ type, label: STOCK_LABELS[type], ...bal[type] }))
@@ -474,6 +488,79 @@ function selectReelForFeed(reelId: string) {
   const reel = production.reels.find((r) => r.id === reelId)
   reelConsumptionForm.used_weight = reel ? Number(reel.current_weight) || 0 : 0
   activeTab.value = 'reels'
+}
+
+function clearFeedIfDeleted(reelIds: string[]) {
+  if (reelIds.includes(reelConsumptionForm.reel_id)) {
+    Object.assign(reelConsumptionForm, {
+      reel_id: '',
+      used_weight: 0,
+      batchSameConfig: false,
+    })
+  }
+}
+
+async function deleteOneReel(reel: ReelStock) {
+  const linked = filterReelLinkedMovements(production.movements, [reel.id])
+  const historyNote = linked.length
+    ? `\n\nIs reel ki ${linked.length} stock movement(s) bhi soft-delete hongi (history remove).`
+    : ''
+  const ok = confirm(
+    `Reel ${reel.reel_no} delete karein?\n\nPurchase bill safe rahega — sirf reel stock register + linked movements.\nStatus: ${reel.status}, current ${n2(reel.current_weight)} KG.${historyNote}`,
+  )
+  if (!ok) return
+  try {
+    const result = await production.deleteReel(reel.id)
+    clearFeedIfDeleted([reel.id])
+    alert(result.reelsDeleted
+      ? `Reel deleted (${result.movementsDeleted} movements).`
+      : 'Reel delete nahi hui.')
+  } catch (err: any) {
+    alert(err?.message || 'Reel delete nahi ho payi.')
+  }
+}
+
+async function deleteAllConsumedReels() {
+  const targets = consumedReelsForCleanup.value
+  if (!targets.length) return alert('Koi consumed reel nahi mili.')
+  const moveCount = filterReelLinkedMovements(production.movements, targets.map((r) => r.id)).length
+  const ok = confirm(
+    `Saari CONSUMED reels delete?\n\n${targets.length} reels + ${moveCount} linked movements soft-delete hongi.\nPurchase bills intact rahenge.\n\nYeh undo nahi hoga (sync ke baad remote pe bhi soft-deleted).`,
+  )
+  if (!ok) return
+  try {
+    const result = await production.deleteConsumedReels()
+    clearFeedIfDeleted(result.reelIds)
+    alert(`${result.reelsDeleted} consumed reels deleted (${result.movementsDeleted} movements).`)
+  } catch (err: any) {
+    alert(err?.message || 'Consumed reels delete nahi ho payin.')
+  }
+}
+
+async function deleteReelsBeforeDateAction() {
+  const before = reelCleanupForm.beforeDate.trim()
+  if (!before) return alert('Before date select karo')
+  const targets = reelsBeforeDateForCleanup.value
+  if (!targets.length) {
+    return alert(reelCleanupForm.consumedOnlyBeforeDate
+      ? `Is date se pehle koi consumed reel nahi mili.`
+      : `Is date se pehle koi reel nahi mili.`)
+  }
+  const moveCount = filterReelLinkedMovements(production.movements, targets.map((r) => r.id)).length
+  const scope = reelCleanupForm.consumedOnlyBeforeDate ? 'consumed reels' : 'ALL reels (active included)'
+  const ok = confirm(
+    `Delete ${scope} created on/before ${before}?\n\n${targets.length} reels + ${moveCount} linked movements soft-delete hongi.\nPurchase bills intact.\n\nConfirm only if sure.`,
+  )
+  if (!ok) return
+  try {
+    const result = await production.deleteReelsBeforeDate(before, {
+      consumedOnly: reelCleanupForm.consumedOnlyBeforeDate,
+    })
+    clearFeedIfDeleted(result.reelIds)
+    alert(`${result.reelsDeleted} reels deleted (${result.movementsDeleted} movements).`)
+  } catch (err: any) {
+    alert(err?.message || 'Old reels delete nahi ho payin.')
+  }
 }
 
 async function saveManualReel() {
@@ -1021,15 +1108,24 @@ onMounted(async () => {
               <td class="p-3 text-right font-mono">{{ n2(reel.current_weight) }}</td>
               <td class="p-3 text-center"><span class="pp-badge" :class="reel.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-slate-100'">{{ reel.status }}</span></td>
               <td class="p-3 text-right">
-                <button
-                  v-if="reel.status === 'active' && reel.current_weight > 0"
-                  type="button"
-                  class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs"
-                  @click="selectReelForFeed(reel.id)"
-                >
-                  Feed
-                </button>
-                <span v-else class="text-slate-300">—</span>
+                <div class="inline-flex flex-wrap items-center justify-end gap-1">
+                  <button
+                    v-if="reel.status === 'active' && reel.current_weight > 0"
+                    type="button"
+                    class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs"
+                    @click="selectReelForFeed(reel.id)"
+                  >
+                    Feed
+                  </button>
+                  <button
+                    type="button"
+                    class="pp-btn pp-btn-danger !py-1 !px-2 text-xs"
+                    title="Delete reel + linked movements"
+                    @click="deleteOneReel(reel)"
+                  >
+                    Delete
+                  </button>
+                </div>
               </td>
             </tr>
             <tr v-if="filteredReels.length === 0">
@@ -1041,6 +1137,51 @@ onMounted(async () => {
       </div>
 
       <div class="space-y-6">
+        <div class="pp-card p-6 space-y-3">
+          <h2 class="font-semibold border-b pb-2">Delete old data</h2>
+          <p class="text-xs text-slate-500">
+            Sirf reel stock register + linked movements soft-delete. Purchase bills nahi chhedte.
+          </p>
+          <div class="rounded border border-slate-200 bg-slate-50 p-3 space-y-2">
+            <div class="flex items-center justify-between gap-2 text-sm">
+              <span>Consumed reels</span>
+              <span class="font-mono text-slate-600">{{ consumedReelsForCleanup.length }}</span>
+            </div>
+            <button
+              type="button"
+              class="pp-btn pp-btn-danger w-full !py-1.5 text-xs"
+              :disabled="!consumedReelsForCleanup.length"
+              :class="{ 'opacity-50': !consumedReelsForCleanup.length }"
+              @click="deleteAllConsumedReels"
+            >
+              Delete consumed reels
+            </button>
+          </div>
+          <div class="rounded border border-slate-200 bg-slate-50 p-3 space-y-3">
+            <div>
+              <label class="pp-label">Delete reels before date</label>
+              <input v-model="reelCleanupForm.beforeDate" type="date" class="pp-input" />
+            </div>
+            <label class="flex items-start gap-2 text-sm cursor-pointer">
+              <input v-model="reelCleanupForm.consumedOnlyBeforeDate" type="checkbox" class="mt-0.5" />
+              <span class="text-xs text-slate-600">Sirf consumed reels (active stock safe — recommended)</span>
+            </label>
+            <div class="flex items-center justify-between gap-2 text-sm">
+              <span>Matching</span>
+              <span class="font-mono text-slate-600">{{ reelsBeforeDateForCleanup.length }}</span>
+            </div>
+            <button
+              type="button"
+              class="pp-btn pp-btn-danger w-full !py-1.5 text-xs"
+              :disabled="!reelsBeforeDateForCleanup.length"
+              :class="{ 'opacity-50': !reelsBeforeDateForCleanup.length }"
+              @click="deleteReelsBeforeDateAction"
+            >
+              Delete reels before date
+            </button>
+          </div>
+        </div>
+
         <div class="pp-card p-6 space-y-3">
           <h2 class="font-semibold border-b pb-2">Add Reel (manual)</h2>
           <p class="text-xs text-slate-500">Apna custom reel number, mill, size, GSM, BF, color aur weight yahan add karein. Same config ke multiple reels ke liye Copies use karein.</p>

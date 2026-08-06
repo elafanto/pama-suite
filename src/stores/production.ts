@@ -11,8 +11,10 @@ import {
   feedConsumable,
   feedPaperReel,
   feedPaperReelsBatch,
+  filterReelsForDeletion,
   saveProductionStage,
   saveStockAdjustment,
+  softDeleteReelsWithMovements,
   type ConsumableStockType,
 } from '@/services/production'
 import type { PaperType, ProductionJob, ProductionStageEntry, ProductionStockType, ReelStock, StockMovement } from '@/types/models'
@@ -200,6 +202,58 @@ export const useProductionStore = defineStore('production', () => {
     return rec
   }
 
+  /** Soft-delete one reel + its linked stock_movements (purchase bills untouched). */
+  async function deleteReel(reelId: string) {
+    const firm = useFirmStore()
+    const reel = reels.value.find((r) => r.id === reelId)
+    const result = await softDeleteReelsWithMovements(firm.activeFirmId, [reelId])
+    if (result.reelsDeleted > 0) {
+      await logActivity(
+        firm.activeFirmId,
+        'delete',
+        'reel_stock',
+        reelId,
+        `Reel ${reel?.reel_no || reelId} deleted (${result.movementsDeleted} movements)`,
+        { movementsDeleted: result.movementsDeleted },
+      )
+    }
+    await load()
+    return result
+  }
+
+  /** Soft-delete multiple reels + linked movements. */
+  async function deleteReels(reelIds: string[]) {
+    const firm = useFirmStore()
+    const result = await softDeleteReelsWithMovements(firm.activeFirmId, reelIds)
+    if (result.reelsDeleted > 0) {
+      await logActivity(
+        firm.activeFirmId,
+        'delete',
+        'reel_stock',
+        result.reelIds[0] || '',
+        `Deleted ${result.reelsDeleted} reels (${result.movementsDeleted} movements)`,
+        { reelIds: result.reelIds, movementsDeleted: result.movementsDeleted },
+      )
+    }
+    await load()
+    return result
+  }
+
+  /** Soft-delete all consumed reels (and their movements) for the active firm. */
+  async function deleteConsumedReels() {
+    const targets = filterReelsForDeletion(reels.value, { consumedOnly: true })
+    return deleteReels(targets.map((r) => r.id))
+  }
+
+  /** Soft-delete reels created on/before beforeDate (YYYY-MM-DD), optionally consumed-only. */
+  async function deleteReelsBeforeDate(beforeDate: string, opts?: { consumedOnly?: boolean }) {
+    const targets = filterReelsForDeletion(reels.value, {
+      beforeDate,
+      consumedOnly: opts?.consumedOnly,
+    })
+    return deleteReels(targets.map((r) => r.id))
+  }
+
   return {
     jobs,
     stages,
@@ -217,5 +271,9 @@ export const useProductionStore = defineStore('production', () => {
     feedReelsBatch,
     addManualConsumable,
     feedConsumableStock,
+    deleteReel,
+    deleteReels,
+    deleteConsumedReels,
+    deleteReelsBeforeDate,
   }
 })
