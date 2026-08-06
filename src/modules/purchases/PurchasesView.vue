@@ -27,6 +27,7 @@ import {
   normalizePurchaseLine,
   type PurchaseLineKind,
 } from '@/services/purchaseLineKind'
+import { proposePurchaseReelSpecs, purchaseHasReelLines, type PurchaseReelSpec } from '@/services/production'
 import type { CapitalCategory, ExpenseCategory, GstType, PaperType, PayStatus, Purchase, PurchaseItemLine } from '@/types/models'
 
 // Stores
@@ -62,6 +63,14 @@ const payAmount = ref(0)
 const payDate = ref(new Date().toISOString().slice(0, 10))
 const payNote = ref('')
 const payWriteOff = ref(false)
+
+// Confirm reel stock into Paper Reels (custom reel numbers)
+const showReelConfirmModal = ref(false)
+const reelConfirmPurchaseId = ref<string | null>(null)
+const reelConfirmReplace = ref(false)
+const reelConfirmBusy = ref(false)
+const reelConfirmRows = ref<PurchaseReelSpec[]>([])
+const reelConfirmMill = ref('')
 
 // Form State
 const initialFormState = () => ({
@@ -530,7 +539,7 @@ async function savePurchase() {
   }
   const badReel = validItems.find(it => getLineKind(it) === 'reel' && (!it.deckle_size?.trim() || !it.gsm?.trim() || !it.bf?.trim() || !(it.reel_weight || it.qty) || normalizeReelCount(it.reel_count) <= 0))
   if (badReel) {
-    alert('Paper reel line me Paper Type, Deckle, GSM, BF, Reel Weight aur No. of Reels required hai. Reel No optional hai.')
+    alert('Paper reel line me Paper Type, Deckle, GSM, BF, Reel Weight aur No. of Reels required hai. Save ke baad custom reel number confirm karna hoga.')
     return
   }
   const badConsumable = validItems.find(it => getLineKind(it) === 'consumable' && !it.consumable_type)
@@ -591,11 +600,21 @@ async function savePurchase() {
   }
 
   try {
+    let savedPurchase: Purchase | null = null
+    let openReelConfirm = false
+    let replaceExisting = false
+
     if (editingId.value) {
-      await purchaseStore.update(editingId.value, purchaseData)
+      const updateResult = await purchaseStore.update(editingId.value, purchaseData)
+      savedPurchase = purchaseStore.list.find((p) => p.id === editingId.value) || null
+      openReelConfirm = !!updateResult?.needsReelConfirm
+      replaceExisting = !!updateResult?.reelStockChanged
       alert('Purchase bill updated successfully!')
     } else {
       const purchase = await purchaseStore.add(purchaseData)
+      savedPurchase = purchase
+      openReelConfirm = purchaseHasReelLines(purchase)
+      replaceExisting = false
       const attached = await tryAttachPurchaseFile(purchase, pendingScanFile.value)
       pendingScanFile.value = null
       alert(attached
@@ -605,9 +624,72 @@ async function savePurchase() {
 
     resetForm()
     activeTab.value = 'history'
+
+    if (openReelConfirm && savedPurchase) {
+      openReelStockConfirm(savedPurchase, replaceExisting)
+    }
   } catch (err: any) {
     alert(err?.message || 'Purchase bill save failed')
     // pendingScanFile retained so user can fix form and retry attach on save
+  }
+}
+
+async function openReelStockConfirm(purchase: Purchase, replaceExisting: boolean) {
+  const specs = proposePurchaseReelSpecs(purchase)
+  if (!specs.length) return
+  // Prefer checking live stock for replace flag when editing without signature change
+  // but user never confirmed before.
+  let replace = replaceExisting
+  if (!replace) {
+    const existingCount = await db.reel_stocks
+      .where('purchase_id')
+      .equals(purchase.id)
+      .filter((r) => !r.is_deleted)
+      .count()
+    replace = existingCount > 0
+  }
+  reelConfirmPurchaseId.value = purchase.id
+  reelConfirmReplace.value = replace
+  reelConfirmMill.value = purchase.supplier_name
+  reelConfirmRows.value = specs.map((s) => ({ ...s }))
+  showReelConfirmModal.value = true
+}
+
+function closeReelConfirmModal() {
+  showReelConfirmModal.value = false
+  reelConfirmPurchaseId.value = null
+  reelConfirmRows.value = []
+  reelConfirmBusy.value = false
+}
+
+async function submitReelStockConfirm() {
+  if (!reelConfirmPurchaseId.value) return
+  const rows = reelConfirmRows.value
+  if (rows.some((r) => !String(r.reel_no || '').trim())) {
+    return alert('Har reel ka custom reel number bharo')
+  }
+  if (rows.some((r) => !(Number(r.opening_weight) > 0))) {
+    return alert('Har reel ka weight 0 se zyada hona chahiye')
+  }
+  reelConfirmBusy.value = true
+  try {
+    const result = await purchaseStore.confirmReelStock(
+      reelConfirmPurchaseId.value,
+      rows.map((r) => ({
+        ...r,
+        reel_no: String(r.reel_no).trim(),
+        color: normalizeReelColor(r.color),
+        paper_type: normalizePaperType(r.paper_type),
+        note: r.note || `${normalizePaperType(r.paper_type)} reel ${String(r.reel_no).trim()} from purchase`,
+      })),
+      { replaceExisting: reelConfirmReplace.value },
+    )
+    closeReelConfirmModal()
+    alert(`${result.count} reel(s) Paper Reels stock me add ho gaye.`)
+  } catch (err: any) {
+    alert(err?.message || 'Reel stock confirm failed')
+  } finally {
+    reelConfirmBusy.value = false
   }
 }
 
@@ -1950,6 +2032,77 @@ onMounted(async () => {
         <div class="flex gap-2 justify-end border-t pt-4">
           <button @click="showPaymentModal = false" class="pp-btn pp-btn-ghost">Cancel</button>
           <button @click="submitPayment" class="pp-btn pp-btn-primary">Record Payment</button>
+        </div>
+      </div>
+    </PpModal>
+
+    <PpModal
+      :show="showReelConfirmModal"
+      title="Confirm Paper Reel Stock"
+      @close="closeReelConfirmModal"
+    >
+      <div class="space-y-4">
+        <p class="text-sm text-slate-600">
+          Purchase save ho chuki hai. Stock me daalne se pehle har reel ka
+          <strong>custom reel number</strong> confirm / edit karein.
+          Mill: <span class="font-semibold">{{ reelConfirmMill }}</span>
+        </p>
+        <p v-if="reelConfirmReplace" class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+          Is bill ki pehli reel stock replace hogi (sirf jab consumption history na ho).
+        </p>
+        <div class="overflow-x-auto max-h-[50vh]">
+          <table class="w-full text-sm min-w-[720px]">
+            <thead class="text-xs uppercase text-slate-500 bg-slate-50 sticky top-0">
+              <tr>
+                <th class="p-2 text-left">Custom Reel No *</th>
+                <th class="p-2 text-left">Type</th>
+                <th class="p-2 text-left">Deckle</th>
+                <th class="p-2 text-left">GSM</th>
+                <th class="p-2 text-left">BF</th>
+                <th class="p-2 text-left">Color</th>
+                <th class="p-2 text-right">Weight KG *</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y">
+              <tr v-for="(row, idx) in reelConfirmRows" :key="idx">
+                <td class="p-2">
+                  <input v-model="row.reel_no" class="pp-input font-mono !py-1" />
+                </td>
+                <td class="p-2">
+                  <select v-model="row.paper_type" class="pp-input !py-1">
+                    <option value="KRAFT">KRAFT</option>
+                    <option value="DUPLEX">DUPLEX</option>
+                  </select>
+                </td>
+                <td class="p-2">
+                  <input v-model="row.deckle_size" class="pp-input !py-1" />
+                </td>
+                <td class="p-2">
+                  <input v-model="row.gsm" class="pp-input !py-1" />
+                </td>
+                <td class="p-2">
+                  <input v-model="row.bf" class="pp-input !py-1" />
+                </td>
+                <td class="p-2">
+                  <select v-model="row.color" class="pp-input !py-1">
+                    <option value="NS">NS</option>
+                    <option value="GY">GY</option>
+                  </select>
+                </td>
+                <td class="p-2">
+                  <input v-model.number="row.opening_weight" type="number" min="0" step="0.001" class="pp-input !py-1 text-right" />
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="flex gap-2 justify-end border-t pt-4">
+          <button type="button" class="pp-btn pp-btn-ghost" :disabled="reelConfirmBusy" @click="closeReelConfirmModal">
+            Skip (no stock)
+          </button>
+          <button type="button" class="pp-btn pp-btn-primary" :disabled="reelConfirmBusy" @click="submitReelStockConfirm">
+            {{ reelConfirmBusy ? 'Saving…' : 'Confirm → Paper Reels' }}
+          </button>
         </div>
       </div>
     </PpModal>

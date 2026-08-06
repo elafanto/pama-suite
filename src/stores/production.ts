@@ -4,8 +4,8 @@ import { db } from '@/data/db'
 import { uid, nowISO } from '@/data/util'
 import { useFirmStore } from './firm'
 import { logActivity } from '@/services/activityLog'
-import { consumePaperReel, saveProductionStage, saveStockAdjustment } from '@/services/production'
-import type { ProductionJob, ProductionStageEntry, ProductionStockType, ReelStock, StockMovement } from '@/types/models'
+import { consumePaperReel, createManualReel, feedPaperReel, saveProductionStage, saveStockAdjustment } from '@/services/production'
+import type { PaperType, ProductionJob, ProductionStageEntry, ProductionStockType, ReelStock, StockMovement } from '@/types/models'
 
 const plain = <X>(o: X): X => JSON.parse(JSON.stringify(o))
 
@@ -95,5 +95,55 @@ export const useProductionStore = defineStore('production', () => {
     return rec
   }
 
-  return { jobs, stages, reels, movements, loaded, load, addJob, addStage, closeJob, addStockAdjustment, addReelConsumption }
+  async function addManualReel(data: {
+    reel_no: string
+    paper_type?: PaperType
+    deckle_size: string
+    gsm: string
+    bf: string
+    color: string
+    opening_weight: number
+    rate?: number
+    supplier_name: string
+    supplier_id?: string | null
+    date?: string
+  }) {
+    const firm = useFirmStore()
+    const rec = await createManualReel({ ...data, firm_id: firm.activeFirmId })
+    await logActivity(rec.firm_id, 'create', 'reel_stock', rec.id, `Manual reel ${rec.reel_no} added`)
+    await load()
+    return rec
+  }
+
+  async function feedReel(data: {
+    reel_id: string
+    date: string
+    mode: 'full' | 'partial'
+    used_weight?: number
+    job_id?: string
+    reason?: string
+    notes?: string
+  }) {
+    const firm = useFirmStore()
+    const rec = await feedPaperReel({ ...data, firm_id: firm.activeFirmId })
+    await logActivity(rec.firm_id, 'consume', 'reel_stock', data.reel_id, rec.notes || 'Paper reel fed')
+    await load()
+    return rec
+  }
+
+  return {
+    jobs,
+    stages,
+    reels,
+    movements,
+    loaded,
+    load,
+    addJob,
+    addStage,
+    closeJob,
+    addStockAdjustment,
+    addReelConsumption,
+    addManualReel,
+    feedReel,
+  }
 })

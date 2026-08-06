@@ -66,7 +66,7 @@ export function newStockMovement(data: Omit<StockMovement, 'id' | 'created_at' |
 
 const CONSUMABLE_STOCK_TYPES = new Set<ProductionStockType>(['glue', 'ink', 'stitching_wire'])
 
-interface PurchaseReelSpec {
+export interface PurchaseReelSpec {
   reel_no: string
   paper_type: PaperType
   deckle_size: string
@@ -84,6 +84,15 @@ function roundWeight(value: number) {
 
 function reelKey(reelNo: string) {
   return reelNo.trim().toLowerCase()
+}
+
+export function purchaseHasReelLines(purchase: Pick<Purchase, 'items'>): boolean {
+  return (purchase.items || []).some((row) => row.is_kraft_reel)
+}
+
+/** Proposed reel rows from a purchase bill (editable before confirming into stock). */
+export function proposePurchaseReelSpecs(purchase: Purchase): PurchaseReelSpec[] {
+  return purchaseReelSpecs(purchase)
 }
 
 function purchaseReelSpecs(purchase: Purchase): PurchaseReelSpec[] {
@@ -160,8 +169,183 @@ export async function assertPurchaseReelsHaveNoConsumptionHistory(purchaseId: st
   throw new Error(`Cannot ${verb}: one or more reels from this purchase already have production/consumption history. Adjust the reel usage first, or make a non-stock purchase edit.`)
 }
 
-export async function createReelsFromPurchase(purchase: Purchase) {
-  const specs = purchaseReelSpecs(purchase)
+export async function assertUniqueReelNo(firmId: string, reelNo: string, excludeId?: string) {
+  const key = reelKey(reelNo)
+  if (!key) throw new Error('Custom reel number required')
+  const clash = await db.reel_stocks
+    .where('firm_id')
+    .equals(firmId)
+    .filter((reel) => !reel.is_deleted && reel.id !== excludeId && reelKey(reel.reel_no) === key)
+    .first()
+  if (clash) throw new Error(`Reel number "${reelNo.trim()}" already exists in stock`)
+}
+
+export async function assertUniqueReelNosForPurchase(
+  firmId: string,
+  specs: Pick<PurchaseReelSpec, 'reel_no'>[],
+  purchaseId?: string,
+) {
+  const seen = new Set<string>()
+  for (const spec of specs) {
+    const key = reelKey(spec.reel_no)
+    if (!key) throw new Error('Har reel ka custom reel number required hai')
+    if (seen.has(key)) throw new Error(`Duplicate reel number in list: ${spec.reel_no.trim()}`)
+    seen.add(key)
+  }
+
+  const existing = await db.reel_stocks
+    .where('firm_id')
+    .equals(firmId)
+    .filter((reel) => !reel.is_deleted && (!purchaseId || reel.purchase_id !== purchaseId))
+    .toArray()
+  const taken = new Set(existing.map((reel) => reelKey(reel.reel_no)))
+  for (const spec of specs) {
+    const key = reelKey(spec.reel_no)
+    if (taken.has(key)) throw new Error(`Reel number "${spec.reel_no.trim()}" already exists in stock`)
+  }
+}
+
+function normalizeConfirmedSpecs(specs: PurchaseReelSpec[]): PurchaseReelSpec[] {
+  return specs.map((spec, idx) => {
+    const reel_no = String(spec.reel_no || '').trim()
+    const opening_weight = roundWeight(spec.opening_weight)
+    const paper_type = normalizePaperType(spec.paper_type)
+    return {
+      reel_no,
+      paper_type,
+      deckle_size: String(spec.deckle_size || '').trim(),
+      gsm: String(spec.gsm || '').trim(),
+      bf: String(spec.bf || '').trim(),
+      color: normalizeReelColor(spec.color),
+      opening_weight,
+      rate: Number(spec.rate) || 0,
+      note: spec.note || `${paper_type} reel ${reel_no || `#${idx + 1}`}`,
+    }
+  }).filter((spec) => reelKey(spec.reel_no))
+}
+
+export async function createManualReel(data: {
+  firm_id: string
+  reel_no: string
+  paper_type?: PaperType
+  deckle_size: string
+  gsm: string
+  bf: string
+  color: string
+  opening_weight: number
+  rate?: number
+  supplier_name: string
+  supplier_id?: string | null
+  date?: string
+}) {
+  const reel_no = String(data.reel_no || '').trim()
+  const opening_weight = roundWeight(data.opening_weight)
+  if (!reel_no) throw new Error('Custom reel number required')
+  if (opening_weight <= 0) throw new Error('Reel weight 0 se zyada hona chahiye')
+  if (!String(data.deckle_size || '').trim()) throw new Error('Deckle / size required')
+  if (!String(data.gsm || '').trim()) throw new Error('GSM required')
+  if (!String(data.bf || '').trim()) throw new Error('BF required')
+  if (!String(data.supplier_name || '').trim()) throw new Error('Paper mill required')
+
+  await assertUniqueReelNo(data.firm_id, reel_no)
+
+  const now = nowISO()
+  const paper_type = normalizePaperType(data.paper_type)
+  const color = normalizeReelColor(data.color)
+  const mill = String(data.supplier_name || '').trim()
+  const reel = plain({
+    id: uid(),
+    firm_id: data.firm_id,
+    reel_no,
+    paper_type,
+    supplier_id: data.supplier_id ?? null,
+    supplier_name: mill,
+    deckle_size: String(data.deckle_size || '').trim(),
+    gsm: String(data.gsm || '').trim(),
+    bf: String(data.bf || '').trim(),
+    color,
+    opening_weight,
+    current_weight: opening_weight,
+    rate: Number(data.rate) || 0,
+    status: 'active' as const,
+    created_at: now,
+    updated_at: now,
+    is_deleted: false,
+    _dirty: true,
+  }) as ReelStock
+
+  const movement = newStockMovement({
+    firm_id: data.firm_id,
+    date: data.date || now.slice(0, 10),
+    source: 'adjustment',
+    ref_id: reel.id,
+    stock_type: 'raw_reel',
+    stock_ref_id: reel.id,
+    qty_in: 1,
+    qty_out: 0,
+    weight_in: opening_weight,
+    weight_out: 0,
+    waste_qty: 0,
+    waste_weight: 0,
+    notes: `Manual reel opening — ${reel_no} (${mill})`,
+  })
+
+  await db.transaction('rw', db.reel_stocks, db.stock_movements, async () => {
+    await db.reel_stocks.add(reel)
+    await db.stock_movements.add(movement)
+  })
+
+  return reel
+}
+
+export async function feedPaperReel(data: {
+  firm_id: string
+  reel_id: string
+  date: string
+  mode: 'full' | 'partial'
+  used_weight?: number
+  job_id?: string
+  reason?: string
+  notes?: string
+}) {
+  if (!data.reel_id) throw new Error('Reel select karo')
+  const reel = await db.reel_stocks.get(data.reel_id)
+  if (!reel || reel.is_deleted || reel.firm_id !== data.firm_id) {
+    throw new Error('Selected reel stock nahi mila')
+  }
+  const used_weight = resolveReelFeedWeight(data.mode, Number(reel.current_weight) || 0, data.used_weight)
+
+  return consumePaperReel({
+    firm_id: data.firm_id,
+    reel_id: data.reel_id,
+    date: data.date,
+    used_weight,
+    job_id: data.job_id,
+    reason: data.reason || (data.mode === 'full' ? 'Full reel feed' : 'Partial reel feed'),
+    notes: data.notes,
+  })
+}
+
+/** Resolve how much KG to cut for a full or partial feed. */
+export function resolveReelFeedWeight(mode: 'full' | 'partial', available: number, used_weight?: number): number {
+  const avail = roundWeight(available)
+  if (avail <= 0) throw new Error('Reel already consumed')
+  if (mode === 'full') return avail
+  const used = roundWeight(used_weight)
+  if (used <= 0) throw new Error('Used weight 0 se zyada hona chahiye')
+  if (used > avail) {
+    throw new Error(`Selected reel me sirf ${avail.toFixed(2)} KG available hai.`)
+  }
+  return used
+}
+
+export async function createReelsFromPurchase(purchase: Purchase, confirmedSpecs?: PurchaseReelSpec[]) {
+  const specs = confirmedSpecs?.length
+    ? normalizeConfirmedSpecs(confirmedSpecs)
+    : purchaseReelSpecs(purchase)
+  if (!specs.length) return 0
+
+  await assertUniqueReelNosForPurchase(purchase.firm_id, specs, purchase.id)
   const existing = await db.reel_stocks.where('purchase_id').equals(purchase.id).toArray().catch(() => [])
   const existingByNo = new Map<string, ReelStock[]>()
   for (const reel of existing) {

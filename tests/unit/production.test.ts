@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import type { ReelStock } from '@/types/models'
-import { normalizeReelColor, reelColorLabel, reelInventorySummary } from '@/services/production'
+import type { Purchase, ReelStock } from '@/types/models'
+import {
+  normalizeReelColor,
+  proposePurchaseReelSpecs,
+  purchaseHasReelLines,
+  reelColorLabel,
+  reelInventorySummary,
+  resolveReelFeedWeight,
+} from '@/services/production'
 
 describe('normalizeReelColor', () => {
   it('treats NS and the legacy NATURAL_BROWN as the same shade', () => {
@@ -52,5 +59,62 @@ describe('reelInventorySummary — colour grouping', () => {
     const reels = [reel({ color: 'NS' }), reel({ color: 'GY' })]
     const summary = reelInventorySummary(reels, [])
     expect(summary.breakdown).toHaveLength(2)
+  })
+})
+
+describe('resolveReelFeedWeight', () => {
+  it('uses full available weight for full mode', () => {
+    expect(resolveReelFeedWeight('full', 125.5)).toBe(125.5)
+  })
+
+  it('uses partial weight when within available', () => {
+    expect(resolveReelFeedWeight('partial', 100, 40)).toBe(40)
+  })
+
+  it('rejects over-feed and empty reels', () => {
+    expect(() => resolveReelFeedWeight('partial', 50, 60)).toThrow(/available/)
+    expect(() => resolveReelFeedWeight('full', 0)).toThrow(/consumed/)
+    expect(() => resolveReelFeedWeight('partial', 50, 0)).toThrow(/0 se zyada/)
+  })
+})
+
+describe('proposePurchaseReelSpecs', () => {
+  const purchase = {
+    id: 'p1',
+    firm_id: 'f1',
+    bill_no: 'B-9',
+    supplier_name: 'Test Mill',
+    supplier_id: null,
+    items: [
+      {
+        item_id: 'i1',
+        name: 'Kraft',
+        hsn: '',
+        qty: 200,
+        unit: 'KG',
+        rate: 30,
+        gst: 12,
+        is_kraft_reel: true,
+        paper_type: 'KRAFT',
+        deckle_size: '1400',
+        gsm: '120',
+        bf: '18',
+        color: 'NS',
+        reel_weight: 200,
+        reel_count: 2,
+        reel_no: 'R-CUSTOM',
+      },
+    ],
+  } as Purchase
+
+  it('detects reel lines and proposes custom / split reel numbers', () => {
+    expect(purchaseHasReelLines(purchase)).toBe(true)
+    const specs = proposePurchaseReelSpecs(purchase)
+    expect(specs).toHaveLength(2)
+    expect(specs[0].reel_no).toBe('R-CUSTOM-R01')
+    expect(specs[1].reel_no).toBe('R-CUSTOM-R02')
+    expect(specs[0].opening_weight).toBe(100)
+    expect(specs[0].gsm).toBe('120')
+    expect(specs[0].bf).toBe('18')
   })
 })

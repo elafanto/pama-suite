@@ -11,8 +11,10 @@ import {
   assertPurchaseReelsHaveNoConsumptionHistory,
   createConsumablesFromPurchase,
   createReelsFromPurchase,
+  purchaseHasReelLines,
   purchaseReelStockChanged,
   reversePurchaseReels,
+  type PurchaseReelSpec,
 } from '@/services/production'
 import {
   createCapitalAssetsFromPurchase,
@@ -58,7 +60,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
     await accounting.postPurchaseToLedger(rec)
     await syncPaymentVoucher(rec)
     await recordPurchaseMovements(rec)
-    await createReelsFromPurchase(rec)
+    // Reel stock is confirmed separately (custom reel numbers) — not auto-fed.
     await createConsumablesFromPurchase(rec)
     await createCapitalAssetsFromPurchase(rec)
     await logActivity(firmId, 'create', 'purchase', rec.id, `Purchase ${rec.bill_no} from ${rec.supplier_name}`)
@@ -81,15 +83,29 @@ export const usePurchaseStore = defineStore('purchases', () => {
       await accounting.postPurchaseToLedger(rec)
       await syncPaymentVoucher(rec)
       await recordPurchaseMovements(rec)
-      if (reelStockChanged) {
-        await reversePurchaseReels(id)
-      }
-      await createReelsFromPurchase(rec)
+      // Do not auto-create/replace reel stock — UI confirms with custom reel numbers.
       await createConsumablesFromPurchase(rec)
       await createCapitalAssetsFromPurchase(rec)
       await logActivity(rec.firm_id, 'update', 'purchase', rec.id, `Purchase ${rec.bill_no} updated`)
     }
     await load()
+    return { reelStockChanged, needsReelConfirm: !!rec && purchaseHasReelLines(rec) }
+  }
+
+  async function confirmReelStock(purchaseId: string, specs: PurchaseReelSpec[], opts?: { replaceExisting?: boolean }) {
+    const rec = await repo.get(purchaseId)
+    if (!rec || rec.is_deleted) throw new Error('Purchase not found')
+    if (!purchaseHasReelLines(rec) && !(specs || []).length) {
+      throw new Error('Is purchase me paper reel lines nahi hain')
+    }
+    if (opts?.replaceExisting) {
+      await assertPurchaseReelsHaveNoConsumptionHistory(purchaseId, 'update')
+      await reversePurchaseReels(purchaseId)
+    }
+    const count = await createReelsFromPurchase(rec, specs)
+    await logActivity(rec.firm_id, 'create', 'reel_stock', rec.id, `Confirmed ${count} reels from purchase ${rec.bill_no}`)
+    await load()
+    return { count }
   }
 
   async function remove(id: string) {
@@ -158,7 +174,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
       await accounting.postPurchaseToLedger(rec)
       await syncPaymentVoucher(rec)
       await recordPurchaseMovements(rec)
-      await createReelsFromPurchase(rec)
+      // Reels still need confirm with custom numbers after restore.
       await createConsumablesFromPurchase(rec)
       await createCapitalAssetsFromPurchase(rec)
       await logActivity(rec.firm_id, 'restore', 'purchase', id, `Purchase ${rec.bill_no} restored`)
@@ -178,5 +194,5 @@ export const usePurchaseStore = defineStore('purchases', () => {
     return result
   }
 
-  return { list, loaded, load, add, update, remove, restore, recordPayment, moveToFirm }
+  return { list, loaded, load, add, update, remove, restore, recordPayment, moveToFirm, confirmReelStock }
 })

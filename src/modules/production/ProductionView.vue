@@ -5,7 +5,7 @@ import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useProductionStore } from '@/stores/production'
-import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelInventorySummary, STAGE_LABELS, STOCK_LABELS } from '@/services/production'
+import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveReelFeedWeight, STAGE_LABELS, STOCK_LABELS } from '@/services/production'
 import type { PaperType, ProductionStage, ProductionStockType, ReelStock } from '@/types/models'
 
 const firmStore = useFirmStore()
@@ -68,10 +68,24 @@ const consumableForm = reactive({
 const reelConsumptionForm = reactive({
   date: new Date().toISOString().slice(0, 10),
   reel_id: '',
+  mode: 'partial' as 'full' | 'partial',
   used_weight: 0,
   job_id: '',
-  reason: 'Plant consumption',
+  reason: 'Plant feed',
   notes: '',
+})
+
+const manualReelForm = reactive({
+  date: new Date().toISOString().slice(0, 10),
+  reel_no: '',
+  paper_type: 'KRAFT' as PaperType,
+  supplier_name: '',
+  deckle_size: '',
+  gsm: '',
+  bf: '',
+  color: 'NS',
+  opening_weight: 0,
+  rate: 0,
 })
 
 const reelFilters = reactive({
@@ -325,6 +339,15 @@ async function saveStage() {
     if (selectedReel && stageForm.input_weight > (Number(selectedReel.current_weight) || 0)) {
       return alert(`Selected reel ${selectedReel.reel_no} me sirf ${n2(selectedReel.current_weight)} KG available hai.`)
     }
+    if (selectedReel) {
+      const avail = Number(selectedReel.current_weight) || 0
+      const used = stageForm.input_weight
+      const remaining = Math.max(0, Math.round((avail - used) * 1000) / 1000)
+      const ok = confirm(
+        `Reel ${selectedReel.reel_no} se ${n2(used)} KG feed?\n\nAvailable ${n2(avail)} → Remaining ${n2(remaining)}${remaining <= 0 ? ' (Consumed)' : ''}`,
+      )
+      if (!ok) return
+    }
   }
   try {
     await production.addStage({ ...stageForm })
@@ -363,28 +386,93 @@ async function saveConsumableAdjustment() {
   })
 }
 
-async function saveReelConsumption() {
-  if (!reelConsumptionForm.reel_id) return alert('Paper reel select karo')
-  if (reelConsumptionForm.used_weight <= 0) return alert('Used weight enter karo')
-  const selectedReel = production.reels.find((reel) => reel.id === reelConsumptionForm.reel_id)
-  if (selectedReel && reelConsumptionForm.used_weight > (Number(selectedReel.current_weight) || 0)) {
-    return alert(`Selected reel ${selectedReel.reel_no} me sirf ${n2(selectedReel.current_weight)} KG available hai.`)
-  }
+function selectReelForFeed(reelId: string) {
+  reelConsumptionForm.reel_id = reelId
+  reelConsumptionForm.mode = 'partial'
+  const reel = production.reels.find((r) => r.id === reelId)
+  reelConsumptionForm.used_weight = reel ? Number(reel.current_weight) || 0 : 0
+  activeTab.value = 'reels'
+}
+
+async function saveManualReel() {
+  if (!manualReelForm.reel_no.trim()) return alert('Custom reel number required')
+  if (manualReelForm.opening_weight <= 0) return alert('Weight (KG) enter karo')
+  if (!manualReelForm.deckle_size.trim()) return alert('Deckle / size required')
+  if (!manualReelForm.gsm.trim()) return alert('GSM required')
+  if (!manualReelForm.bf.trim()) return alert('BF required')
+  if (!manualReelForm.supplier_name.trim()) return alert('Paper mill required')
   try {
-    await production.addReelConsumption({
-      ...reelConsumptionForm,
-      job_id: reelConsumptionForm.job_id || undefined,
+    await production.addManualReel({
+      ...manualReelForm,
+      reel_no: manualReelForm.reel_no.trim(),
+      supplier_name: manualReelForm.supplier_name.trim(),
+      deckle_size: manualReelForm.deckle_size.trim(),
+      gsm: manualReelForm.gsm.trim(),
+      bf: manualReelForm.bf.trim(),
+      color: normalizeReelColor(manualReelForm.color),
     })
   } catch (err: any) {
-    alert(err?.message || 'Paper reel consumption save nahi ho payi.')
+    alert(err?.message || 'Reel add nahi ho payi.')
+    return
+  }
+  Object.assign(manualReelForm, {
+    date: new Date().toISOString().slice(0, 10),
+    reel_no: '',
+    paper_type: 'KRAFT' as PaperType,
+    supplier_name: '',
+    deckle_size: '',
+    gsm: '',
+    bf: '',
+    color: 'NS',
+    opening_weight: 0,
+    rate: 0,
+  })
+  alert('Reel stock me add ho gaya.')
+}
+
+async function saveReelConsumption() {
+  if (!reelConsumptionForm.reel_id) return alert('Paper reel select karo')
+  const selectedReel = production.reels.find((reel) => reel.id === reelConsumptionForm.reel_id)
+  if (!selectedReel) return alert('Selected reel stock nahi mila')
+  let used = 0
+  try {
+    used = resolveReelFeedWeight(
+      reelConsumptionForm.mode,
+      Number(selectedReel.current_weight) || 0,
+      reelConsumptionForm.used_weight,
+    )
+  } catch (err: any) {
+    return alert(err?.message || 'Invalid feed weight')
+  }
+  const avail = Number(selectedReel.current_weight) || 0
+  const remaining = Math.max(0, Math.round((avail - used) * 1000) / 1000)
+  const ok = confirm(
+    reelConsumptionForm.mode === 'full'
+      ? `Reel ${selectedReel.reel_no} FULL consume?\n\n${n2(avail)} KG → Consumed`
+      : `Reel ${selectedReel.reel_no} se ${n2(used)} KG feed?\n\nAvailable ${n2(avail)} → Remaining ${n2(remaining)}${remaining <= 0 ? ' (Consumed)' : ''}`,
+  )
+  if (!ok) return
+  try {
+    await production.feedReel({
+      reel_id: reelConsumptionForm.reel_id,
+      date: reelConsumptionForm.date,
+      mode: reelConsumptionForm.mode,
+      used_weight: reelConsumptionForm.used_weight,
+      job_id: reelConsumptionForm.job_id || undefined,
+      reason: reelConsumptionForm.reason,
+      notes: reelConsumptionForm.notes,
+    })
+  } catch (err: any) {
+    alert(err?.message || 'Paper reel feed save nahi ho payi.')
     return
   }
   Object.assign(reelConsumptionForm, {
     date: new Date().toISOString().slice(0, 10),
     reel_id: '',
+    mode: 'partial' as const,
     used_weight: 0,
     job_id: '',
-    reason: 'Plant consumption',
+    reason: 'Plant feed',
     notes: '',
   })
 }
@@ -764,19 +852,20 @@ onMounted(async () => {
         </div>
       </div>
       <div class="overflow-x-auto">
-        <table class="w-full text-sm min-w-[1120px]">
+        <table class="w-full text-sm min-w-[1180px]">
           <thead class="text-xs uppercase text-slate-500 bg-slate-50">
             <tr>
               <th class="p-3 text-left">Reel No</th>
               <th class="p-3 text-left">Type</th>
               <th class="p-3 text-left">Bill No</th>
-              <th class="p-3 text-left">Supplier</th>
+              <th class="p-3 text-left">Mill</th>
               <th class="p-3 text-left">Deckle</th>
               <th class="p-3 text-left">GSM / BF</th>
               <th class="p-3 text-left">Color</th>
               <th class="p-3 text-right">Opening KG</th>
               <th class="p-3 text-right">Current KG</th>
               <th class="p-3 text-center">Status</th>
+              <th class="p-3 text-right">Action</th>
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -795,9 +884,20 @@ onMounted(async () => {
               <td class="p-3 text-right font-mono">{{ n2(reel.opening_weight) }}</td>
               <td class="p-3 text-right font-mono">{{ n2(reel.current_weight) }}</td>
               <td class="p-3 text-center"><span class="pp-badge" :class="reel.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-slate-100'">{{ reel.status }}</span></td>
+              <td class="p-3 text-right">
+                <button
+                  v-if="reel.status === 'active' && reel.current_weight > 0"
+                  type="button"
+                  class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs"
+                  @click="selectReelForFeed(reel.id)"
+                >
+                  Feed
+                </button>
+                <span v-else class="text-slate-300">—</span>
+              </td>
             </tr>
             <tr v-if="filteredReels.length === 0">
-              <td colspan="10" class="p-8 text-center text-slate-400">Purchase bill me Paper Reel mark karte hi stock yahan dikhega.</td>
+              <td colspan="11" class="p-8 text-center text-slate-400">Abhi koi reel nahi — right side se Add Reel karein, ya purchase confirm karein.</td>
             </tr>
           </tbody>
         </table>
@@ -805,8 +905,67 @@ onMounted(async () => {
       </div>
 
       <div class="space-y-6">
+        <div class="pp-card p-6 space-y-3">
+          <h2 class="font-semibold border-b pb-2">Add Reel (manual)</h2>
+          <p class="text-xs text-slate-500">Apna custom reel number, mill, size, GSM, BF, color aur weight yahan add karein.</p>
+          <div>
+            <label class="pp-label">Custom Reel No *</label>
+            <input v-model="manualReelForm.reel_no" class="pp-input font-mono" placeholder="e.g. R-101" />
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="pp-label">Paper Type *</label>
+              <select v-model="manualReelForm.paper_type" class="pp-input">
+                <option v-for="type in paperTypes" :key="type" :value="type">{{ type }}</option>
+              </select>
+            </div>
+            <div>
+              <label class="pp-label">Weight KG *</label>
+              <input v-model.number="manualReelForm.opening_weight" type="number" min="0" step="0.001" class="pp-input text-right" />
+            </div>
+          </div>
+          <div>
+            <label class="pp-label">Paper Mill *</label>
+            <input v-model="manualReelForm.supplier_name" class="pp-input" placeholder="Mill / supplier name" />
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="pp-label">Deckle / Size *</label>
+              <input v-model="manualReelForm.deckle_size" class="pp-input" placeholder="e.g. 1400" />
+            </div>
+            <div>
+              <label class="pp-label">Color *</label>
+              <select v-model="manualReelForm.color" class="pp-input">
+                <option value="NS">{{ reelColorLabel('NS') }}</option>
+                <option value="GY">{{ reelColorLabel('GY') }}</option>
+              </select>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="pp-label">GSM *</label>
+              <input v-model="manualReelForm.gsm" class="pp-input" placeholder="e.g. 120" />
+            </div>
+            <div>
+              <label class="pp-label">BF *</label>
+              <input v-model="manualReelForm.bf" class="pp-input" placeholder="e.g. 18" />
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="pp-label">Rate (optional)</label>
+              <input v-model.number="manualReelForm.rate" type="number" min="0" step="0.01" class="pp-input text-right" />
+            </div>
+            <div>
+              <label class="pp-label">Date</label>
+              <input v-model="manualReelForm.date" type="date" class="pp-input" />
+            </div>
+          </div>
+          <button type="button" class="pp-btn pp-btn-primary w-full" @click="saveManualReel">Add to Stock</button>
+        </div>
+
         <div class="pp-card p-6 space-y-4">
-          <h2 class="font-semibold border-b pb-2">Manual Reel Consumption</h2>
+          <h2 class="font-semibold border-b pb-2">Feed Reel (full / partial)</h2>
           <div>
             <label class="pp-label">Date</label>
             <input v-model="reelConsumptionForm.date" type="date" class="pp-input" />
@@ -820,10 +979,24 @@ onMounted(async () => {
               </option>
             </select>
           </div>
+          <div>
+            <label class="pp-label">Feed mode *</label>
+            <select v-model="reelConsumptionForm.mode" class="pp-input">
+              <option value="partial">Partial — weight update</option>
+              <option value="full">Full consume — mark consumed</option>
+            </select>
+          </div>
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label class="pp-label">Used Weight KG *</label>
-              <input v-model.number="reelConsumptionForm.used_weight" type="number" min="0" step="0.001" class="pp-input text-right" />
+              <input
+                v-model.number="reelConsumptionForm.used_weight"
+                type="number"
+                min="0"
+                step="0.001"
+                class="pp-input text-right"
+                :disabled="reelConsumptionForm.mode === 'full'"
+              />
             </div>
             <div>
               <label class="pp-label">Job (optional)</label>
@@ -835,15 +1008,15 @@ onMounted(async () => {
           </div>
           <div>
             <label class="pp-label">Reason</label>
-            <input v-model="reelConsumptionForm.reason" class="pp-input" placeholder="Plant consumption, sample, damage..." />
+            <input v-model="reelConsumptionForm.reason" class="pp-input" placeholder="Plant feed, sample, damage..." />
           </div>
           <div>
             <label class="pp-label">Notes</label>
             <textarea v-model="reelConsumptionForm.notes" class="pp-input min-h-[80px]" placeholder="Operator, machine, reference..."></textarea>
           </div>
-          <button @click="saveReelConsumption" class="pp-btn pp-btn-primary w-full">Consume Reel Stock</button>
+          <button type="button" class="pp-btn pp-btn-primary w-full" @click="saveReelConsumption">Confirm Feed</button>
           <p class="text-xs text-slate-500">
-            Consumption current weight se minus hota hai aur stock movement ledger me log hota hai.
+            Partial: current weight update. Full: weight 0 + status consumed. Confirm dialog zaroori hai.
           </p>
         </div>
 
