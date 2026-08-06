@@ -5,7 +5,7 @@ import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useProductionStore } from '@/stores/production'
-import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveReelFeedWeight, STAGE_LABELS, STOCK_LABELS } from '@/services/production'
+import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveReelFeedWeight, STAGE_LABELS, STOCK_LABELS, type ConsumableStockType } from '@/services/production'
 import type { PaperType, ProductionStage, ProductionStockType, ReelStock } from '@/types/models'
 
 const firmStore = useFirmStore()
@@ -25,7 +25,7 @@ const tabItems: { id: ProductionTab; label: string }[] = [
   { id: 'consumables', label: 'Consumables' },
   { id: 'reports', label: 'Reports' },
 ]
-const consumableTypes: ProductionStockType[] = ['glue', 'ink', 'stitching_wire']
+const consumableTypes: ConsumableStockType[] = ['glue', 'ink', 'stitching_wire']
 const paperTypes: PaperType[] = ['KRAFT', 'DUPLEX']
 
 const jobForm = reactive({
@@ -56,10 +56,18 @@ const stageForm = reactive({
   notes: '',
 })
 
-const consumableForm = reactive({
+const manualConsumableForm = reactive({
   date: new Date().toISOString().slice(0, 10),
-  stock_type: 'glue' as ProductionStockType,
-  mode: 'add' as 'add' | 'consume',
+  stock_type: 'glue' as ConsumableStockType,
+  qty: 0,
+  weight: 0,
+  notes: '',
+})
+
+const consumableFeedForm = reactive({
+  date: new Date().toISOString().slice(0, 10),
+  stock_type: 'glue' as ConsumableStockType,
+  mode: 'partial' as 'full' | 'partial',
   qty: 0,
   weight: 0,
   notes: '',
@@ -372,14 +380,69 @@ async function saveStage() {
   })
 }
 
-async function saveConsumableAdjustment() {
-  if (!consumableTypes.includes(consumableForm.stock_type)) return alert('Consumable type select karo')
-  if (consumableForm.qty <= 0 && consumableForm.weight <= 0) return alert('Quantity ya weight enter karo')
-  await production.addStockAdjustment({ ...consumableForm })
-  Object.assign(consumableForm, {
+async function saveManualConsumable() {
+  if (!consumableTypes.includes(manualConsumableForm.stock_type)) return alert('Consumable type select karo')
+  if (manualConsumableForm.qty <= 0 && manualConsumableForm.weight <= 0) return alert('Qty ya weight enter karo')
+  try {
+    await production.addManualConsumable({ ...manualConsumableForm })
+  } catch (err: any) {
+    return alert(err?.message || 'Consumable add nahi ho payi')
+  }
+  Object.assign(manualConsumableForm, {
     date: new Date().toISOString().slice(0, 10),
-    stock_type: consumableForm.stock_type,
-    mode: consumableForm.mode,
+    stock_type: manualConsumableForm.stock_type,
+    qty: 0,
+    weight: 0,
+    notes: '',
+  })
+  alert('Consumable stock me add ho gaya.')
+}
+
+function selectConsumableForFeed(stockType: ConsumableStockType) {
+  const row = consumableRows.value.find((r) => r.type === stockType)
+  consumableFeedForm.stock_type = stockType
+  consumableFeedForm.mode = 'partial'
+  consumableFeedForm.qty = row ? Number(row.qty) || 0 : 0
+  consumableFeedForm.weight = row ? Number(row.weight) || 0 : 0
+  activeTab.value = 'consumables'
+}
+
+async function saveConsumableFeed() {
+  if (!consumableTypes.includes(consumableFeedForm.stock_type)) return alert('Consumable type select karo')
+  const row = consumableRows.value.find((r) => r.type === consumableFeedForm.stock_type)
+  const available = { qty: Number(row?.qty) || 0, weight: Number(row?.weight) || 0 }
+  let feed = { qty: 0, weight: 0 }
+  try {
+    feed = resolveConsumableFeed(consumableFeedForm.mode, available, {
+      qty: consumableFeedForm.qty,
+      weight: consumableFeedForm.weight,
+    })
+  } catch (err: any) {
+    return alert(err?.message || 'Invalid feed')
+  }
+  const label = STOCK_LABELS[consumableFeedForm.stock_type]
+  const ok = confirm(
+    consumableFeedForm.mode === 'full'
+      ? `${label} FULL consume?\n\nQty ${n2(available.qty)} → 0\nWeight ${n2(available.weight)} KG → 0`
+      : `${label} se feed?\n\nQty ${n2(available.qty)} → ${n2(Math.max(0, available.qty - feed.qty))}\nWeight ${n2(available.weight)} → ${n2(Math.max(0, available.weight - feed.weight))} KG`,
+  )
+  if (!ok) return
+  try {
+    await production.feedConsumableStock({
+      date: consumableFeedForm.date,
+      stock_type: consumableFeedForm.stock_type,
+      mode: consumableFeedForm.mode,
+      qty: consumableFeedForm.qty,
+      weight: consumableFeedForm.weight,
+      notes: consumableFeedForm.notes,
+    })
+  } catch (err: any) {
+    return alert(err?.message || 'Consumable feed save nahi ho payi')
+  }
+  Object.assign(consumableFeedForm, {
+    date: new Date().toISOString().slice(0, 10),
+    stock_type: consumableFeedForm.stock_type,
+    mode: 'partial' as const,
     qty: 0,
     weight: 0,
     notes: '',
@@ -1041,56 +1104,117 @@ onMounted(async () => {
     </div>
 
     <div v-else-if="activeTab === 'consumables'" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <div class="pp-card p-6 space-y-4">
-        <h2 class="font-semibold border-b pb-2">Glue / Ink / Stitching Wire</h2>
-        <div>
-          <label class="pp-label">Date</label>
-          <input v-model="consumableForm.date" type="date" class="pp-input" />
-        </div>
-        <div>
-          <label class="pp-label">Consumable</label>
-          <select v-model="consumableForm.stock_type" class="pp-input">
-            <option v-for="type in consumableTypes" :key="type" :value="type">{{ STOCK_LABELS[type] }}</option>
-          </select>
-        </div>
-        <div>
-          <label class="pp-label">Entry Type</label>
-          <select v-model="consumableForm.mode" class="pp-input">
-            <option value="add">Manual Feed / Add Stock</option>
-            <option value="consume">Consumption / Use Stock</option>
-          </select>
-        </div>
-        <div class="grid grid-cols-2 gap-3">
+      <div class="space-y-6">
+        <div class="pp-card p-6 space-y-3">
+          <h2 class="font-semibold border-b pb-2">Add Consumable (manual)</h2>
+          <p class="text-xs text-slate-500">Naya glue / ink / stitching wire stock bina bill ke add karein.</p>
           <div>
-            <label class="pp-label">Qty</label>
-            <input v-model.number="consumableForm.qty" type="number" class="pp-input text-right" placeholder="0" />
+            <label class="pp-label">Date</label>
+            <input v-model="manualConsumableForm.date" type="date" class="pp-input" />
           </div>
           <div>
-            <label class="pp-label">Weight KG</label>
-            <input v-model.number="consumableForm.weight" type="number" class="pp-input text-right" placeholder="0" />
+            <label class="pp-label">Consumable *</label>
+            <select v-model="manualConsumableForm.stock_type" class="pp-input">
+              <option v-for="type in consumableTypes" :key="type" :value="type">{{ STOCK_LABELS[type] }}</option>
+            </select>
           </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="pp-label">Qty</label>
+              <input v-model.number="manualConsumableForm.qty" type="number" min="0" step="0.001" class="pp-input text-right" />
+            </div>
+            <div>
+              <label class="pp-label">Weight KG</label>
+              <input v-model.number="manualConsumableForm.weight" type="number" min="0" step="0.001" class="pp-input text-right" />
+            </div>
+          </div>
+          <div>
+            <label class="pp-label">Notes</label>
+            <textarea v-model="manualConsumableForm.notes" class="pp-input min-h-[70px]" placeholder="Mill, bag no, reference..."></textarea>
+          </div>
+          <button type="button" class="pp-btn pp-btn-primary w-full" @click="saveManualConsumable">Add to Stock</button>
         </div>
-        <div>
-          <label class="pp-label">Notes</label>
-          <textarea v-model="consumableForm.notes" class="pp-input min-h-[80px]" placeholder="Purchase without bill, daily consumption, adjustment..."></textarea>
+
+        <div class="pp-card p-6 space-y-3">
+          <h2 class="font-semibold border-b pb-2">Feed Consumable</h2>
+          <p class="text-xs text-slate-500">Partial feed stock kam karega. Full consume stock zero karega.</p>
+          <div>
+            <label class="pp-label">Date</label>
+            <input v-model="consumableFeedForm.date" type="date" class="pp-input" />
+          </div>
+          <div>
+            <label class="pp-label">Consumable *</label>
+            <select v-model="consumableFeedForm.stock_type" class="pp-input">
+              <option v-for="type in consumableTypes" :key="type" :value="type">{{ STOCK_LABELS[type] }}</option>
+            </select>
+          </div>
+          <div>
+            <label class="pp-label">Feed mode *</label>
+            <select v-model="consumableFeedForm.mode" class="pp-input">
+              <option value="partial">Partial — stock se kam</option>
+              <option value="full">Full consume — stock zero</option>
+            </select>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="pp-label">Qty</label>
+              <input
+                v-model.number="consumableFeedForm.qty"
+                type="number"
+                min="0"
+                step="0.001"
+                class="pp-input text-right"
+                :disabled="consumableFeedForm.mode === 'full'"
+              />
+            </div>
+            <div>
+              <label class="pp-label">Weight KG</label>
+              <input
+                v-model.number="consumableFeedForm.weight"
+                type="number"
+                min="0"
+                step="0.001"
+                class="pp-input text-right"
+                :disabled="consumableFeedForm.mode === 'full'"
+              />
+            </div>
+          </div>
+          <div>
+            <label class="pp-label">Notes</label>
+            <textarea v-model="consumableFeedForm.notes" class="pp-input min-h-[70px]" placeholder="Job, machine, reason..."></textarea>
+          </div>
+          <button type="button" class="pp-btn pp-btn-primary w-full" @click="saveConsumableFeed">Confirm Feed</button>
         </div>
-        <button @click="saveConsumableAdjustment" class="pp-btn pp-btn-primary w-full">
-          Save Consumable Entry
-        </button>
-        <p class="text-xs text-slate-500">
-          Purchase bill me line item ko Consumable mark karne par stock automatically add hoga.
-        </p>
       </div>
 
       <div class="lg:col-span-2 space-y-6">
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div v-for="row in consumableRows" :key="row.type" class="pp-card p-4">
-            <div class="text-sm font-semibold">{{ row.label }}</div>
+            <div class="flex items-start justify-between gap-2">
+              <div class="text-sm font-semibold">{{ row.label }}</div>
+              <button
+                v-if="row.qty > 0 || row.weight > 0"
+                type="button"
+                class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs"
+                @click="selectConsumableForFeed(row.type)"
+              >
+                Feed
+              </button>
+            </div>
             <div class="mt-3 grid grid-cols-2 gap-2 text-sm">
               <span class="text-slate-500">Qty</span>
               <span class="font-mono text-right">{{ n2(row.qty) }}</span>
               <span class="text-slate-500">Weight</span>
               <span class="font-mono text-right">{{ n2(row.weight) }} KG</span>
+              <span class="text-slate-500">Status</span>
+              <span class="text-right">
+                <span
+                  class="pp-badge text-xs"
+                  :class="(row.qty > 0 || row.weight > 0) ? 'bg-green-100 text-green-800' : 'bg-slate-100 text-slate-600'"
+                >
+                  {{ (row.qty > 0 || row.weight > 0) ? 'active' : 'consumed' }}
+                </span>
+              </span>
             </div>
           </div>
         </div>

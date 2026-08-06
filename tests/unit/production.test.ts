@@ -6,6 +6,7 @@ import {
   purchaseHasReelLines,
   reelColorLabel,
   reelInventorySummary,
+  resolveConsumableFeed,
   resolveReelFeedWeight,
 } from '@/services/production'
 
@@ -75,6 +76,23 @@ describe('resolveReelFeedWeight', () => {
     expect(() => resolveReelFeedWeight('partial', 50, 60)).toThrow(/available/)
     expect(() => resolveReelFeedWeight('full', 0)).toThrow(/consumed/)
     expect(() => resolveReelFeedWeight('partial', 50, 0)).toThrow(/0 se zyada/)
+  })
+})
+
+describe('resolveConsumableFeed', () => {
+  it('uses full available qty/weight for full mode', () => {
+    expect(resolveConsumableFeed('full', { qty: 10, weight: 25 })).toEqual({ qty: 10, weight: 25 })
+  })
+
+  it('uses partial amounts when within available', () => {
+    expect(resolveConsumableFeed('partial', { qty: 10, weight: 25 }, { qty: 3, weight: 5 }))
+      .toEqual({ qty: 3, weight: 5 })
+  })
+
+  it('rejects over-feed and empty stock', () => {
+    expect(() => resolveConsumableFeed('full', { qty: 0, weight: 0 })).toThrow(/khali/)
+    expect(() => resolveConsumableFeed('partial', { qty: 5, weight: 10 }, { qty: 6, weight: 0 })).toThrow(/qty/)
+    expect(() => resolveConsumableFeed('partial', { qty: 5, weight: 10 }, { qty: 0, weight: 12 })).toThrow(/KG/)
   })
 })
 

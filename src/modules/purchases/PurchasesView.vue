@@ -27,7 +27,7 @@ import {
   normalizePurchaseLine,
   type PurchaseLineKind,
 } from '@/services/purchaseLineKind'
-import { proposePurchaseReelSpecs, purchaseHasReelLines, type PurchaseReelSpec } from '@/services/production'
+import { proposePurchaseReelSpecs, purchaseHasReelLines, proposePurchaseConsumableSpecs, purchaseHasConsumableLines, STOCK_LABELS, type PurchaseReelSpec, type PurchaseConsumableSpec } from '@/services/production'
 import type { CapitalCategory, ExpenseCategory, GstType, PaperType, PayStatus, Purchase, PurchaseItemLine } from '@/types/models'
 
 // Stores
@@ -71,6 +71,13 @@ const reelConfirmReplace = ref(false)
 const reelConfirmBusy = ref(false)
 const reelConfirmRows = ref<PurchaseReelSpec[]>([])
 const reelConfirmMill = ref('')
+
+const showConsumableConfirmModal = ref(false)
+const consumableConfirmPurchaseId = ref<string | null>(null)
+const consumableConfirmReplace = ref(false)
+const consumableConfirmBusy = ref(false)
+const consumableConfirmRows = ref<PurchaseConsumableSpec[]>([])
+const pendingConsumablePurchase = ref<Purchase | null>(null)
 
 // Form State
 const initialFormState = () => ({
@@ -602,18 +609,21 @@ async function savePurchase() {
   try {
     let savedPurchase: Purchase | null = null
     let openReelConfirm = false
+    let openConsumableConfirm = false
     let replaceExisting = false
 
     if (editingId.value) {
       const updateResult = await purchaseStore.update(editingId.value, purchaseData)
       savedPurchase = purchaseStore.list.find((p) => p.id === editingId.value) || null
       openReelConfirm = !!updateResult?.needsReelConfirm
+      openConsumableConfirm = !!updateResult?.needsConsumableConfirm
       replaceExisting = !!updateResult?.reelStockChanged
       alert('Purchase bill updated successfully!')
     } else {
       const purchase = await purchaseStore.add(purchaseData)
       savedPurchase = purchase
       openReelConfirm = purchaseHasReelLines(purchase)
+      openConsumableConfirm = purchaseHasConsumableLines(purchase)
       replaceExisting = false
       const attached = await tryAttachPurchaseFile(purchase, pendingScanFile.value)
       pendingScanFile.value = null
@@ -625,8 +635,16 @@ async function savePurchase() {
     resetForm()
     activeTab.value = 'history'
 
+    if (savedPurchase && openConsumableConfirm) {
+      pendingConsumablePurchase.value = savedPurchase
+    } else {
+      pendingConsumablePurchase.value = null
+    }
+
     if (openReelConfirm && savedPurchase) {
       openReelStockConfirm(savedPurchase, replaceExisting)
+    } else if (pendingConsumablePurchase.value) {
+      await openConsumableStockConfirm(pendingConsumablePurchase.value)
     }
   } catch (err: any) {
     alert(err?.message || 'Purchase bill save failed')
@@ -636,7 +654,10 @@ async function savePurchase() {
 
 async function openReelStockConfirm(purchase: Purchase, replaceExisting: boolean) {
   const specs = proposePurchaseReelSpecs(purchase)
-  if (!specs.length) return
+  if (!specs.length) {
+    if (pendingConsumablePurchase.value) await openConsumableStockConfirm(pendingConsumablePurchase.value)
+    return
+  }
   // Prefer checking live stock for replace flag when editing without signature change
   // but user never confirmed before.
   let replace = replaceExisting
@@ -660,6 +681,11 @@ function closeReelConfirmModal() {
   reelConfirmPurchaseId.value = null
   reelConfirmRows.value = []
   reelConfirmBusy.value = false
+  const pending = pendingConsumablePurchase.value
+  if (pending) {
+    pendingConsumablePurchase.value = null
+    void openConsumableStockConfirm(pending)
+  }
 }
 
 async function submitReelStockConfirm() {
@@ -684,12 +710,68 @@ async function submitReelStockConfirm() {
       })),
       { replaceExisting: reelConfirmReplace.value },
     )
-    closeReelConfirmModal()
+    showReelConfirmModal.value = false
+    reelConfirmPurchaseId.value = null
+    reelConfirmRows.value = []
     alert(`${result.count} reel(s) Paper Reels stock me add ho gaye.`)
+    const pending = pendingConsumablePurchase.value
+    pendingConsumablePurchase.value = null
+    if (pending) await openConsumableStockConfirm(pending)
   } catch (err: any) {
     alert(err?.message || 'Reel stock confirm failed')
   } finally {
     reelConfirmBusy.value = false
+  }
+}
+
+async function openConsumableStockConfirm(purchase: Purchase) {
+  const specs = proposePurchaseConsumableSpecs(purchase)
+  if (!specs.length) return
+  let replace = false
+  const existingCount = await db.stock_movements
+    .where('ref_id')
+    .equals(purchase.id)
+    .filter((m) => !m.is_deleted && m.source === 'purchase' && ['glue', 'ink', 'stitching_wire'].includes(m.stock_type))
+    .count()
+  replace = existingCount > 0
+  consumableConfirmPurchaseId.value = purchase.id
+  consumableConfirmReplace.value = replace
+  consumableConfirmRows.value = specs.map((s) => ({ ...s }))
+  showConsumableConfirmModal.value = true
+}
+
+function closeConsumableConfirmModal() {
+  showConsumableConfirmModal.value = false
+  consumableConfirmPurchaseId.value = null
+  consumableConfirmRows.value = []
+  consumableConfirmBusy.value = false
+  pendingConsumablePurchase.value = null
+}
+
+async function submitConsumableStockConfirm() {
+  if (!consumableConfirmPurchaseId.value) return
+  const rows = consumableConfirmRows.value
+  if (rows.some((r) => !(Number(r.qty) > 0 || Number(r.weight) > 0))) {
+    return alert('Har consumable ka qty ya weight 0 se zyada hona chahiye')
+  }
+  consumableConfirmBusy.value = true
+  try {
+    const result = await purchaseStore.confirmConsumableStock(
+      consumableConfirmPurchaseId.value,
+      rows.map((r) => ({
+        ...r,
+        qty: Number(r.qty) || 0,
+        weight: Number(r.weight) || 0,
+        note: r.note || `${STOCK_LABELS[r.stock_type]} from purchase`,
+      })),
+      { replaceExisting: consumableConfirmReplace.value },
+    )
+    closeConsumableConfirmModal()
+    alert(`${result.count} consumable line(s) stock me add ho gaye.`)
+  } catch (err: any) {
+    alert(err?.message || 'Consumable stock confirm failed')
+  } finally {
+    consumableConfirmBusy.value = false
   }
 }
 
@@ -2102,6 +2184,57 @@ onMounted(async () => {
           </button>
           <button type="button" class="pp-btn pp-btn-primary" :disabled="reelConfirmBusy" @click="submitReelStockConfirm">
             {{ reelConfirmBusy ? 'Saving…' : 'Confirm → Paper Reels' }}
+          </button>
+        </div>
+      </div>
+    </PpModal>
+
+    <PpModal
+      :show="showConsumableConfirmModal"
+      title="Confirm Consumable Stock"
+      @close="closeConsumableConfirmModal"
+    >
+      <div class="space-y-4">
+        <p class="text-sm text-slate-600">
+          Purchase save ho chuki hai. Glue / ink / stitching wire stock me daalne se pehle qty / weight confirm karein.
+        </p>
+        <p v-if="consumableConfirmReplace" class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+          Is bill ki pehli consumable stock replace hogi.
+        </p>
+        <div class="overflow-x-auto max-h-[50vh]">
+          <table class="w-full text-sm min-w-[520px]">
+            <thead class="text-xs uppercase text-slate-500 bg-slate-50 sticky top-0">
+              <tr>
+                <th class="p-2 text-left">Consumable</th>
+                <th class="p-2 text-right">Qty *</th>
+                <th class="p-2 text-right">Weight KG</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y">
+              <tr v-for="(row, idx) in consumableConfirmRows" :key="idx">
+                <td class="p-2">
+                  <select v-model="row.stock_type" class="pp-input !py-1">
+                    <option value="glue">Glue</option>
+                    <option value="ink">Ink</option>
+                    <option value="stitching_wire">Stitching Wire</option>
+                  </select>
+                </td>
+                <td class="p-2">
+                  <input v-model.number="row.qty" type="number" min="0" step="0.001" class="pp-input !py-1 text-right" />
+                </td>
+                <td class="p-2">
+                  <input v-model.number="row.weight" type="number" min="0" step="0.001" class="pp-input !py-1 text-right" />
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="flex gap-2 justify-end border-t pt-4">
+          <button type="button" class="pp-btn pp-btn-ghost" :disabled="consumableConfirmBusy" @click="closeConsumableConfirmModal">
+            Skip (no stock)
+          </button>
+          <button type="button" class="pp-btn pp-btn-primary" :disabled="consumableConfirmBusy" @click="submitConsumableStockConfirm">
+            {{ consumableConfirmBusy ? 'Saving…' : 'Confirm → Consumables' }}
           </button>
         </div>
       </div>

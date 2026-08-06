@@ -4,7 +4,16 @@ import { db } from '@/data/db'
 import { uid, nowISO } from '@/data/util'
 import { useFirmStore } from './firm'
 import { logActivity } from '@/services/activityLog'
-import { consumePaperReel, createManualReel, feedPaperReel, saveProductionStage, saveStockAdjustment } from '@/services/production'
+import {
+  consumePaperReel,
+  createManualConsumable,
+  createManualReel,
+  feedConsumable,
+  feedPaperReel,
+  saveProductionStage,
+  saveStockAdjustment,
+  type ConsumableStockType,
+} from '@/services/production'
 import type { PaperType, ProductionJob, ProductionStageEntry, ProductionStockType, ReelStock, StockMovement } from '@/types/models'
 
 const plain = <X>(o: X): X => JSON.parse(JSON.stringify(o))
@@ -131,6 +140,39 @@ export const useProductionStore = defineStore('production', () => {
     return rec
   }
 
+  async function addManualConsumable(data: {
+    date: string
+    stock_type: ConsumableStockType
+    qty: number
+    weight: number
+    notes?: string
+  }) {
+    const firm = useFirmStore()
+    const rec = await createManualConsumable({ ...data, firm_id: firm.activeFirmId })
+    await logActivity(rec.firm_id, 'create', 'stock_movement', rec.id, rec.notes || 'Consumable added')
+    await load()
+    return rec
+  }
+
+  async function feedConsumableStock(data: {
+    date: string
+    stock_type: ConsumableStockType
+    mode: 'full' | 'partial'
+    qty?: number
+    weight?: number
+    notes?: string
+  }) {
+    const firm = useFirmStore()
+    const rec = await feedConsumable({
+      ...data,
+      firm_id: firm.activeFirmId,
+      movements: movements.value,
+    })
+    await logActivity(rec.firm_id, 'consume', 'stock_movement', rec.id, rec.notes || 'Consumable fed')
+    await load()
+    return rec
+  }
+
   return {
     jobs,
     stages,
@@ -145,5 +187,7 @@ export const useProductionStore = defineStore('production', () => {
     addReelConsumption,
     addManualReel,
     feedReel,
+    addManualConsumable,
+    feedConsumableStock,
   }
 })

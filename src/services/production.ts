@@ -536,27 +536,166 @@ export async function consumePaperReel(data: {
   return movement
 }
 
-export async function createConsumablesFromPurchase(purchase: Purchase) {
-  const rows = (purchase.items || [])
-    .filter((row) => row.is_consumable && row.consumable_type)
+export async function reversePurchaseReels(purchaseId: string) {
+  const reels = await db.reel_stocks.where('purchase_id').equals(purchaseId).toArray()
+  const now = nowISO()
+  for (const reel of reels) {
+    await db.reel_stocks.put({ ...reel, is_deleted: true, updated_at: now, _dirty: true })
+  }
+  const moves = await db.stock_movements.where('ref_id').equals(purchaseId).toArray()
+  for (const m of moves.filter((x) => x.source === 'purchase' && x.stock_type === 'raw_reel')) {
+    await db.stock_movements.put({ ...m, is_deleted: true, updated_at: now, _dirty: true })
+  }
+}
+
+export type ConsumableStockType = 'glue' | 'ink' | 'stitching_wire'
+
+export interface PurchaseConsumableSpec {
+  stock_type: ConsumableStockType
+  qty: number
+  weight: number
+  note: string
+}
+
+export function purchaseHasConsumableLines(purchase: Pick<Purchase, 'items'>): boolean {
+  return (purchase.items || []).some((row) => row.is_consumable && row.consumable_type)
+}
+
+export function proposePurchaseConsumableSpecs(purchase: Purchase): PurchaseConsumableSpec[] {
+  return (purchase.items || [])
+    .filter((row) => row.is_consumable && row.consumable_type && CONSUMABLE_STOCK_TYPES.has(row.consumable_type))
     .map((row) => {
-      const qty = Number(row.qty) || 0
-      const weight = row.unit?.toUpperCase() === 'KG' ? qty : 0
+      const qty = Math.max(0, Number(row.qty) || 0)
+      const unit = String(row.unit || '').trim().toUpperCase()
+      const weight = unit === 'KG' ? qty : Math.max(0, Number((row as any).weight) || 0)
+      const stock_type = row.consumable_type as ConsumableStockType
       return {
-        firm_id: purchase.firm_id,
-        date: purchase.received_date || purchase.date,
-        source: 'purchase' as const,
-        ref_id: purchase.id,
-        stock_type: row.consumable_type!,
-        qty_in: qty,
-        qty_out: 0,
-        weight_in: weight,
-        weight_out: 0,
-        waste_qty: 0,
-        waste_weight: 0,
-        notes: `${STOCK_LABELS[row.consumable_type!]} from purchase ${purchase.bill_no}`,
+        stock_type,
+        qty,
+        weight,
+        note: `${STOCK_LABELS[stock_type]} from purchase ${purchase.bill_no}`,
       }
     })
+    .filter((row) => row.qty > 0 || row.weight > 0)
+}
+
+export async function reversePurchaseConsumables(purchaseId: string) {
+  const now = nowISO()
+  const moves = await db.stock_movements.where('ref_id').equals(purchaseId).toArray()
+  for (const m of moves.filter((x) => x.source === 'purchase' && CONSUMABLE_STOCK_TYPES.has(x.stock_type))) {
+    await db.stock_movements.put({ ...m, is_deleted: true, updated_at: now, _dirty: true })
+  }
+}
+
+export function getConsumableBalance(
+  movements: StockMovement[],
+  firmId: string,
+  stockType: ConsumableStockType,
+): { qty: number; weight: number } {
+  const bal = productionBalance(movements, firmId)[stockType]
+  return {
+    qty: Math.max(0, Math.round((Number(bal.qty) || 0) * 1000) / 1000),
+    weight: Math.max(0, Math.round((Number(bal.weight) || 0) * 1000) / 1000),
+  }
+}
+
+/** Resolve qty/weight to feed for partial or full consumable consume. */
+export function resolveConsumableFeed(
+  mode: 'full' | 'partial',
+  available: { qty: number; weight: number },
+  requested?: { qty?: number; weight?: number },
+): { qty: number; weight: number } {
+  const availQty = Math.max(0, roundWeight(available.qty))
+  const availWeight = Math.max(0, roundWeight(available.weight))
+  if (availQty <= 0 && availWeight <= 0) throw new Error('Is consumable ka stock already khali hai')
+
+  if (mode === 'full') {
+    return { qty: availQty, weight: availWeight }
+  }
+
+  const qty = roundWeight(requested?.qty)
+  const weight = roundWeight(requested?.weight)
+  if (qty <= 0 && weight <= 0) throw new Error('Feed qty ya weight 0 se zyada hona chahiye')
+  if (qty > availQty) throw new Error(`Sirf ${availQty} qty available hai`)
+  if (weight > availWeight) throw new Error(`Sirf ${availWeight} KG available hai`)
+  return { qty, weight }
+}
+
+export async function createManualConsumable(data: {
+  firm_id: string
+  date: string
+  stock_type: ConsumableStockType
+  qty: number
+  weight: number
+  notes?: string
+}) {
+  if (!CONSUMABLE_STOCK_TYPES.has(data.stock_type)) throw new Error('Consumable type select karo')
+  const qty = roundWeight(data.qty)
+  const weight = roundWeight(data.weight)
+  if (qty <= 0 && weight <= 0) throw new Error('Qty ya weight enter karo')
+  return saveStockAdjustment({
+    firm_id: data.firm_id,
+    date: data.date,
+    stock_type: data.stock_type,
+    mode: 'add',
+    qty,
+    weight,
+    notes: data.notes || `Manual consumable add — ${STOCK_LABELS[data.stock_type]}`,
+  })
+}
+
+export async function feedConsumable(data: {
+  firm_id: string
+  date: string
+  stock_type: ConsumableStockType
+  mode: 'full' | 'partial'
+  qty?: number
+  weight?: number
+  notes?: string
+  movements: StockMovement[]
+}) {
+  if (!CONSUMABLE_STOCK_TYPES.has(data.stock_type)) throw new Error('Consumable type select karo')
+  const available = getConsumableBalance(data.movements, data.firm_id, data.stock_type)
+  const feed = resolveConsumableFeed(data.mode, available, { qty: data.qty, weight: data.weight })
+  return saveStockAdjustment({
+    firm_id: data.firm_id,
+    date: data.date,
+    stock_type: data.stock_type,
+    mode: 'consume',
+    qty: feed.qty,
+    weight: feed.weight,
+    notes: data.notes
+      || (data.mode === 'full'
+        ? `Full consumable feed — ${STOCK_LABELS[data.stock_type]}`
+        : `Partial consumable feed — ${STOCK_LABELS[data.stock_type]}`),
+  })
+}
+
+export async function createConsumablesFromPurchase(purchase: Purchase, confirmedSpecs?: PurchaseConsumableSpec[]) {
+  const specs = (confirmedSpecs !== undefined
+    ? confirmedSpecs
+    : proposePurchaseConsumableSpecs(purchase)
+  ).map((row) => ({
+    stock_type: row.stock_type,
+    qty: Math.max(0, Number(row.qty) || 0),
+    weight: Math.max(0, Number(row.weight) || 0),
+    note: row.note || `${STOCK_LABELS[row.stock_type]} from purchase ${purchase.bill_no}`,
+  })).filter((row) => row.qty > 0 || row.weight > 0)
+
+  const rows = specs.map((row) => ({
+    firm_id: purchase.firm_id,
+    date: purchase.received_date || purchase.date,
+    source: 'purchase' as const,
+    ref_id: purchase.id,
+    stock_type: row.stock_type,
+    qty_in: row.qty,
+    qty_out: 0,
+    weight_in: row.weight,
+    weight_out: 0,
+    waste_qty: 0,
+    waste_weight: 0,
+    notes: row.note,
+  }))
 
   const existing = await db.stock_movements
     .where('ref_id')
@@ -570,6 +709,7 @@ export async function createConsumablesFromPurchase(purchase: Purchase) {
   await db.transaction('rw', db.stock_movements, async () => {
     for (const row of rows) {
       const existingIdx = unused.findIndex((movement) =>
+        !movement.is_deleted &&
         movement.stock_type === row.stock_type &&
         Number(movement.qty_in) === row.qty_in &&
         Number(movement.weight_in) === row.weight_in &&
@@ -598,18 +738,6 @@ export async function createConsumablesFromPurchase(purchase: Purchase) {
   })
 
   return count
-}
-
-export async function reversePurchaseReels(purchaseId: string) {
-  const reels = await db.reel_stocks.where('purchase_id').equals(purchaseId).toArray()
-  const now = nowISO()
-  for (const reel of reels) {
-    await db.reel_stocks.put({ ...reel, is_deleted: true, updated_at: now, _dirty: true })
-  }
-  const moves = await db.stock_movements.where('ref_id').equals(purchaseId).toArray()
-  for (const m of moves.filter((x) => x.source === 'purchase')) {
-    await db.stock_movements.put({ ...m, is_deleted: true, updated_at: now, _dirty: true })
-  }
 }
 
 export async function saveProductionStage(entry: Omit<ProductionStageEntry, 'id' | 'created_at' | 'updated_at' | 'is_deleted' | '_dirty'>) {
