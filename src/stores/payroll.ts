@@ -22,6 +22,7 @@ import {
   filterDayHoursToEmployment,
   isStaffEmployedOnDay,
   lineBalanceDue,
+  lineHasRecordedPayment,
   normalizeDayHours,
   normalizePayrollLine,
   periodLabel,
@@ -423,7 +424,10 @@ export const usePayrollStore = defineStore('payroll', () => {
       .filter((r) => !r.is_deleted)
       .toArray()
     const existing = matches.length ? pickBestPayrollRun(matches) : undefined
-    if (existing) return syncRunStaff({ ...existing, lines: normalizeRunLines(existing) })
+    if (existing) {
+      const lines = normalizeRunLines(existing)
+      return syncRunStaff({ ...existing, lines, status: resolveRunStatus(existing, lines) })
+    }
 
     const [y, m] = period.split('-').map(Number)
     const range = defaultAdvanceRangeForPeriod(period)
@@ -512,11 +516,16 @@ export const usePayrollStore = defineStore('payroll', () => {
     if (!staff) return { error: 'Staff not found or already left' }
     const eligibleIds = new Set(eligible.map((s) => s.id))
 
+    const existingLine = run.lines.find((l) => l.staff_id === staffId)
+    if (existingLine && lineHasRecordedPayment(existingLine) && patch.day_hours) {
+      return { error: 'Is staff ki salary paid hai — pehle Unlock pay karein, phir attendance change karein.' }
+    }
+
     const lines = run.lines
       .filter((line) => eligibleIds.has(line.staff_id))
       .map((line) => {
         if (line.staff_id !== staffId) return line
-        if (line.pay_status === 'paid') return line
+        if (lineHasRecordedPayment(line) && patch.day_hours) return line
         const day_hours = filterDayHoursToEmployment(
           patch.day_hours ?? normalizeDayHours(line),
           staff,
@@ -526,11 +535,6 @@ export const usePayrollStore = defineStore('payroll', () => {
         const other = patch.other_deduction ?? line.other_deduction
         return buildLineForStaff(staff, run, day_hours, line.attendance, { ...line, other_deduction: other })
       })
-
-    const target = lines.find((l) => l.staff_id === staffId)
-    if (target?.pay_status === 'paid' && patch.day_hours) {
-      return { error: 'Is staff ki salary paid hai — attendance change nahi hogi.' }
-    }
 
     // New staff added mid-month: ensureRun should sync them, but if the line
     // is still missing, append it so attendance saves instead of silently no-op.
@@ -590,7 +594,7 @@ export const usePayrollStore = defineStore('payroll', () => {
 
     const lines = staffForPeriod(period).map((s) => {
       const existing = fresh.lines.find((l) => l.staff_id === s.id)
-      if (existing?.pay_status === 'paid') return existing
+      if (existing && lineHasRecordedPayment(existing)) return existing
       return buildLineForStaff(
         s,
         runForCalc,
@@ -602,6 +606,40 @@ export const usePayrollStore = defineStore('payroll', () => {
     })
     await persistRunLines(fresh, lines, 'finalized')
     await syncRunAdvanceAppliedFlags(period, lines)
+    void syncPayrollToCloudIfReady()
+    return { ok: true }
+  }
+
+  async function unlockStaffPay(period: string, staffId: string) {
+    const firm = useFirmStore()
+    const run = await getRunForPeriod(period)
+    if (!run) return { error: 'Payroll run not found' }
+    const line = run.lines.find((l) => l.staff_id === staffId)
+    if (!line) return { error: 'Staff line not found' }
+    if (!lineHasRecordedPayment(line) && line.pay_status !== 'paid') {
+      return { error: 'Is staff ki koi payment record nahi hai' }
+    }
+
+    const lines = run.lines.map((l) => {
+      if (l.staff_id !== staffId) return l
+      return normalizePayrollLine({
+        ...l,
+        payments: [],
+        paid_amount: 0,
+        payment_date: undefined,
+        payment_mode: undefined,
+        pay_status: 'pending',
+      })
+    })
+
+    await persistRunLines(run, lines)
+    await logActivity(
+      firm.activeFirmId,
+      'payroll',
+      'payroll_run',
+      run.id,
+      `${line.staff_name} payment unlock — ${periodLabel(period)}`,
+    )
     void syncPayrollToCloudIfReady()
     return { ok: true }
   }
@@ -627,7 +665,7 @@ export const usePayrollStore = defineStore('payroll', () => {
       const draftRun = { ...run, status: 'draft' as const }
       const staffById = new Map(staffForPeriod(salaryPeriod).map((s) => [s.id, s]))
       const lines = run.lines.map((line) => {
-        if (line.pay_status === 'paid') return line
+        if (lineHasRecordedPayment(line)) return line
         const staff = staffById.get(line.staff_id)
         if (!staff) return line
         return buildLineForStaff(
@@ -801,6 +839,7 @@ export const usePayrollStore = defineStore('payroll', () => {
     recalculateRun,
     resetAdvanceAdjustments,
     payStaffLine,
+    unlockStaffPay,
     payRun,
     currentPeriod,
   }

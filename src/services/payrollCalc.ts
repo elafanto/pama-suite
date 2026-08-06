@@ -365,13 +365,20 @@ export function sortStaffAdvances<T extends { date: string; amount: number; id: 
 
 export function deriveLinePayStatus(line: Pick<PayrollLine, 'net_pay' | 'payments' | 'paid_amount'>): StaffLinePayStatus {
   const paid = sumLinePayments(line)
+  // Zero / negative net with no cash payment is still editable (pending) — do not
+  // treat as paid or attendance locks forever before hours are marked.
   if (line.net_pay <= 0) {
-    if (paid <= 0) return line.net_pay === 0 ? 'paid' : 'pending'
+    if (paid <= 0) return 'pending'
     return 'partial'
   }
   if (paid <= 0) return 'pending'
   if (paid >= line.net_pay) return 'paid'
   return 'partial'
+}
+
+/** True when real money was recorded against the line (blocks attendance edits). */
+export function lineHasRecordedPayment(line: Pick<PayrollLine, 'payments' | 'paid_amount' | 'pay_status'>): boolean {
+  return sumLinePayments(line) > 0
 }
 
 export function normalizePayrollLine(line: PayrollLine, runStatus?: string): PayrollLine {

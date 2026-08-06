@@ -14,9 +14,11 @@ import {
   dayFromPreset,
   defaultAdvanceRangeForPeriod,
   deriveWageRates,
+  deriveLinePayStatus,
   formatPayrollMoney,
   isStaffInPeriod,
   lineBalanceDue,
+  lineHasRecordedPayment,
   periodLastDate,
   sortAdvanceItems,
   staffSalaryForPeriod,
@@ -434,5 +436,25 @@ describe('joining date — mid-month staff', () => {
     const fullMonth = calcEarnedFromHours('monthly', monthly, hourly_wage, summarizeDayHours(hoursForDays(26), 31))
     expect(line.earned).toBeLessThan(fullMonth)
     expect(line.earned).toBe(monthly - 2 * daily_wage)
+  })
+})
+
+describe('deriveLinePayStatus', () => {
+  it('keeps zero net without payments as pending (not paid)', () => {
+    expect(deriveLinePayStatus({ net_pay: 0, payments: [], paid_amount: 0 })).toBe('pending')
+    expect(lineHasRecordedPayment({ pay_status: 'pending', payments: [], paid_amount: 0 })).toBe(false)
+  })
+
+  it('marks paid only when recorded payment covers net', () => {
+    expect(deriveLinePayStatus({
+      net_pay: 8000,
+      payments: [{ date: '2026-07-28', amount: 8000, mode: 'transfer' }],
+      paid_amount: 8000,
+    })).toBe('paid')
+    expect(lineHasRecordedPayment({
+      pay_status: 'paid',
+      payments: [{ date: '2026-07-28', amount: 8000, mode: 'transfer' }],
+      paid_amount: 8000,
+    })).toBe(true)
   })
 })

@@ -25,6 +25,7 @@ import {
   isStaffEmployedOnDay,
   isSunday,
   lineBalanceDue,
+  lineHasRecordedPayment,
   normalizeDayHours,
   normalizeSalaryHistory,
   periodLabel,
@@ -614,6 +615,12 @@ async function confirmStaffPay() {
   showStaffPayModal.value = false
 }
 
+async function unlockStaffPay(staffId: string, staffName: string) {
+  if (!confirm(`${staffName} ki payment unlock karein?\nAttendance / salary dubara edit kar sakte ho, phir Pay karna hoga.`)) return
+  const res = await store.unlockStaffPay(period.value, staffId)
+  if (res && 'error' in res) alert(res.error)
+}
+
 const staffLedger = computed(() => {
   if (!ledgerStaffId.value) return null
   return buildStaffLedger(ledgerStaffId.value, store.advances, store.runs)
@@ -1060,7 +1067,17 @@ onMounted(async () => {
                   {{ formatPayrollMoney(lineBalanceDue(line)) }}
                 </td>
                 <td class="px-3 py-2 text-right">
-                  <span v-if="line.pay_status === 'paid'" class="text-xs text-emerald-700 font-semibold">Done</span>
+                  <div v-if="line.pay_status === 'paid' || lineHasRecordedPayment(line)" class="inline-flex flex-col items-end gap-1">
+                    <span class="text-xs text-emerald-700 font-semibold">Done</span>
+                    <button
+                      type="button"
+                      class="text-[10px] text-amber-800 underline hover:no-underline"
+                      title="Payment hatao taaki attendance edit ho sake"
+                      @click="unlockStaffPay(line.staff_id, line.staff_name)"
+                    >
+                      Unlock
+                    </button>
+                  </div>
                   <span v-else-if="lineBalanceDue(line) < 0" class="text-xs text-rose-600 font-semibold">Recovery</span>
                   <button
                     v-else-if="lineBalanceDue(line) > 0"
