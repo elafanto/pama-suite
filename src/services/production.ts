@@ -78,7 +78,7 @@ export interface PurchaseReelSpec {
   note: string
 }
 
-function roundWeight(value: number) {
+function roundWeight(value: number | undefined | null) {
   return Math.round((Number(value) || 0) * 1000) / 1000
 }
 

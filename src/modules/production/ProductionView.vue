@@ -199,7 +199,7 @@ const consumableRows = computed(() => {
 })
 const recentConsumableMoves = computed(() => {
   return production.movements
-    .filter((m) => consumableTypes.includes(m.stock_type))
+    .filter((m) => consumableTypes.includes(m.stock_type as ConsumableStockType))
     .slice(0, 12)
 })
 const recentReelMoves = computed(() => {
@@ -1196,7 +1196,14 @@ onMounted(async () => {
               </td>
             </tr>
             <tr v-if="filteredReels.length === 0">
-              <td colspan="12" class="p-8 text-center text-slate-400">Abhi koi reel nahi — right side se Add Reel karein, ya purchase confirm karein.</td>
+              <td colspan="12" class="p-8 text-center text-slate-500">
+                <p class="font-semibold text-navy mb-1">Abhi list khali hai</p>
+                <p class="text-sm">
+                  Right side <b>Add Reel (stock)</b> se pehli reel add karo
+                  (Reel No, Mill, Deckle, GSM, BF, Weight).
+                  Uske baad yahan <b>Select</b> checkbox + Full consume / Remaining KG Update aayega.
+                </p>
+              </td>
             </tr>
           </tbody>
         </table>
