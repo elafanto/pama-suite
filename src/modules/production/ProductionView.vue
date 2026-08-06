@@ -1018,7 +1018,8 @@ onMounted(async () => {
           <div>
             <h2 class="font-semibold">Paper Reel Stock</h2>
             <p class="text-xs text-slate-500">
-              Add se stock. List se tick → Full consume. Remaining KG cell → Update (partial).
+              1) Right se <b>Add Reel</b> · 2) Row pe <b>Select</b> tick · 3) <b>Full consume selected</b>
+              · Partial: <b>Remaining KG</b> likho → <b>Update</b>
             </p>
           </div>
           <div class="flex flex-wrap gap-2">
@@ -1043,6 +1044,22 @@ onMounted(async () => {
               Add from Purchase
             </RouterLink>
           </div>
+        </div>
+        <div
+          class="mb-4 rounded-lg border px-3 py-2 text-sm"
+          :class="selectableFilteredReels.length
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+            : 'border-amber-200 bg-amber-50 text-amber-900'"
+        >
+          <span v-if="selectableFilteredReels.length">
+            Active reels: <b>{{ selectableFilteredReels.length }}</b>
+            — pehli column <b>Select</b> tick karke Full consume, ya Remaining KG → Update.
+            Selected: <b>{{ selectedActiveReels.length }}</b>
+          </span>
+          <span v-else>
+            Abhi <b>0 active reels</b> — isliye checkbox / consume band hai.
+            Pehle right side <b>Add Reel (stock)</b> se reel add karo, phir list mein Select dikhega.
+          </span>
         </div>
         <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
         <div>
@@ -1093,11 +1110,14 @@ onMounted(async () => {
         <table class="w-full text-sm min-w-[1280px]">
           <thead class="text-xs uppercase text-slate-500 bg-slate-50">
             <tr>
-              <th class="p-3 text-center w-10">
+              <th class="p-3 text-center sticky left-0 z-10 bg-slate-50 min-w-[4.5rem]">
+                <div class="text-[10px] font-semibold uppercase tracking-wide text-slate-600 mb-1">Select</div>
                 <input
                   type="checkbox"
+                  class="h-4 w-4"
                   :checked="allSelectableChecked"
                   :disabled="!selectableFilteredReels.length"
+                  title="Select all active reels in this list"
                   @change="toggleSelectAllFiltered(($event.target as HTMLInputElement).checked)"
                 />
               </th>
@@ -1116,14 +1136,16 @@ onMounted(async () => {
           </thead>
           <tbody class="divide-y">
             <tr v-for="reel in filteredReels" :key="reel.id">
-              <td class="p-3 text-center">
+              <td class="p-3 text-center sticky left-0 z-10 bg-white">
                 <input
                   v-if="reel.status === 'active' && reel.current_weight > 0"
                   type="checkbox"
+                  class="h-4 w-4"
                   :checked="selectedReelIds.includes(reel.id)"
+                  :title="`Select ${reel.reel_no}`"
                   @change="toggleSelectReel(reel.id, ($event.target as HTMLInputElement).checked)"
                 />
-                <span v-else class="text-slate-300">—</span>
+                <span v-else class="text-[10px] text-slate-400">—</span>
               </td>
               <td class="p-3 font-mono">{{ reel.reel_no }}</td>
               <td class="p-3">
