@@ -37,7 +37,7 @@ import {
   sundayDayKeys,
 } from '@/services/payrollCalc'
 import { buildStaffLedger } from '@/services/staffLedger'
-import { downloadPayrollPayslipsPdf, payrollPayTypeLabel } from '@/services/payrollPdf'
+import { downloadPayrollPayslipsPdf, payrollPayTypeLabel, buildPayslipDayRows } from '@/services/payrollPdf'
 import { pickBestPayrollRun } from '@/services/payrollRuns'
 import {
   generateStaffHoursMessage,
@@ -630,16 +630,22 @@ function printPayslip() {
   window.print()
 }
 
-function downloadCurrentPayslipPdf() {
-  if (!payslipLine.value) return
+function downloadStaffPayslipPdf(staffId: string) {
+  const line = currentRun.value?.lines?.find((l) => l.staff_id === staffId)
+  if (!line) return alert('Is staff ka salary data nahi hai.')
   downloadPayrollPayslipsPdf(
-    [payslipLine.value],
+    [line],
     period.value,
     firmStore.activeFirm,
-    `Payslip_${payslipLine.value.staff_name}_${period.value}.pdf`,
+    `Payslip_Daywise_${line.staff_name}_${period.value}.pdf`,
     { from: advanceFrom.value, to: advanceTo.value },
     advanceSortMode.value,
   )
+}
+
+function downloadCurrentPayslipPdf() {
+  if (!payslipLine.value) return
+  downloadStaffPayslipPdf(payslipLine.value.staff_id)
 }
 
 function downloadAllPayslipsPdf() {
@@ -648,7 +654,7 @@ function downloadAllPayslipsPdf() {
     currentRun.value.lines,
     period.value,
     firmStore.activeFirm,
-    undefined,
+    `Payslips_Daywise_${period.value}_all.pdf`,
     { from: advanceFrom.value, to: advanceTo.value },
     advanceSortMode.value,
   )
@@ -662,6 +668,11 @@ const payslipLine = computed(() => {
 const payslipAdvanceItems = computed(() => {
   if (!payslipLine.value?.advance_items?.length) return []
   return sortAdvanceItems(payslipLine.value.advance_items, advanceSortMode.value)
+})
+
+const payslipDayRows = computed(() => {
+  if (!payslipLine.value) return []
+  return buildPayslipDayRows(payslipLine.value, selYear.value, selMonth.value)
 })
 
 onMounted(async () => {
@@ -813,6 +824,13 @@ onMounted(async () => {
           @click="shareAllStaffHoursWhatsApp"
         >
           💬 WhatsApp hours (sab staff)
+        </button>
+        <button
+          type="button"
+          class="pp-btn pp-btn-primary !py-1.5 !text-xs"
+          @click="downloadAllPayslipsPdf"
+        >
+          📄 Day-wise PDF (sab)
         </button>
       </div>
 
@@ -985,6 +1003,14 @@ onMounted(async () => {
         >
           💬 WhatsApp hours (sab)
         </button>
+        <button
+          v-if="currentRun?.lines?.length"
+          type="button"
+          class="pp-btn pp-btn-primary !py-2"
+          @click="downloadAllPayslipsPdf"
+        >
+          📄 Day-wise PDF (sab)
+        </button>
       </div>
       <div v-if="!currentRun" class="pp-card p-6 text-center text-slate-400">Select month &amp; mark attendance.</div>
       <template v-else>
@@ -1039,6 +1065,14 @@ onMounted(async () => {
                       @click="shareStaffHoursWhatsApp(line.staff_id)"
                     >
                       💬
+                    </button>
+                    <button
+                      type="button"
+                      class="text-[10px] px-1 py-0.5 rounded bg-sky-100 text-sky-800 hover:bg-sky-200"
+                      title="Day-wise salary PDF"
+                      @click="downloadStaffPayslipPdf(line.staff_id)"
+                    >
+                      📄
                     </button>
                   </div>
                 </td>
@@ -1215,8 +1249,12 @@ onMounted(async () => {
           <option v-for="s in periodStaff" :key="s.id" :value="s.id">{{ s.name }}</option>
         </select>
         <button class="pp-btn pp-btn-ghost" @click="printPayslip">Print payslip</button>
-        <button class="pp-btn pp-btn-primary" @click="downloadCurrentPayslipPdf">PDF</button>
-        <button class="pp-btn pp-btn-success" @click="downloadAllPayslipsPdf">All Payslips PDF</button>
+        <button class="pp-btn pp-btn-primary" @click="downloadCurrentPayslipPdf" title="Is staff ka day-wise detail PDF">
+          PDF (yeh staff)
+        </button>
+        <button class="pp-btn pp-btn-success" @click="downloadAllPayslipsPdf" title="Sab staff ek PDF me, har ek ka day-wise detail">
+          Sabka day-wise PDF
+        </button>
         <button
           v-if="payslipStaffId"
           type="button"
@@ -1227,7 +1265,7 @@ onMounted(async () => {
         </button>
       </div>
       <div v-if="!payslipLine" class="pp-card p-6 text-center text-slate-400">No salary data for this month.</div>
-      <div v-else id="payslip-print" class="pp-card p-6 max-w-md mx-auto border-2 border-slate-200">
+      <div v-else id="payslip-print" class="pp-card p-6 max-w-2xl mx-auto border-2 border-slate-200">
         <div class="text-center border-b border-slate-200 pb-3 mb-3">
           <div class="font-bold text-lg text-navy">{{ firmStore.activeFirm?.name || 'Firm' }}</div>
           <div class="text-sm text-slate-500">Payslip — {{ periodLabel(period) }}</div>
@@ -1276,6 +1314,34 @@ onMounted(async () => {
             </tr>
           </tbody>
         </table>
+
+        <div v-if="payslipDayRows.length" class="mt-5 border-t border-slate-200 pt-3">
+          <div class="text-sm font-semibold text-navy mb-2">Day-wise detail</div>
+          <table class="w-full text-[11px]">
+            <thead class="bg-slate-50 text-slate-500">
+              <tr>
+                <th class="text-left py-1 px-1">Date</th>
+                <th class="text-left py-1 px-1">Status</th>
+                <th class="text-right py-1 px-1">Duty</th>
+                <th class="text-right py-1 px-1">Off</th>
+                <th class="text-right py-1 px-1">OT</th>
+                <th class="text-right py-1 px-1">Paid</th>
+                <th class="text-right py-1 px-1">₹</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in payslipDayRows" :key="row.dayKey" class="border-t border-slate-100">
+                <td class="py-1 px-1">{{ row.dayKey }} {{ row.weekday }}</td>
+                <td class="py-1 px-1">{{ row.status }}</td>
+                <td class="py-1 px-1 text-right">{{ row.duty }}</td>
+                <td class="py-1 px-1 text-right text-rose-600">{{ row.offUnpaid || '—' }}</td>
+                <td class="py-1 px-1 text-right">{{ row.ot || '—' }}</td>
+                <td class="py-1 px-1 text-right font-semibold">{{ row.paid }}</td>
+                <td class="py-1 px-1 text-right">{{ row.dayPay ? `₹${row.dayPay.toLocaleString('en-IN')}` : '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
 
