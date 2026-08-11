@@ -174,8 +174,8 @@ function exportItemSales() {
     itemRows.value.map(r => [r.name, String(r.count), n2(r.qty), n2(r.value)]))
 }
 
-function exportGstrOffline() {
-  const res = downloadGstrOfflineExcel({
+async function exportGstrOffline() {
+  const res = await downloadGstrOfflineExcel({
     invoices: invoiceStore.list.filter((i) => i.firm_id === firmStore.activeFirmId),
     period: gstrMonth.value,
     gstin: firmStore.activeFirm?.gst || '',
@@ -188,7 +188,14 @@ function exportGstrOffline() {
   const bounds = periodMonthBounds(gstrMonth.value)
   from.value = bounds.from
   to.value = bounds.to
-  alert(`2 files downloaded (${gstrMonth.value}):\n1. ${res.b2bFile} — ${res.b2bCount} rows\n2. ${res.hsnFile} — ${res.hsnCount} rows`)
+  const c = res.counts
+  const src = res.usedOfficialTemplate ? 'official V2.2 template' : 'V2.2-compatible workbook'
+  alert(
+    `GSTR-1 Excel downloaded (${gstrMonth.value}, ${src}):\n${res.file}\n\n`
+    + `B2B: ${c.b2b} · B2CL: ${c.b2cl} · B2CS: ${c.b2cs}\n`
+    + `HSN B2B: ${c.hsnB2b} · HSN B2C: ${c.hsnB2c}\n`
+    + `Docs: ${c.docs} · CDNR: ${c.cdnr} · CDNUR: ${c.cdnur}`,
+  )
 }
 </script>
 
@@ -205,7 +212,7 @@ function exportGstrOffline() {
           <input v-model="gstrMonth" type="month" class="pp-input !w-40" />
         </div>
         <button class="pp-btn pp-btn-primary !py-2" type="button" @click="exportGstrOffline">
-          📥 GSTR-1 Excel (offline)
+          📥 GSTR-1 Excel (V2.2)
         </button>
         <div><label class="pp-label">From</label><input v-model="from" type="date" class="pp-input !w-36" /></div>
         <div><label class="pp-label">To</label><input v-model="to" type="date" class="pp-input !w-36" /></div>
@@ -225,7 +232,10 @@ function exportGstrOffline() {
     <div v-if="tab === 'b2b'" class="pp-card overflow-x-auto">
       <p class="text-xs text-slate-500 mb-3 p-3 bg-blue-50 rounded">
         B2B invoices with buyer GSTIN — GSTR-1 Table 4A.
-        <strong>GSTR-1 Excel (offline)</strong> se month-wise alag files: <code>b2b,sez,de</code> aur <code>hsn(b2b)</code> — GST portal format.
+        <strong>GSTR-1 Excel (V2.2)</strong> downloads one workbook matching
+        <code>GSTR1_Excel_Workbook_Template_V2.2</code>
+        (<code>b2b,sez,de</code>, <code>b2cs</code>, <code>b2cl</code>, <code>hsn(b2b)</code>, <code>hsn(b2c)</code>, <code>docs</code>, notes).
+        Import this file in the GST Java offline tool.
       </p>
       <table class="w-full text-sm">
         <thead><tr class="border-b"><th class="text-left p-2">Date</th><th>Invoice</th><th>Buyer</th><th>GSTIN</th><th>POS</th><th class="text-right">Taxable</th><th class="text-right">Tax</th><th class="text-right">Total</th></tr></thead>

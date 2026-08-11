@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
+  B2CL_INVOICE_THRESHOLD,
+  buildGstr1ExportPayload,
+  buildGstr1WorkbookFromPayload,
   buildGstrB2BExportRows,
+  buildGstrB2clExportRows,
+  buildGstrB2csExportRows,
   buildGstrHsnB2BExportRows,
   formatGstrInvoiceDate,
   formatPlaceOfSupply,
+  isB2clInvoice,
   periodMonthBounds,
   toGstrUqc,
 } from '@/services/gstrExport'
@@ -88,7 +94,7 @@ describe('buildGstrB2BExportRows', () => {
 })
 
 describe('buildGstrHsnB2BExportRows', () => {
-  it('aggregates HSN with CGST/SGST for intra-state', () => {
+  it('aggregates HSN with CGST/SGST for intra-state and V2.2 rate-before-taxable shape', () => {
     const inv = makeInvoice({
       id: '1',
       gst_type: 'intra',
@@ -99,6 +105,7 @@ describe('buildGstrHsnB2BExportRows', () => {
     expect(rows[0].hsn).toBe('4707')
     expect(rows[0].uqc).toBe(toGstrUqc('KG'))
     expect(rows[0].taxableValue).toBe(10000)
+    expect(rows[0].rate).toBe(5)
     expect(rows[0].cgst).toBe(250)
     expect(rows[0].sgst).toBe(250)
     expect(rows[0].igst).toBe(0)
@@ -115,5 +122,59 @@ describe('buildGstrHsnB2BExportRows', () => {
     expect(rows[0].igst).toBe(500)
     expect(rows[0].cgst).toBe(0)
     expect(rows[0].sgst).toBe(0)
+  })
+})
+
+describe('B2C sheets', () => {
+  it('aggregates small B2C into b2cs by POS + rate', () => {
+    const inv = makeInvoice({
+      id: 'c1',
+      party_snapshot: { is_consumer: true, state: '05' },
+      ship: { name: '', phone: '', addr: '', city: '', pin: '', email: '', gstin: '', state: '05' },
+      gst_type: 'intra',
+      grand_total: 5000,
+      taxBuckets: { 5: { taxable: 4762, tax: 238 } },
+    })
+    const rows = buildGstrB2csExportRows([inv])
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows[0].type).toBe('OE')
+    expect(rows[0].rate).toBe(5)
+    expect(rows[0].taxableValue).toBe(4762)
+  })
+
+  it('routes large interstate B2C to b2cl', () => {
+    const inv = makeInvoice({
+      id: 'c2',
+      party_snapshot: { is_consumer: true },
+      gst_type: 'inter',
+      grand_total: B2CL_INVOICE_THRESHOLD + 1,
+      bill_no: 'INV-L1',
+      taxBuckets: { 18: { taxable: 220000, tax: 39600 } },
+    })
+    expect(isB2clInvoice(inv)).toBe(true)
+    expect(buildGstrB2clExportRows([inv])).toHaveLength(1)
+    expect(buildGstrB2csExportRows([inv])).toHaveLength(0)
+  })
+})
+
+describe('buildGstr1WorkbookFromPayload', () => {
+  it('creates official V2.2 sheet names with headers on row 4', () => {
+    const inv = makeInvoice({
+      id: '1',
+      taxBuckets: { 5: { taxable: 1000, tax: 50 } },
+      grand_total: 1050,
+      items: [{ item_id: null, name: 'Paper', hsn: '4707', qty: 10, unit: 'KG', rate: 100, gst: 5 }],
+    })
+    const payload = buildGstr1ExportPayload([inv])
+    const wb = buildGstr1WorkbookFromPayload(payload)
+    expect(wb.SheetNames).toEqual(
+      expect.arrayContaining(['b2b,sez,de', 'b2cs', 'b2cl', 'hsn(b2b)', 'hsn(b2c)', 'docs', 'cdnr', 'cdnur']),
+    )
+    const b2b = wb.Sheets['b2b,sez,de']
+    expect(b2b.A4.v).toBe('GSTIN/UIN of Recipient')
+    expect(b2b.K4.v).toBe('Rate')
+    const hsn = wb.Sheets['hsn(b2b)']
+    expect(hsn.F4.v).toBe('Rate')
+    expect(hsn.G4.v).toBe('Taxable Value')
   })
 })
