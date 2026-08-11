@@ -840,6 +840,8 @@ export async function downloadGstrOfflineExcel(opts: {
   period: string
   gstin: string
   firmName?: string
+  /** Prefer generated V2.2 sheets; official 7MB template freezes many browsers. */
+  useOfficialTemplate?: boolean
   templateUrl?: string
 }): Promise<GstrDownloadResult> {
   const gstin = (opts.gstin || '').trim().toUpperCase()
@@ -849,10 +851,17 @@ export async function downloadGstrOfflineExcel(opts: {
   const monthDocs = filterMonthDocs(opts.invoices, from, to)
   const payload = buildGstr1ExportPayload(monthDocs)
 
-  const template = await loadGstr1TemplateWorkbook(opts.templateUrl || GSTR1_TEMPLATE_PATH)
-  const wb = template
-    ? fillGstr1TemplateWorkbook(template, payload)
-    : buildGstr1WorkbookFromPayload(payload)
+  // Default: lightweight workbook with official sheet names + V2.2 column headers.
+  // Optional: fill GST portal template (large; can hang mobile / low-RAM browsers).
+  let usedOfficialTemplate = false
+  let wb = buildGstr1WorkbookFromPayload(payload)
+  if (opts.useOfficialTemplate) {
+    const template = await loadGstr1TemplateWorkbook(opts.templateUrl || GSTR1_TEMPLATE_PATH)
+    if (template) {
+      wb = fillGstr1TemplateWorkbook(template, payload)
+      usedOfficialTemplate = true
+    }
+  }
 
   const fp = opts.period.replace('-', '')
   const safeGstin = gstin.replace(/[^A-Z0-9]/gi, '')
@@ -862,7 +871,7 @@ export async function downloadGstrOfflineExcel(opts: {
   return {
     ok: true,
     file,
-    usedOfficialTemplate: Boolean(template),
+    usedOfficialTemplate,
     counts: {
       b2b: payload.b2b.length,
       b2cl: payload.b2cl.length,

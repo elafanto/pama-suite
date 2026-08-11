@@ -189,7 +189,7 @@ async function exportGstrOffline() {
   from.value = bounds.from
   to.value = bounds.to
   const c = res.counts
-  const src = res.usedOfficialTemplate ? 'official V2.2 template' : 'V2.2-compatible workbook'
+  const src = res.usedOfficialTemplate ? 'official V2.2 template' : 'V2.2 sheet format'
   alert(
     `GSTR-1 Excel downloaded (${gstrMonth.value}, ${src}):\n${res.file}\n\n`
     + `B2B: ${c.b2b} · B2CL: ${c.b2cl} · B2CS: ${c.b2cs}\n`
