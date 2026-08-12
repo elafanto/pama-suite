@@ -147,6 +147,80 @@ export function generateCopyReelNumbers(baseReelNo: string, count: number): stri
   return nos
 }
 
+export type ReelIntakeCondition = 'fresh' | 'partial'
+
+export const REEL_CORE_DIA_MM = 76
+const MM_PER_INCH = 25.4
+
+function roundDec(n: number, places: number): number {
+  const f = 10 ** places
+  return Math.round((Number(n) || 0) * f) / f
+}
+
+export function formatDeckleDisplay(deckleMm: number, deckleInch: number): string {
+  const mm = roundDec(deckleMm, 1)
+  const inch = roundDec(deckleInch, 3)
+  if (mm <= 0 && inch <= 0) return ''
+  if (mm <= 0) return `${inch} in`
+  if (inch <= 0) return `${mm} mm`
+  return `${inch} in / ${mm} mm`
+}
+
+/** Enter mm → derive inch + display string. */
+export function deckleFromMm(mm: number): { deckle_mm: number; deckle_inch: number; deckle_size: string } {
+  const deckle_mm = roundDec(mm, 1)
+  const deckle_inch = roundDec(deckle_mm / MM_PER_INCH, 3)
+  return { deckle_mm, deckle_inch, deckle_size: formatDeckleDisplay(deckle_mm, deckle_inch) }
+}
+
+/** Enter inch → derive mm + display string. */
+export function deckleFromInch(inch: number): { deckle_mm: number; deckle_inch: number; deckle_size: string } {
+  const deckle_inch = roundDec(inch, 3)
+  const deckle_mm = roundDec(deckle_inch * MM_PER_INCH, 1)
+  return { deckle_mm, deckle_inch, deckle_size: formatDeckleDisplay(deckle_mm, deckle_inch) }
+}
+
+/** Resolve deckle from whichever unit is provided (mm preferred if both). */
+export function resolveDecklePair(input: {
+  deckle_mm?: number | null
+  deckle_inch?: number | null
+  deckle_size?: string | null
+}): { deckle_mm: number; deckle_inch: number; deckle_size: string } {
+  const mm = Number(input.deckle_mm)
+  const inch = Number(input.deckle_inch)
+  if (Number.isFinite(mm) && mm > 0) return deckleFromMm(mm)
+  if (Number.isFinite(inch) && inch > 0) return deckleFromInch(inch)
+  const raw = String(input.deckle_size || '').trim()
+  const asNum = Number(raw.replace(/[^\d.]/g, ''))
+  if (Number.isFinite(asNum) && asNum > 0) {
+    // Heuristic: values >= 100 treated as mm (typical deckle 900–1800 mm).
+    return asNum >= 100 ? deckleFromMm(asNum) : deckleFromInch(asNum)
+  }
+  return { deckle_mm: 0, deckle_inch: 0, deckle_size: raw }
+}
+
+/**
+ * Estimate remaining reel weight from outer diameter, deckle width, and GSM.
+ * weightKg = π/4 × (OD² − core²) × widthMm × GSM / 1e9
+ */
+export function estimateReelWeightKg(opts: {
+  deckleMm: number
+  diaMm: number
+  gsm: number | string
+  coreMm?: number
+}): number {
+  const widthMm = Number(opts.deckleMm) || 0
+  const od = Number(opts.diaMm) || 0
+  const core = Number(opts.coreMm) > 0 ? Number(opts.coreMm) : REEL_CORE_DIA_MM
+  const gsm = Number(opts.gsm) || 0
+  if (widthMm <= 0) throw new Error('Deckle (mm) required for dia→weight')
+  if (od <= 0) throw new Error('Reel dia required')
+  if (od <= core) throw new Error('Outer dia core se badi honi chahiye')
+  if (gsm <= 0) throw new Error('GSM required for dia→weight')
+  const weight = (Math.PI / 4) * (od * od - core * core) * widthMm * gsm / 1e9
+  return roundWeight(weight)
+}
+
 export function purchaseHasReelLines(purchase: Pick<Purchase, 'items'>): boolean {
   return (purchase.items || []).some((row) => row.is_kraft_reel)
 }
@@ -287,66 +361,102 @@ function normalizeConfirmedSpecs(specs: PurchaseReelSpec[]): PurchaseReelSpec[] 
 
 export async function createManualReel(data: {
   firm_id: string
-  reel_no: string
+  reel_no?: string
   paper_type?: PaperType
-  deckle_size: string
+  deckle_size?: string
+  deckle_mm?: number
+  deckle_inch?: number
   gsm: string
   bf: string
   color: string
-  opening_weight: number
+  opening_weight?: number
   rate?: number
   supplier_name: string
   supplier_id?: string | null
   date?: string
   copies?: number
+  intake_condition?: ReelIntakeCondition
+  lines?: Array<{ reel_no: string; opening_weight: number }>
 }) {
   const created = await createManualReels(data)
   return created[0]
 }
 
-/** Create one or more identical-config reels with auto-incremented reel numbers. */
+/** Create one or more reels — either `lines` (per reel no + opening KG) or legacy copies. */
 export async function createManualReels(data: {
   firm_id: string
-  reel_no: string
   paper_type?: PaperType
-  deckle_size: string
+  deckle_size?: string
+  deckle_mm?: number
+  deckle_inch?: number
   gsm: string
   bf: string
   color: string
-  opening_weight: number
-  rate?: number
   supplier_name: string
   supplier_id?: string | null
   date?: string
+  rate?: number
+  intake_condition?: ReelIntakeCondition
+  /** Legacy: base reel no + copies + shared opening_weight */
+  reel_no?: string
+  opening_weight?: number
   copies?: number
+  /** Preferred: explicit rows */
+  lines?: Array<{ reel_no: string; opening_weight: number }>
 }) {
-  const opening_weight = roundWeight(data.opening_weight)
-  if (opening_weight <= 0) throw new Error('Reel weight 0 se zyada hona chahiye')
-  if (!String(data.deckle_size || '').trim()) throw new Error('Deckle / size required')
   if (!String(data.gsm || '').trim()) throw new Error('GSM required')
   if (!String(data.bf || '').trim()) throw new Error('BF required')
   if (!String(data.supplier_name || '').trim()) throw new Error('Paper mill required')
 
-  const reelNos = generateCopyReelNumbers(data.reel_no, data.copies ?? 1)
-  await assertUniqueReelNosForPurchase(data.firm_id, reelNos.map((reel_no) => ({ reel_no })))
+  const deckle = resolveDecklePair({
+    deckle_mm: data.deckle_mm,
+    deckle_inch: data.deckle_inch,
+    deckle_size: data.deckle_size,
+  })
+  if (deckle.deckle_mm <= 0 && !deckle.deckle_size) throw new Error('Deckle / size required')
+
+  let lines: Array<{ reel_no: string; opening_weight: number }>
+  if (data.lines && data.lines.length) {
+    if (data.lines.length > 50) throw new Error('Ek baar me max 50 reels add kar sakte ho')
+    lines = data.lines.map((l) => ({
+      reel_no: String(l.reel_no || '').trim(),
+      opening_weight: roundWeight(l.opening_weight),
+    }))
+    for (const line of lines) {
+      if (!line.reel_no) throw new Error('Har row me reel number required')
+      if (line.opening_weight <= 0) throw new Error(`Reel ${line.reel_no}: Opening KG 0 se zyada hona chahiye`)
+    }
+  } else {
+    const opening_weight = roundWeight(data.opening_weight)
+    if (opening_weight <= 0) throw new Error('Reel weight 0 se zyada hona chahiye')
+    if (!String(data.reel_no || '').trim()) throw new Error('Custom reel number required')
+    const reelNos = generateCopyReelNumbers(String(data.reel_no).trim(), data.copies ?? 1)
+    lines = reelNos.map((reel_no) => ({ reel_no, opening_weight }))
+  }
+
+  await assertUniqueReelNosForPurchase(data.firm_id, lines.map((l) => ({ reel_no: l.reel_no })))
 
   const now = nowISO()
   const paper_type = normalizePaperType(data.paper_type)
   const color = normalizeReelColor(data.color)
   const mill = String(data.supplier_name || '').trim()
   const date = data.date || now.slice(0, 10)
+  const intake_condition: ReelIntakeCondition = data.intake_condition === 'partial' ? 'partial' : 'fresh'
   const created: ReelStock[] = []
 
   await db.transaction('rw', db.reel_stocks, db.stock_movements, async () => {
-    for (const reel_no of reelNos) {
+    for (const line of lines) {
+      const opening_weight = line.opening_weight
       const reel = plain({
         id: uid(),
         firm_id: data.firm_id,
-        reel_no,
+        reel_no: line.reel_no,
         paper_type,
         supplier_id: data.supplier_id ?? null,
         supplier_name: mill,
-        deckle_size: String(data.deckle_size || '').trim(),
+        deckle_size: deckle.deckle_size || String(data.deckle_size || '').trim(),
+        deckle_mm: deckle.deckle_mm || undefined,
+        deckle_inch: deckle.deckle_inch || undefined,
         gsm: String(data.gsm || '').trim(),
         bf: String(data.bf || '').trim(),
         color,
@@ -354,6 +464,7 @@ export async function createManualReels(data: {
         current_weight: opening_weight,
         rate: Number(data.rate) || 0,
         status: 'active' as const,
+        intake_condition,
         created_at: now,
         updated_at: now,
         is_deleted: false,
@@ -373,7 +484,7 @@ export async function createManualReels(data: {
         weight_out: 0,
         waste_qty: 0,
         waste_weight: 0,
-        notes: `Manual reel opening — ${reel_no} (${mill})`,
+        notes: `Manual reel opening — ${line.reel_no} (${mill}, ${intake_condition})`,
       })
 
       await db.reel_stocks.add(reel)

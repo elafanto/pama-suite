@@ -16,6 +16,12 @@ import {
   resolveConsumableFeed,
   resolveReelFeedWeight,
   resolveRemainingWeightUpdate,
+  deckleFromMm,
+  deckleFromInch,
+  resolveDecklePair,
+  formatDeckleDisplay,
+  estimateReelWeightKg,
+  REEL_CORE_DIA_MM,
 } from '@/services/production'
 
 describe('normalizeReelColor', () => {
@@ -260,5 +266,62 @@ describe('resolveRemainingWeightUpdate', () => {
     expect(() => resolveRemainingWeightUpdate(100, -1)).toThrow(/negative/)
     expect(() => resolveRemainingWeightUpdate(0, 0)).toThrow(/consumed/)
     expect(() => resolveRemainingWeightUpdate(100, 100)).toThrow(/barabar/)
+  })
+})
+
+describe('deckle mm ↔ inch', () => {
+  it('converts mm to inch and formats display', () => {
+    const pair = deckleFromMm(1270)
+    expect(pair.deckle_mm).toBe(1270)
+    expect(pair.deckle_inch).toBeCloseTo(50, 2)
+    expect(formatDeckleDisplay(pair.deckle_mm, pair.deckle_inch)).toMatch(/in/)
+    expect(formatDeckleDisplay(pair.deckle_mm, pair.deckle_inch)).toMatch(/mm/)
+  })
+
+  it('converts inch to mm (× 25.4)', () => {
+    const pair = deckleFromInch(50)
+    expect(pair.deckle_mm).toBeCloseTo(1270, 0)
+    expect(pair.deckle_inch).toBe(50)
+  })
+
+  it('resolveDecklePair prefers mm, then inch, then legacy size heuristic', () => {
+    expect(resolveDecklePair({ deckle_mm: 1400 }).deckle_mm).toBe(1400)
+    expect(resolveDecklePair({ deckle_inch: 55 }).deckle_mm).toBeCloseTo(1397, 0)
+    expect(resolveDecklePair({ deckle_size: '1400' }).deckle_mm).toBe(1400)
+    expect(resolveDecklePair({ deckle_size: '48' }).deckle_inch).toBe(48)
+  })
+})
+
+describe('estimateReelWeightKg (dia → weight)', () => {
+  it('uses industry core default 76 mm', () => {
+    expect(REEL_CORE_DIA_MM).toBe(76)
+  })
+
+  it('matches π/4 × (OD² − core²) × width × GSM / 1e9', () => {
+    const od = 1000
+    const core = 76
+    const width = 1400
+    const gsm = 120
+    const expected = (Math.PI / 4) * (od * od - core * core) * width * gsm / 1e9
+    const got = estimateReelWeightKg({ deckleMm: width, diaMm: od, gsm })
+    expect(got).toBeCloseTo(expected, 2)
+  })
+
+  it('allows core override', () => {
+    const withDefault = estimateReelWeightKg({ deckleMm: 1400, diaMm: 800, gsm: 100 })
+    const withCustom = estimateReelWeightKg({ deckleMm: 1400, diaMm: 800, gsm: 100, coreMm: 100 })
+    expect(withCustom).toBeLessThan(withDefault)
+  })
+
+  it('rejects invalid dia / deckle / gsm', () => {
+    expect(() => estimateReelWeightKg({ deckleMm: 0, diaMm: 500, gsm: 120 })).toThrow(/Deckle/)
+    expect(() => estimateReelWeightKg({ deckleMm: 1400, diaMm: 50, gsm: 120 })).toThrow(/core/)
+    expect(() => estimateReelWeightKg({ deckleMm: 1400, diaMm: 500, gsm: 0 })).toThrow(/GSM/)
+  })
+
+  it('feeds remaining-weight update path when dia yields lower remaining', () => {
+    const remaining = estimateReelWeightKg({ deckleMm: 1400, diaMm: 600, gsm: 120 })
+    expect(remaining).toBeGreaterThan(0)
+    expect(resolveRemainingWeightUpdate(200, remaining).remaining).toBe(remaining)
   })
 })

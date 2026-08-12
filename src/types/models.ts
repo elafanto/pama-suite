@@ -461,6 +461,10 @@ export interface ReelStock extends BaseRecord {
   purchase_id?: string
   purchase_bill_no?: string
   deckle_size: string
+  /** Deckle width in millimetres (preferred for calc). */
+  deckle_mm?: number
+  /** Deckle width in inches. */
+  deckle_inch?: number
   gsm: string
   bf: string
   color: ReelColor
@@ -468,6 +472,8 @@ export interface ReelStock extends BaseRecord {
   current_weight: number
   rate: number
   status: ReelStatus
+  /** How the reel entered stock (manual batch). */
+  intake_condition?: 'fresh' | 'partial'
 }
 
 export type ProductionJobStatus = 'open' | 'in_progress' | 'ready' | 'dispatched' | 'closed'

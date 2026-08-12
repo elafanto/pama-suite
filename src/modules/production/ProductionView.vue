@@ -5,7 +5,8 @@ import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useProductionStore } from '@/stores/production'
-import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveRemainingWeightUpdate, generateCopyReelNumbers, filterReelsForDeletion, filterReelLinkedMovements, STAGE_LABELS, STOCK_LABELS, type ConsumableStockType } from '@/services/production'
+import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveRemainingWeightUpdate, resolveDecklePair, deckleFromMm, deckleFromInch, formatDeckleDisplay, estimateReelWeightKg, REEL_CORE_DIA_MM, filterReelsForDeletion, filterReelLinkedMovements, STAGE_LABELS, STOCK_LABELS, type ConsumableStockType, type ReelIntakeCondition } from '@/services/production'
+import { useTableSort } from '@/composables/useTableSort'
 import type { PaperType, ProductionStage, ProductionStockType, ReelStock } from '@/types/models'
 
 const firmStore = useFirmStore()
@@ -75,20 +76,50 @@ const consumableFeedForm = reactive({
 
 const selectedReelIds = ref<string[]>([])
 const remainingDrafts = reactive<Record<string, number>>({})
+const remainingMode = reactive<Record<string, 'weight' | 'dia'>>({})
+const remainingDiaDrafts = reactive<Record<string, number>>({})
+
+type ManualReelLine = { reel_no: string; opening_weight: number }
 
 const manualReelForm = reactive({
   date: new Date().toISOString().slice(0, 10),
-  reel_no: '',
-  copies: 1,
   paper_type: 'KRAFT' as PaperType,
   supplier_name: '',
-  deckle_size: '',
+  deckle_mm: 0,
+  deckle_inch: 0,
   gsm: '',
   bf: '',
   color: 'NS',
-  opening_weight: 0,
+  intake_condition: 'fresh' as ReelIntakeCondition,
+  reel_count: 1,
   rate: 0,
 })
+const manualReelLines = ref<ManualReelLine[]>([{ reel_no: '', opening_weight: 0 }])
+
+function syncManualReelLines(count: number) {
+  const n = Math.min(50, Math.max(1, Math.floor(Number(count) || 1)))
+  manualReelForm.reel_count = n
+  const prev = manualReelLines.value
+  const next: ManualReelLine[] = []
+  for (let i = 0; i < n; i++) {
+    next.push(prev[i] ? { ...prev[i] } : { reel_no: '', opening_weight: 0 })
+  }
+  manualReelLines.value = next
+}
+
+watch(() => manualReelForm.reel_count, (c) => syncManualReelLines(c))
+
+function onDeckleMmInput(v: number) {
+  const pair = deckleFromMm(v)
+  manualReelForm.deckle_mm = pair.deckle_mm
+  manualReelForm.deckle_inch = pair.deckle_inch
+}
+
+function onDeckleInchInput(v: number) {
+  const pair = deckleFromInch(v)
+  manualReelForm.deckle_mm = pair.deckle_mm
+  manualReelForm.deckle_inch = pair.deckle_inch
+}
 
 const reelFilters = reactive({
   paper_type: '',
@@ -125,27 +156,25 @@ const stockTypes = Object.keys(STOCK_LABELS) as ProductionStockType[]
 const openJobs = computed(() => production.jobs.filter((j) => j.status !== 'closed' && j.status !== 'dispatched'))
 const selectedJob = computed(() => production.jobs.find((j) => j.id === stageForm.job_id) || null)
 const activeReels = computed(() => production.reels.filter((r) => r.status === 'active' && r.current_weight > 0))
-const manualReelCopyPreview = computed(() => {
-  const base = manualReelForm.reel_no.trim()
-  const copies = Math.max(1, Math.floor(Number(manualReelForm.copies) || 1))
-  if (!base || copies <= 1) return [] as string[]
-  try {
-    return generateCopyReelNumbers(base, copies)
-  } catch {
-    return [] as string[]
-  }
-})
+
 const reelFilterOptions = computed(() => {
-  const uniq = (values: string[]) => Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
+  const uniq = (values: string[]) => Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
   return {
     paper_type: uniq(production.reels.map((r) => paperTypeOf(r))),
     gsm: uniq(production.reels.map((r) => r.gsm)),
     bf: uniq(production.reels.map((r) => r.bf)),
     deckle: uniq(production.reels.map((r) => r.deckle_size)),
     color: uniq(production.reels.map((r) => normalizeReelColor(r.color))),
+    mill: uniq(production.reels.map((r) => r.supplier_name)),
   }
 })
-const filteredReels = computed(() => production.reels.filter((reel) =>
+
+const colorOptions = computed(() => {
+  const base = ['NS', 'GY']
+  return Array.from(new Set([...base, ...reelFilterOptions.value.color]))
+})
+
+const filteredReelsBase = computed(() => production.reels.filter((reel) =>
   (!reelFilters.paper_type || paperTypeOf(reel) === reelFilters.paper_type) &&
   (!reelFilters.gsm || reel.gsm === reelFilters.gsm) &&
   (!reelFilters.bf || reel.bf === reelFilters.bf) &&
@@ -153,6 +182,67 @@ const filteredReels = computed(() => production.reels.filter((reel) =>
   (!reelFilters.color || normalizeReelColor(reel.color) === reelFilters.color) &&
   (reelFilters.status === 'all' || reel.status === reelFilters.status),
 ))
+
+type ReelSortKey =
+  | 'reel_no'
+  | 'paper_type'
+  | 'mill'
+  | 'deckle'
+  | 'gsm'
+  | 'bf'
+  | 'color'
+  | 'opening'
+  | 'current'
+  | 'status'
+
+const reelSort = useTableSort<ReelSortKey>('reel_no', 'asc')
+const filteredReels = reelSort.sortedFrom(filteredReelsBase, {
+  reel_no: (r) => r.reel_no,
+  paper_type: (r) => paperTypeOf(r),
+  mill: (r) => r.supplier_name,
+  deckle: (r) => Number(r.deckle_mm) || Number(r.deckle_inch) || r.deckle_size,
+  gsm: (r) => Number(r.gsm) || r.gsm,
+  bf: (r) => Number(r.bf) || r.bf,
+  color: (r) => normalizeReelColor(r.color),
+  opening: (r) => r.opening_weight,
+  current: (r) => r.current_weight,
+  status: (r) => r.status,
+})
+
+function deckleLabel(reel: ReelStock): string {
+  if (reel.deckle_mm || reel.deckle_inch) {
+    return formatDeckleDisplay(Number(reel.deckle_mm) || 0, Number(reel.deckle_inch) || 0)
+  }
+  return reel.deckle_size || '—'
+}
+
+function remainingModeOf(reelId: string): 'weight' | 'dia' {
+  return remainingMode[reelId] || 'weight'
+}
+
+function setRemainingMode(reelId: string, mode: 'weight' | 'dia') {
+  remainingMode[reelId] = mode
+}
+
+function applyDiaToRemainingDraft(reel: ReelStock) {
+  const dia = Number(remainingDiaDrafts[reel.id]) || 0
+  if (dia <= 0) return
+  try {
+    const deckle = resolveDecklePair({
+      deckle_mm: reel.deckle_mm,
+      deckle_inch: reel.deckle_inch,
+      deckle_size: reel.deckle_size,
+    })
+    remainingDrafts[reel.id] = estimateReelWeightKg({
+      deckleMm: deckle.deckle_mm,
+      diaMm: dia,
+      gsm: reel.gsm,
+      coreMm: REEL_CORE_DIA_MM,
+    })
+  } catch (err: any) {
+    alert(err?.message || 'Dia se weight nahi nikla')
+  }
+}
 const selectableFilteredReels = computed(() =>
   filteredReels.value.filter((r) => r.status === 'active' && (Number(r.current_weight) || 0) > 0),
 )
@@ -601,6 +691,9 @@ async function resetAllReelStockAction() {
 
 async function updateReelRemainingAction(reel: ReelStock) {
   if (reel.status !== 'active') return
+  if (remainingModeOf(reel.id) === 'dia') {
+    applyDiaToRemainingDraft(reel)
+  }
   const current = Number(reel.current_weight) || 0
   const remaining = Number(remainingDrafts[reel.id])
   let used = 0
@@ -642,56 +735,62 @@ async function fullConsumeSelectedAction() {
 }
 
 async function saveManualReel() {
-  if (!manualReelForm.reel_no.trim()) return alert('Custom reel number required')
-  if (manualReelForm.opening_weight <= 0) return alert('Weight (KG) enter karo')
-  if (!manualReelForm.deckle_size.trim()) return alert('Deckle / size required')
+  if (!manualReelForm.supplier_name.trim()) return alert('Paper mill required')
   if (!manualReelForm.gsm.trim()) return alert('GSM required')
   if (!manualReelForm.bf.trim()) return alert('BF required')
-  if (!manualReelForm.supplier_name.trim()) return alert('Paper mill required')
-  const copies = Math.max(1, Math.floor(Number(manualReelForm.copies) || 1))
-  let preview: string[] = []
-  try {
-    preview = generateCopyReelNumbers(manualReelForm.reel_no.trim(), copies)
-  } catch (err: any) {
-    return alert(err?.message || 'Invalid reel numbers')
+  const deckle = resolveDecklePair({
+    deckle_mm: manualReelForm.deckle_mm,
+    deckle_inch: manualReelForm.deckle_inch,
+  })
+  if (deckle.deckle_mm <= 0) return alert('Deckle (inch ya mm) enter karo')
+
+  const lines = manualReelLines.value.map((l) => ({
+    reel_no: l.reel_no.trim(),
+    opening_weight: Number(l.opening_weight) || 0,
+  }))
+  if (!lines.length) return alert('Kam se kam 1 reel row chahiye')
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].reel_no) return alert(`Row ${i + 1}: reel number required`)
+    if (lines[i].opening_weight <= 0) return alert(`Row ${i + 1}: Opening KG enter karo`)
   }
-  if (copies > 1) {
+
+  if (lines.length > 1) {
     const ok = confirm(
-      `${copies} identical reels add karenge?\n\nReel nos: ${preview.join(', ')}\n\nSame deckle/GSM/BF/color/mill/weight.`,
+      `${lines.length} reels add karenge?\n\n`
+      + `Mill: ${manualReelForm.supplier_name}\n`
+      + `GSM ${manualReelForm.gsm} / BF ${manualReelForm.bf} / ${deckle.deckle_size}\n`
+      + `Condition: ${manualReelForm.intake_condition}\n\n`
+      + lines.map((l) => `${l.reel_no}: ${l.opening_weight} KG`).join('\n'),
     )
     if (!ok) return
   }
+
   try {
     const created = await production.addManualReel({
-      ...manualReelForm,
-      reel_no: manualReelForm.reel_no.trim(),
+      paper_type: manualReelForm.paper_type,
       supplier_name: manualReelForm.supplier_name.trim(),
-      deckle_size: manualReelForm.deckle_size.trim(),
+      deckle_mm: deckle.deckle_mm,
+      deckle_inch: deckle.deckle_inch,
+      deckle_size: deckle.deckle_size,
       gsm: manualReelForm.gsm.trim(),
       bf: manualReelForm.bf.trim(),
       color: normalizeReelColor(manualReelForm.color),
-      copies,
+      date: manualReelForm.date,
+      rate: manualReelForm.rate,
+      intake_condition: manualReelForm.intake_condition,
+      lines,
     })
     alert(created.length === 1
       ? 'Reel stock me add ho gaya.'
-      : `${created.length} reels stock me add ho gaye (${created.map((r) => r.reel_no).join(', ')}).`)
+      : `${created.length} reels stock me add ho gaye.`)
   } catch (err: any) {
     alert(err?.message || 'Reel add nahi ho payi.')
     return
   }
-  Object.assign(manualReelForm, {
-    date: new Date().toISOString().slice(0, 10),
-    reel_no: '',
-    copies: 1,
-    paper_type: 'KRAFT' as PaperType,
-    supplier_name: '',
-    deckle_size: '',
-    gsm: '',
-    bf: '',
-    color: 'NS',
-    opening_weight: 0,
-    rate: 0,
-  })
+
+  syncManualReelLines(1)
+  manualReelLines.value = [{ reel_no: '', opening_weight: 0 }]
+  manualReelForm.reel_count = 1
 }
 
 function closeJob(id: string) {
@@ -1121,16 +1220,17 @@ onMounted(async () => {
                   @change="toggleSelectAllFiltered(($event.target as HTMLInputElement).checked)"
                 />
               </th>
-              <th class="p-3 text-left">Reel No</th>
-              <th class="p-3 text-left">Type</th>
-              <th class="p-3 text-left">Mill</th>
-              <th class="p-3 text-left">Deckle</th>
-              <th class="p-3 text-left">GSM / BF</th>
-              <th class="p-3 text-left">Color</th>
-              <th class="p-3 text-right">Opening KG</th>
-              <th class="p-3 text-right">Current KG</th>
-              <th class="p-3 text-right">Remaining KG</th>
-              <th class="p-3 text-center">Status</th>
+              <th class="p-3" :class="reelSort.thClass('reel_no')" @click="reelSort.toggle('reel_no')">Reel No{{ reelSort.indicator('reel_no') }}</th>
+              <th class="p-3" :class="reelSort.thClass('paper_type')" @click="reelSort.toggle('paper_type')">Type{{ reelSort.indicator('paper_type') }}</th>
+              <th class="p-3" :class="reelSort.thClass('mill')" @click="reelSort.toggle('mill')">Mill{{ reelSort.indicator('mill') }}</th>
+              <th class="p-3" :class="reelSort.thClass('deckle')" @click="reelSort.toggle('deckle')">Deckle{{ reelSort.indicator('deckle') }}</th>
+              <th class="p-3" :class="reelSort.thClass('gsm')" @click="reelSort.toggle('gsm')">GSM{{ reelSort.indicator('gsm') }}</th>
+              <th class="p-3" :class="reelSort.thClass('bf')" @click="reelSort.toggle('bf')">BF{{ reelSort.indicator('bf') }}</th>
+              <th class="p-3" :class="reelSort.thClass('color')" @click="reelSort.toggle('color')">Color{{ reelSort.indicator('color') }}</th>
+              <th class="p-3" :class="reelSort.thClass('opening', 'right')" @click="reelSort.toggle('opening', 'desc')">Opening KG{{ reelSort.indicator('opening') }}</th>
+              <th class="p-3" :class="reelSort.thClass('current', 'right')" @click="reelSort.toggle('current', 'desc')">Current KG{{ reelSort.indicator('current') }}</th>
+              <th class="p-3 text-right">Remaining (KG / Dia)</th>
+              <th class="p-3" :class="reelSort.thClass('status', 'center')" @click="reelSort.toggle('status')">Status{{ reelSort.indicator('status') }}</th>
               <th class="p-3 text-right">Action</th>
             </tr>
           </thead>
@@ -1147,29 +1247,71 @@ onMounted(async () => {
                 />
                 <span v-else class="text-[10px] text-slate-400">—</span>
               </td>
-              <td class="p-3 font-mono">{{ reel.reel_no }}</td>
+              <td class="p-3 font-mono">
+                {{ reel.reel_no }}
+                <span
+                  v-if="reel.intake_condition === 'partial'"
+                  class="ml-1 text-[9px] px-1 rounded bg-amber-100 text-amber-800"
+                >partial</span>
+              </td>
               <td class="p-3">
                 <span class="pp-badge" :class="paperTypeOf(reel) === 'DUPLEX' ? 'bg-purple-100 text-purple-800' : 'bg-amber-100 text-amber-800'">
                   {{ paperTypeOf(reel) }}
                 </span>
               </td>
               <td class="p-3">{{ reel.supplier_name }}</td>
-              <td class="p-3">{{ reel.deckle_size }}</td>
-              <td class="p-3">{{ reel.gsm }} / {{ reel.bf }}</td>
+              <td class="p-3 text-xs">{{ deckleLabel(reel) }}</td>
+              <td class="p-3">{{ reel.gsm }}</td>
+              <td class="p-3">{{ reel.bf }}</td>
               <td class="p-3">{{ normalizeReelColor(reel.color) }}</td>
               <td class="p-3 text-right font-mono">{{ n2(reel.opening_weight) }}</td>
               <td class="p-3 text-right font-mono">{{ n2(reel.current_weight) }}</td>
               <td class="p-3 text-right">
-                <input
-                  v-if="reel.status === 'active' && reel.current_weight > 0"
-                  type="number"
-                  min="0"
-                  step="0.001"
-                  class="pp-input !w-24 !py-1 text-right font-mono text-xs"
-                  :value="remainingDrafts[reel.id]"
-                  @input="remainingDrafts[reel.id] = Number(($event.target as HTMLInputElement).value)"
-                  @keydown.enter.prevent="updateReelRemainingAction(reel)"
-                />
+                <template v-if="reel.status === 'active' && reel.current_weight > 0">
+                  <div class="inline-flex flex-col items-end gap-1 min-w-[9rem]">
+                    <div class="flex gap-2 text-[10px]">
+                      <label class="inline-flex items-center gap-0.5">
+                        <input
+                          type="radio"
+                          :checked="remainingModeOf(reel.id) === 'weight'"
+                          @change="setRemainingMode(reel.id, 'weight')"
+                        />
+                        KG
+                      </label>
+                      <label class="inline-flex items-center gap-0.5">
+                        <input
+                          type="radio"
+                          :checked="remainingModeOf(reel.id) === 'dia'"
+                          @change="setRemainingMode(reel.id, 'dia')"
+                        />
+                        Dia
+                      </label>
+                    </div>
+                    <input
+                      v-if="remainingModeOf(reel.id) === 'weight'"
+                      type="number"
+                      min="0"
+                      step="0.001"
+                      class="pp-input !w-24 !py-1 text-right font-mono text-xs"
+                      :value="remainingDrafts[reel.id]"
+                      @input="remainingDrafts[reel.id] = Number(($event.target as HTMLInputElement).value)"
+                      @keydown.enter.prevent="updateReelRemainingAction(reel)"
+                    />
+                    <div v-else class="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        class="pp-input !w-20 !py-1 text-right font-mono text-xs"
+                        placeholder="mm"
+                        :value="remainingDiaDrafts[reel.id] || ''"
+                        @input="remainingDiaDrafts[reel.id] = Number(($event.target as HTMLInputElement).value)"
+                        @change="applyDiaToRemainingDraft(reel)"
+                      />
+                      <span class="text-[10px] text-slate-500 font-mono">→{{ n2(remainingDrafts[reel.id] ?? 0) }}kg</span>
+                    </div>
+                  </div>
+                </template>
                 <span v-else class="font-mono text-slate-400">—</span>
               </td>
               <td class="p-3 text-center"><span class="pp-badge" :class="reel.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-slate-100'">{{ reel.status }}</span></td>
@@ -1179,7 +1321,7 @@ onMounted(async () => {
                     v-if="reel.status === 'active' && reel.current_weight > 0"
                     type="button"
                     class="pp-btn pp-btn-primary !py-1 !px-2 text-xs"
-                    title="Remaining KG save (partial / full if 0)"
+                    title="Remaining save (weight or dia→weight)"
                     @click="updateReelRemainingAction(reel)"
                   >
                     Update
@@ -1196,12 +1338,12 @@ onMounted(async () => {
               </td>
             </tr>
             <tr v-if="filteredReels.length === 0">
-              <td colspan="12" class="p-8 text-center text-slate-500">
+              <td colspan="13" class="p-8 text-center text-slate-500">
                 <p class="font-semibold text-navy mb-1">Abhi list khali hai</p>
                 <p class="text-sm">
-                  Right side <b>Add Reel (stock)</b> se pehli reel add karo
-                  (Reel No, Mill, Deckle, GSM, BF, Weight).
-                  Uske baad yahan <b>Select</b> checkbox + Full consume / Remaining KG Update aayega.
+                  Right side <b>Add Reel (stock)</b> se mill/GSM/BF/deckle set karke
+                  Reel No + Opening KG rows add karo.
+                  Baad me Remaining <b>KG</b> ya <b>Dia</b> se update kar sakte ho.
                 </p>
               </td>
             </tr>
@@ -1258,21 +1400,44 @@ onMounted(async () => {
 
         <div class="pp-card p-6 space-y-3">
           <h2 class="font-semibold border-b pb-2">Add Reel (stock)</h2>
-          <p class="text-xs text-slate-500">Ek-ek reel full config ke saath add karein. Same config ke liye Copies use karein. Ye consumption nahi — stock intake hai.</p>
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="pp-label">Custom Reel No *</label>
-              <input v-model="manualReelForm.reel_no" class="pp-input font-mono" placeholder="e.g. R-101" />
-            </div>
-            <div>
-              <label class="pp-label">Copies / No. of reels</label>
-              <input v-model.number="manualReelForm.copies" type="number" min="1" max="50" step="1" class="pp-input text-right" />
-            </div>
-          </div>
-          <p v-if="manualReelCopyPreview.length" class="text-xs text-slate-600 bg-slate-50 border rounded p-2 font-mono">
-            Will create: {{ manualReelCopyPreview.join(', ') }}
+          <p class="text-xs text-slate-500">
+            Upar mill/GSM/BF/color/deckle set karo → No. of reels → neeche har reel ka number + Opening KG.
           </p>
+
           <div class="grid grid-cols-2 gap-3">
+            <div class="col-span-2">
+              <label class="pp-label">Paper Mill *</label>
+              <input
+                v-model="manualReelForm.supplier_name"
+                class="pp-input"
+                list="reel-mill-options"
+                placeholder="Search / type mill"
+              />
+              <datalist id="reel-mill-options">
+                <option v-for="m in reelFilterOptions.mill" :key="m" :value="m" />
+              </datalist>
+            </div>
+            <div>
+              <label class="pp-label">BF *</label>
+              <input v-model="manualReelForm.bf" class="pp-input" list="reel-bf-options" placeholder="e.g. 18" />
+              <datalist id="reel-bf-options">
+                <option v-for="v in reelFilterOptions.bf" :key="v" :value="v" />
+              </datalist>
+            </div>
+            <div>
+              <label class="pp-label">GSM *</label>
+              <input v-model="manualReelForm.gsm" class="pp-input" list="reel-gsm-options" placeholder="e.g. 120" />
+              <datalist id="reel-gsm-options">
+                <option v-for="v in reelFilterOptions.gsm" :key="v" :value="v" />
+              </datalist>
+            </div>
+            <div>
+              <label class="pp-label">Color *</label>
+              <input v-model="manualReelForm.color" class="pp-input" list="reel-color-options" />
+              <datalist id="reel-color-options">
+                <option v-for="c in colorOptions" :key="c" :value="c">{{ reelColorLabel(c) }}</option>
+              </datalist>
+            </div>
             <div>
               <label class="pp-label">Paper Type *</label>
               <select v-model="manualReelForm.paper_type" class="pp-input">
@@ -1280,49 +1445,88 @@ onMounted(async () => {
               </select>
             </div>
             <div>
-              <label class="pp-label">Weight KG * (each)</label>
-              <input v-model.number="manualReelForm.opening_weight" type="number" min="0" step="0.001" class="pp-input text-right" />
-            </div>
-          </div>
-          <div>
-            <label class="pp-label">Paper Mill *</label>
-            <input v-model="manualReelForm.supplier_name" class="pp-input" placeholder="Mill / supplier name" />
-          </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="pp-label">Deckle / Size *</label>
-              <input v-model="manualReelForm.deckle_size" class="pp-input" placeholder="e.g. 1400" />
+              <label class="pp-label">Deckle (inch)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.001"
+                class="pp-input text-right"
+                :value="manualReelForm.deckle_inch || ''"
+                @input="onDeckleInchInput(Number(($event.target as HTMLInputElement).value))"
+              />
             </div>
             <div>
-              <label class="pp-label">Color *</label>
-              <select v-model="manualReelForm.color" class="pp-input">
-                <option value="NS">{{ reelColorLabel('NS') }}</option>
-                <option value="GY">{{ reelColorLabel('GY') }}</option>
-              </select>
+              <label class="pp-label">Deckle (mm) *</label>
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                class="pp-input text-right"
+                :value="manualReelForm.deckle_mm || ''"
+                @input="onDeckleMmInput(Number(($event.target as HTMLInputElement).value))"
+              />
             </div>
-          </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="pp-label">GSM *</label>
-              <input v-model="manualReelForm.gsm" class="pp-input" placeholder="e.g. 120" />
+            <div class="col-span-2">
+              <label class="pp-label">Condition *</label>
+              <div class="flex gap-4 text-sm pt-1">
+                <label class="inline-flex items-center gap-1.5">
+                  <input v-model="manualReelForm.intake_condition" type="radio" value="fresh" />
+                  Fresh
+                </label>
+                <label class="inline-flex items-center gap-1.5">
+                  <input v-model="manualReelForm.intake_condition" type="radio" value="partial" />
+                  Partial used
+                </label>
+              </div>
             </div>
             <div>
-              <label class="pp-label">BF *</label>
-              <input v-model="manualReelForm.bf" class="pp-input" placeholder="e.g. 18" />
-            </div>
-          </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="pp-label">Rate (optional)</label>
-              <input v-model.number="manualReelForm.rate" type="number" min="0" step="0.01" class="pp-input text-right" />
+              <label class="pp-label">No. of reels *</label>
+              <input
+                v-model.number="manualReelForm.reel_count"
+                type="number"
+                min="1"
+                max="50"
+                step="1"
+                class="pp-input text-right"
+              />
             </div>
             <div>
               <label class="pp-label">Date</label>
               <input v-model="manualReelForm.date" type="date" class="pp-input" />
             </div>
           </div>
+
+          <div class="border rounded-lg overflow-hidden">
+            <table class="w-full text-sm">
+              <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+                <tr>
+                  <th class="p-2 text-left w-10">#</th>
+                  <th class="p-2 text-left">Reel No *</th>
+                  <th class="p-2 text-right">Opening KG *</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, idx) in manualReelLines" :key="idx" class="border-t">
+                  <td class="p-2 text-slate-400">{{ idx + 1 }}</td>
+                  <td class="p-2">
+                    <input v-model="row.reel_no" class="pp-input font-mono !py-1" placeholder="e.g. R-101" />
+                  </td>
+                  <td class="p-2">
+                    <input
+                      v-model.number="row.opening_weight"
+                      type="number"
+                      min="0"
+                      step="0.001"
+                      class="pp-input text-right !py-1"
+                    />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
           <button type="button" class="pp-btn pp-btn-primary w-full" @click="saveManualReel">
-            {{ manualReelForm.copies > 1 ? `Add ${Math.max(1, Math.floor(Number(manualReelForm.copies) || 1))} Reels` : 'Add to Stock' }}
+            Add {{ manualReelForm.reel_count }} reel{{ manualReelForm.reel_count > 1 ? 's' : '' }} to stock
           </button>
         </div>
 

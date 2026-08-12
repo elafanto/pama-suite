@@ -111,18 +111,22 @@ export const useProductionStore = defineStore('production', () => {
   }
 
   async function addManualReel(data: {
-    reel_no: string
+    reel_no?: string
     paper_type?: PaperType
-    deckle_size: string
+    deckle_size?: string
+    deckle_mm?: number
+    deckle_inch?: number
     gsm: string
     bf: string
     color: string
-    opening_weight: number
+    opening_weight?: number
     rate?: number
     supplier_name: string
     supplier_id?: string | null
     date?: string
     copies?: number
+    intake_condition?: 'fresh' | 'partial'
+    lines?: Array<{ reel_no: string; opening_weight: number }>
   }) {
     const firm = useFirmStore()
     const created = await createManualReels({ ...data, firm_id: firm.activeFirmId })
