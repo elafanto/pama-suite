@@ -28,6 +28,7 @@ import {
   type PurchaseLineKind,
 } from '@/services/purchaseLineKind'
 import { proposePurchaseReelSpecs, purchaseHasReelLines, proposePurchaseConsumableSpecs, purchaseHasConsumableLines, STOCK_LABELS, type PurchaseReelSpec, type PurchaseConsumableSpec } from '@/services/production'
+import { useTableSort } from '@/composables/useTableSort'
 import type { CapitalCategory, ExpenseCategory, GstType, PaperType, PayStatus, Purchase, PurchaseItemLine } from '@/types/models'
 
 // Stores
@@ -1087,7 +1088,7 @@ function payVendorRtgs(pur: Purchase) {
 }
 
 // History Filtered list
-const filteredPurchases = computed(() => {
+const filteredPurchasesBase = computed(() => {
   return purchaseStore.list.filter(p => {
     // Search filter
     const matchesSearch = p.supplier_name.toLowerCase().includes(search.value.toLowerCase()) || 
@@ -1098,6 +1099,19 @@ const filteredPurchases = computed(() => {
     
     return matchesSearch && matchesStatus
   })
+})
+
+type PurchaseSortKey = 'date' | 'bill_no' | 'supplier_name' | 'sub' | 'total_tax' | 'grand_total' | 'amt_paid' | 'pay_status'
+const purchaseSort = useTableSort<PurchaseSortKey>('date', 'desc')
+const filteredPurchases = purchaseSort.sortedFrom(filteredPurchasesBase, {
+  date: (r) => r.date,
+  bill_no: (r) => r.bill_no,
+  supplier_name: (r) => r.supplier_name,
+  sub: (r) => r.sub,
+  total_tax: (r) => r.total_tax,
+  grand_total: (r) => r.grand_total,
+  amt_paid: (r) => r.amt_paid || 0,
+  pay_status: (r) => r.pay_status,
 })
 
 const selectedPurchases = computed(() =>
@@ -1969,14 +1983,14 @@ onMounted(async () => {
           <thead>
             <tr class="border-b text-slate-500 font-semibold text-xs uppercase bg-slate-50">
               <th v-if="correctionMode" class="py-3 px-4 w-12 text-center">Move</th>
-              <th class="py-3 px-4">Date</th>
-              <th class="py-3 px-4">Bill No</th>
-              <th class="py-3 px-4">Supplier Name</th>
-              <th class="py-3 px-4 text-right">Taxable</th>
-              <th class="py-3 px-4 text-right">GST</th>
-              <th class="py-3 px-4 text-right">Total</th>
-              <th class="py-3 px-4 text-right">Paid</th>
-              <th class="py-3 px-4 text-center">Status</th>
+              <th class="py-3 px-4" :class="purchaseSort.thClass('date')" @click="purchaseSort.toggle('date', 'desc')">Date{{ purchaseSort.indicator('date') }}</th>
+              <th class="py-3 px-4" :class="purchaseSort.thClass('bill_no')" @click="purchaseSort.toggle('bill_no')">Bill No{{ purchaseSort.indicator('bill_no') }}</th>
+              <th class="py-3 px-4" :class="purchaseSort.thClass('supplier_name')" @click="purchaseSort.toggle('supplier_name')">Supplier Name{{ purchaseSort.indicator('supplier_name') }}</th>
+              <th class="py-3 px-4" :class="purchaseSort.thClass('sub', 'right')" @click="purchaseSort.toggle('sub', 'desc')">Taxable{{ purchaseSort.indicator('sub') }}</th>
+              <th class="py-3 px-4" :class="purchaseSort.thClass('total_tax', 'right')" @click="purchaseSort.toggle('total_tax', 'desc')">GST{{ purchaseSort.indicator('total_tax') }}</th>
+              <th class="py-3 px-4" :class="purchaseSort.thClass('grand_total', 'right')" @click="purchaseSort.toggle('grand_total', 'desc')">Total{{ purchaseSort.indicator('grand_total') }}</th>
+              <th class="py-3 px-4" :class="purchaseSort.thClass('amt_paid', 'right')" @click="purchaseSort.toggle('amt_paid', 'desc')">Paid{{ purchaseSort.indicator('amt_paid') }}</th>
+              <th class="py-3 px-4" :class="purchaseSort.thClass('pay_status', 'center')" @click="purchaseSort.toggle('pay_status')">Status{{ purchaseSort.indicator('pay_status') }}</th>
               <th class="py-3 px-4 text-center">Actions</th>
             </tr>
           </thead>

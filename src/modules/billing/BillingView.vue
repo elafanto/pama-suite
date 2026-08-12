@@ -17,6 +17,7 @@ import { peekBillNo } from '@/services/invoiceNumber'
 import { listItemStockMovements } from '@/services/inventoryLedger'
 import { computeStock, findStockRowForLine } from '@/services/stock'
 import { periodLabelYm, salesMonthLockMessage, salesPeriodFromDate } from '@/services/salesMonthLock'
+import { useTableSort } from '@/composables/useTableSort'
 import PpModal from '@/components/PpModal.vue'
 import type { Invoice, InvoiceItemLine, PayStatus, GstType, ItemStockMovement } from '@/types/models'
 import { uid } from '@/data/util'
@@ -960,7 +961,7 @@ const historyCustomers = computed(() => {
   return [...names].sort()
 })
 
-const filteredInvoices = computed(() => {
+const filteredInvoicesBase = computed(() => {
   const q = search.value.toLowerCase().trim()
   return invoiceStore.list.filter(inv => {
     if (inv.is_deleted) return false
@@ -971,6 +972,18 @@ const filteredInvoices = computed(() => {
     if (!q) return true
     return inv.bill_no.toLowerCase().includes(q) || inv.party_name.toLowerCase().includes(q)
   })
+})
+
+type SalesSortKey = 'date' | 'bill_no' | 'party_name' | 'grand_total' | 'amt_paid' | 'outstanding' | 'pay_status'
+const salesSort = useTableSort<SalesSortKey>('date', 'desc')
+const filteredInvoices = salesSort.sortedFrom(filteredInvoicesBase, {
+  date: (r) => r.date,
+  bill_no: (r) => r.bill_no,
+  party_name: (r) => r.party_name,
+  grand_total: (r) => r.grand_total,
+  amt_paid: (r) => r.amt_paid || 0,
+  outstanding: (r) => r.grand_total - (r.amt_paid || 0),
+  pay_status: (r) => r.pay_status,
 })
 
 // Outstanding payment recorder modal actions
@@ -1598,13 +1611,13 @@ onMounted(async () => {
           <thead class="bg-slate-50 text-slate-500 text-xs uppercase font-semibold">
             <tr>
               <th class="w-8 px-2 py-2.5"></th>
-              <th class="text-left px-4 py-2.5">Date</th>
-              <th class="text-left px-4 py-2.5">Bill No</th>
-              <th class="text-left px-4 py-2.5">Client Name</th>
-              <th class="text-right px-4 py-2.5">Total</th>
-              <th class="text-right px-4 py-2.5">Paid</th>
-              <th class="text-right px-4 py-2.5">Outstanding</th>
-              <th class="text-center px-4 py-2.5">Status</th>
+              <th class="px-4 py-2.5" :class="salesSort.thClass('date')" @click="salesSort.toggle('date', 'desc')">Date{{ salesSort.indicator('date') }}</th>
+              <th class="px-4 py-2.5" :class="salesSort.thClass('bill_no')" @click="salesSort.toggle('bill_no')">Bill No{{ salesSort.indicator('bill_no') }}</th>
+              <th class="px-4 py-2.5" :class="salesSort.thClass('party_name')" @click="salesSort.toggle('party_name')">Client Name{{ salesSort.indicator('party_name') }}</th>
+              <th class="px-4 py-2.5" :class="salesSort.thClass('grand_total', 'right')" @click="salesSort.toggle('grand_total', 'desc')">Total{{ salesSort.indicator('grand_total') }}</th>
+              <th class="px-4 py-2.5" :class="salesSort.thClass('amt_paid', 'right')" @click="salesSort.toggle('amt_paid', 'desc')">Paid{{ salesSort.indicator('amt_paid') }}</th>
+              <th class="px-4 py-2.5" :class="salesSort.thClass('outstanding', 'right')" @click="salesSort.toggle('outstanding', 'desc')">Outstanding{{ salesSort.indicator('outstanding') }}</th>
+              <th class="px-4 py-2.5" :class="salesSort.thClass('pay_status', 'center')" @click="salesSort.toggle('pay_status')">Status{{ salesSort.indicator('pay_status') }}</th>
               <th class="text-right px-4 py-2.5">Actions</th>
             </tr>
           </thead>

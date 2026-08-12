@@ -38,6 +38,7 @@ import {
 } from '@/services/payrollCalc'
 import { buildStaffLedger } from '@/services/staffLedger'
 import { downloadPayrollPayslipsPdf, payrollPayTypeLabel, buildPayslipDayRows } from '@/services/payrollPdf'
+import { useTableSort } from '@/composables/useTableSort'
 import { pickBestPayrollRun } from '@/services/payrollRuns'
 import {
   generateStaffHoursMessage,
@@ -580,6 +581,47 @@ const sortedCycleAdvances = computed(() =>
   sortStaffAdvances(cycleAdvances.value, advanceSortMode.value),
 )
 
+type SalarySortKey =
+  | 'staff_name'
+  | 'duty'
+  | 'off_unpaid'
+  | 'ot'
+  | 'paid_h'
+  | 'earned'
+  | 'adv'
+  | 'other'
+  | 'net'
+  | 'paid'
+  | 'balance'
+const salarySort = useTableSort<SalarySortKey>('staff_name', 'asc')
+const sortedSalaryLines = salarySort.sortedFrom(
+  () => currentRun.value?.lines ?? [],
+  {
+    staff_name: (r) => r.staff_name,
+    duty: (r) => r.total_duty_hours ?? 0,
+    off_unpaid: (r) => r.total_off_unpaid_hours ?? 0,
+    ot: (r) => r.total_ot_hours ?? 0,
+    paid_h: (r) => r.total_paid_hours ?? 0,
+    earned: (r) => r.earned,
+    adv: (r) => r.advance_deduction,
+    other: (r) => r.other_deduction,
+    net: (r) => r.net_pay,
+    paid: (r) => r.paid_amount || 0,
+    balance: (r) => lineBalanceDue(r),
+  },
+)
+
+type AdvanceColSortKey = 'date' | 'staff_name' | 'amount' | 'mode' | 'status' | 'narration'
+const advanceColSort = useTableSort<AdvanceColSortKey>('date', 'desc')
+const sortedAdvancesTable = advanceColSort.sortedFrom(sortedCycleAdvances, {
+  date: (r) => r.date,
+  staff_name: (r) => r.staff_name,
+  amount: (r) => r.amount,
+  mode: (r) => r.mode,
+  status: (r) => (r.applied_period ? `adjusted:${r.applied_period}` : 'pending'),
+  narration: (r) => r.narration || '',
+})
+
 const adjustedAdvancesForMonth = computed(() =>
   store.advances.filter((a) => a.applied_period === resetAdvanceMonth.value),
 )
@@ -1039,22 +1081,22 @@ onMounted(async () => {
           <table class="w-full text-sm min-w-[520px]">
             <thead class="bg-slate-50 text-xs text-slate-500 uppercase">
               <tr>
-                <th class="text-left px-3 py-2">Staff</th>
-                <th class="text-right px-2 py-2">Duty h</th>
-                <th class="text-right px-2 py-2">Off unpaid</th>
-                <th class="text-right px-2 py-2">OT h</th>
-                <th class="text-right px-2 py-2">Paid h</th>
-                <th class="text-right px-2 py-2">Earned</th>
-                <th class="text-right px-2 py-2">Adv</th>
-                <th class="text-right px-2 py-2">Other</th>
-                <th class="text-right px-2 py-2">Net</th>
-                <th class="text-right px-2 py-2">Paid</th>
-                <th class="text-right px-2 py-2">Balance</th>
+                <th class="px-3 py-2" :class="salarySort.thClass('staff_name')" @click="salarySort.toggle('staff_name')">Staff{{ salarySort.indicator('staff_name') }}</th>
+                <th class="px-2 py-2" :class="salarySort.thClass('duty', 'right')" @click="salarySort.toggle('duty', 'desc')">Duty h{{ salarySort.indicator('duty') }}</th>
+                <th class="px-2 py-2" :class="salarySort.thClass('off_unpaid', 'right')" @click="salarySort.toggle('off_unpaid', 'desc')">Off unpaid{{ salarySort.indicator('off_unpaid') }}</th>
+                <th class="px-2 py-2" :class="salarySort.thClass('ot', 'right')" @click="salarySort.toggle('ot', 'desc')">OT h{{ salarySort.indicator('ot') }}</th>
+                <th class="px-2 py-2" :class="salarySort.thClass('paid_h', 'right')" @click="salarySort.toggle('paid_h', 'desc')">Paid h{{ salarySort.indicator('paid_h') }}</th>
+                <th class="px-2 py-2" :class="salarySort.thClass('earned', 'right')" @click="salarySort.toggle('earned', 'desc')">Earned{{ salarySort.indicator('earned') }}</th>
+                <th class="px-2 py-2" :class="salarySort.thClass('adv', 'right')" @click="salarySort.toggle('adv', 'desc')">Adv{{ salarySort.indicator('adv') }}</th>
+                <th class="px-2 py-2" :class="salarySort.thClass('other', 'right')" @click="salarySort.toggle('other', 'desc')">Other{{ salarySort.indicator('other') }}</th>
+                <th class="px-2 py-2" :class="salarySort.thClass('net', 'right')" @click="salarySort.toggle('net', 'desc')">Net{{ salarySort.indicator('net') }}</th>
+                <th class="px-2 py-2" :class="salarySort.thClass('paid', 'right')" @click="salarySort.toggle('paid', 'desc')">Paid{{ salarySort.indicator('paid') }}</th>
+                <th class="px-2 py-2" :class="salarySort.thClass('balance', 'right')" @click="salarySort.toggle('balance', 'desc')">Balance{{ salarySort.indicator('balance') }}</th>
                 <th class="text-right px-3 py-2">Pay</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="line in currentRun.lines" :key="line.staff_id" class="border-t border-slate-100">
+              <tr v-for="line in sortedSalaryLines" :key="line.staff_id" class="border-t border-slate-100">
                 <td class="px-3 py-2 font-semibold">
                   <div class="flex items-center gap-1">
                     <span>{{ line.staff_name }}</span>
@@ -1179,23 +1221,41 @@ onMounted(async () => {
         <button class="pp-btn pp-btn-primary" @click="openAdvance">+ Record advance</button>
         <p class="text-xs text-slate-500">Calculate par {{ advanceFrom }} se {{ advanceTo }} tak ke advances {{ periodLabel(period) }} salary me adjust honge.</p>
       </div>
-      <div v-if="sortedCycleAdvances.length === 0" class="pp-card p-6 text-center text-slate-400">Is range me koi advance nahi.</div>
-      <div v-for="a in sortedCycleAdvances" :key="a.id" class="pp-card p-3 flex justify-between gap-2 flex-wrap text-sm">
-        <div>
-          <span class="font-semibold text-navy">{{ a.staff_name }}</span>
-          <span class="text-slate-500 ml-2">{{ a.date }}</span>
-          <span v-if="a.applied_period" class="ml-2 text-xs font-medium text-emerald-700">{{ advanceAdjustedInLabel(a.applied_period) }}</span>
-          <div class="text-xs text-slate-400">{{ a.mode }} · {{ a.narration || '—' }}</div>
-        </div>
-        <div class="text-right flex flex-col items-end gap-1">
-          <div class="font-bold">₹{{ a.amount.toLocaleString('en-IN') }}</div>
-          <span v-if="!a.applied_period" class="text-xs text-amber-600">Pending adjust</span>
-          <span v-else class="text-xs text-slate-400">Edit/delete band — pehle reset karein</span>
-          <div v-if="!a.applied_period" class="flex gap-1">
-            <button type="button" class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs" @click="openEditAdvance(a)">Edit</button>
-            <button type="button" class="pp-btn pp-btn-danger !py-1 !px-2 text-xs" @click="deleteAdvance(a.id)">Delete</button>
-          </div>
-        </div>
+      <div v-if="sortedAdvancesTable.length === 0" class="pp-card p-6 text-center text-slate-400">Is range me koi advance nahi.</div>
+      <div v-else class="pp-card overflow-x-auto">
+        <table class="w-full text-sm min-w-[640px]">
+          <thead class="bg-slate-50 text-xs text-slate-500 uppercase">
+            <tr>
+              <th class="px-3 py-2" :class="advanceColSort.thClass('date')" @click="advanceColSort.toggle('date', 'desc')">Date{{ advanceColSort.indicator('date') }}</th>
+              <th class="px-3 py-2" :class="advanceColSort.thClass('staff_name')" @click="advanceColSort.toggle('staff_name')">Staff{{ advanceColSort.indicator('staff_name') }}</th>
+              <th class="px-3 py-2" :class="advanceColSort.thClass('amount', 'right')" @click="advanceColSort.toggle('amount', 'desc')">Amount{{ advanceColSort.indicator('amount') }}</th>
+              <th class="px-3 py-2" :class="advanceColSort.thClass('mode')" @click="advanceColSort.toggle('mode')">Mode{{ advanceColSort.indicator('mode') }}</th>
+              <th class="px-3 py-2" :class="advanceColSort.thClass('status')" @click="advanceColSort.toggle('status')">Status{{ advanceColSort.indicator('status') }}</th>
+              <th class="px-3 py-2" :class="advanceColSort.thClass('narration')" @click="advanceColSort.toggle('narration')">Narration{{ advanceColSort.indicator('narration') }}</th>
+              <th class="text-right px-3 py-2">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="a in sortedAdvancesTable" :key="a.id" class="border-t border-slate-100">
+              <td class="px-3 py-2 text-xs text-slate-500">{{ a.date }}</td>
+              <td class="px-3 py-2 font-semibold text-navy">{{ a.staff_name }}</td>
+              <td class="px-3 py-2 text-right font-bold">₹{{ a.amount.toLocaleString('en-IN') }}</td>
+              <td class="px-3 py-2 text-xs">{{ a.mode }}</td>
+              <td class="px-3 py-2 text-xs">
+                <span v-if="a.applied_period" class="font-medium text-emerald-700">{{ advanceAdjustedInLabel(a.applied_period) }}</span>
+                <span v-else class="text-amber-600">Pending adjust</span>
+              </td>
+              <td class="px-3 py-2 text-xs text-slate-500">{{ a.narration || '—' }}</td>
+              <td class="px-3 py-2 text-right whitespace-nowrap">
+                <template v-if="!a.applied_period">
+                  <button type="button" class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs" @click="openEditAdvance(a)">Edit</button>
+                  <button type="button" class="pp-btn pp-btn-danger !py-1 !px-2 text-xs" @click="deleteAdvance(a.id)">Delete</button>
+                </template>
+                <span v-else class="text-[10px] text-slate-400">Edit/delete band</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </section>
 
