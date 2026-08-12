@@ -11,6 +11,12 @@ import {
 } from '@/services/firmSignature'
 import { syncSignatureToCloudIfReady } from '@/services/firmSignatureCloud'
 import type { Firm, Invoice } from '@/types/models'
+import {
+  isSalesMonthLocked,
+  normalizeLockedSalesMonths,
+  salesPeriodFromDate,
+  withLockedSalesMonth,
+} from '@/services/salesMonthLock'
 
 export type FirmLinkedCounts = { parties: number; invoices: number; purchases: number }
 
@@ -170,8 +176,40 @@ export const useFirmStore = defineStore('firm', () => {
     }
   }
 
+  function isSalesLocked(dateOrPeriod: string | undefined | null, firmId = activeFirmId.value): boolean {
+    const firm = firms.value.find((f) => f.id === firmId) || activeFirm.value
+    return isSalesMonthLocked(firm, dateOrPeriod)
+  }
+
+  async function lockSalesMonth(period: string, firmId = activeFirmId.value): Promise<{ ok: true; period: string } | { ok: false; error: string }> {
+    const p = salesPeriodFromDate(period)
+    if (!p) return { ok: false, error: 'Invalid month' }
+    if (!firmId) return { ok: false, error: 'Active firm required' }
+    const firm = await db.firms.get(firmId)
+    if (!firm) return { ok: false, error: 'Firm not found' }
+    const months = withLockedSalesMonth(firm, p, true)
+    await update(firmId, { locked_sales_months: months })
+    return { ok: true, period: p }
+  }
+
+  async function unlockSalesMonth(period: string, firmId = activeFirmId.value): Promise<{ ok: true; period: string } | { ok: false; error: string }> {
+    const p = salesPeriodFromDate(period)
+    if (!p) return { ok: false, error: 'Invalid month' }
+    if (!firmId) return { ok: false, error: 'Active firm required' }
+    const firm = await db.firms.get(firmId)
+    if (!firm) return { ok: false, error: 'Firm not found' }
+    const months = withLockedSalesMonth(firm, p, false)
+    await update(firmId, { locked_sales_months: months })
+    return { ok: true, period: p }
+  }
+
+  const lockedSalesMonths = computed(() =>
+    normalizeLockedSalesMonths(activeFirm.value?.locked_sales_months),
+  )
+
   return {
     firms, activeFirmId, activeFirm, load, setActive, add, update, remove, restore,
     linkedCounts, deletedFirms, syncBillSequence,
+    isSalesLocked, lockSalesMonth, unlockSalesMonth, lockedSalesMonths,
   }
 })

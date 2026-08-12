@@ -236,6 +236,7 @@ async function exportGstrOffline() {
         <code>GSTR1_Excel_Workbook_Template_V2.2</code>
         (<code>b2b,sez,de</code>, <code>b2cs</code>, <code>b2cl</code>, <code>hsn(b2b)</code>, <code>hsn(b2c)</code>, <code>docs</code>, notes).
         Import this file in the GST Java offline tool.
+        File karne ke baad <strong>Billing → Sales History</strong> se us month ko <strong>Lock</strong> kar do taaki bills edit na ho.
       </p>
       <table class="w-full text-sm">
         <thead><tr class="border-b"><th class="text-left p-2">Date</th><th>Invoice</th><th>Buyer</th><th>GSTIN</th><th>POS</th><th class="text-right">Taxable</th><th class="text-right">Tax</th><th class="text-right">Total</th></tr></thead>

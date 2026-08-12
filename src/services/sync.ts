@@ -232,6 +232,7 @@ async function upsertCloudRow(
       logo: rec.logo, signature: rec.signature, decl: rec.decl, terms: rec.terms,
       prefix: rec.prefix || 'INV',
       next_bill_no: Math.max(Number(rec.next_bill_no) || 1, Number(remoteFirm?.next_bill_no) || 1),
+      locked_sales_months: Array.isArray(rec.locked_sales_months) ? rec.locked_sales_months : [],
     })
   } else if (localName === 'parties') {
     Object.assign(row, {
@@ -255,7 +256,7 @@ async function upsertCloudRow(
   let { error } = await sb.from(remoteName).upsert(row)
   if (error && /column .* does not exist|Could not find .* column/i.test(error.message || '')) {
     // Older Supabase schemas keep syncing core data until the latest migration is applied.
-    for (const k of ['signature', 'track_stock', 'opening_stock', 'reorder_level', 'purchase_rate']) {
+    for (const k of ['signature', 'track_stock', 'opening_stock', 'reorder_level', 'purchase_rate', 'locked_sales_months']) {
       delete row[k]
     }
     ;({ error } = await sb.from(remoteName).upsert(row))
@@ -462,6 +463,7 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
         terms: r.terms || '',
         prefix: r.prefix || 'INV',
         next_bill_no: r.next_bill_no || 1,
+        locked_sales_months: Array.isArray(r.locked_sales_months) ? r.locked_sales_months : [],
         created_at: r.created_at,
         updated_at: r.updated_at,
         is_deleted: r.is_deleted,
@@ -478,6 +480,9 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
         await db.firms.put({
           ...firm,
           next_bill_no: nextBillNo,
+          locked_sales_months: Array.isArray(r.locked_sales_months)
+            ? r.locked_sales_months
+            : (local.locked_sales_months || []),
           _dirty: nextBillNo > (firm.next_bill_no || 1),
         })
         pulled++

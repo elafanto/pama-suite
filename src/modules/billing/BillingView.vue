@@ -16,6 +16,7 @@ import { resolveLivePartyDetails, resolveLiveShipDetails, type PartyLookup } fro
 import { peekBillNo } from '@/services/invoiceNumber'
 import { listItemStockMovements } from '@/services/inventoryLedger'
 import { computeStock, findStockRowForLine } from '@/services/stock'
+import { periodLabelYm, salesMonthLockMessage, salesPeriodFromDate } from '@/services/salesMonthLock'
 import PpModal from '@/components/PpModal.vue'
 import type { Invoice, InvoiceItemLine, PayStatus, GstType, ItemStockMovement } from '@/types/models'
 import { uid } from '@/data/util'
@@ -53,6 +54,11 @@ function defaultEwayDates() {
 // State
 const activeTab = ref<'new' | 'history' | 'templates' | 'eway'>('new')
 const search = ref('')
+const lockMonth = ref(new Date().toISOString().slice(0, 7))
+
+const formMonthLocked = computed(() => firmStore.isSalesLocked(form.date))
+const lockMonthLocked = computed(() => firmStore.isSalesLocked(lockMonth.value))
+const lockedMonthsList = computed(() => firmStore.lockedSalesMonths)
 const statusFilter = ref<'all' | PayStatus>('all')
 const histFrom = ref('')
 const histTo = ref('')
@@ -602,12 +608,43 @@ function toggleHistorySelect(id: string) {
 
 async function bulkDeleteHistory() {
   if (!selectedHistoryIds.value.length) return alert('Select bills to delete')
-  if (!confirm(`Delete ${selectedHistoryIds.value.length} selected bill(s)?`)) return
-  for (const id of [...selectedHistoryIds.value]) {
-    await invoiceStore.remove(id)
+  const locked = selectedHistoryIds.value
+    .map((id) => invoiceStore.list.find((b) => b.id === id))
+    .filter((b): b is Invoice => !!b && firmStore.isSalesLocked(b.date))
+  if (locked.length) {
+    return alert(
+      `Locked sales month me ${locked.length} bill(s) hain — pehle month unlock karo.\n`
+      + locked.slice(0, 5).map((b) => `${b.bill_no} (${salesPeriodFromDate(b.date)})`).join('\n'),
+    )
   }
-  selectedHistoryIds.value = []
-  alert('Selected bills deleted.')
+  if (!confirm(`Delete ${selectedHistoryIds.value.length} selected bill(s)?`)) return
+  try {
+    for (const id of [...selectedHistoryIds.value]) {
+      await invoiceStore.remove(id)
+    }
+    selectedHistoryIds.value = []
+    alert('Selected bills deleted.')
+  } catch (err: any) {
+    alert(err?.message || String(err))
+  }
+}
+
+async function lockSelectedSalesMonth() {
+  const p = salesPeriodFromDate(lockMonth.value)
+  if (!p) return alert('Month select karo')
+  if (!confirm(`Lock sales bills for ${periodLabelYm(p)}?\n\nIs month ke bills create/edit/delete nahi ho payenge (payment allowed).`)) return
+  const res = await firmStore.lockSalesMonth(p)
+  if (!res.ok) return alert(res.error)
+  alert(`${periodLabelYm(p)} locked.`)
+}
+
+async function unlockSelectedSalesMonth() {
+  const p = salesPeriodFromDate(lockMonth.value)
+  if (!p) return alert('Month select karo')
+  if (!confirm(`Unlock ${periodLabelYm(p)}?\n\nPhir se bills edit/delete ho sakte hain.`)) return
+  const res = await firmStore.unlockSalesMonth(p)
+  if (!res.ok) return alert(res.error)
+  alert(`${periodLabelYm(p)} unlocked.`)
 }
 
 function downloadPDF(inv?: Invoice) {
@@ -700,6 +737,9 @@ async function saveInvoice() {
   if (savingInvoice.value) return
   if (!firmStore.activeFirmId) return alert('Please set up an active firm first.')
   if (!form.party_name.trim()) return alert('Customer name is required.')
+  if (firmStore.isSalesLocked(form.date)) {
+    return alert(salesMonthLockMessage(salesPeriodFromDate(form.date)))
+  }
   
   const validItems = form.items.filter(row => row.name.trim() && row.qty > 0 && row.rate > 0)
   if (validItems.length === 0) return alert('At least one item with valid quantity and rate is required.')
@@ -812,6 +852,10 @@ async function saveInvoice() {
 
 // Edit existing invoice
 function editInvoice(inv: Invoice) {
+  if (firmStore.isSalesLocked(inv.date)) {
+    alert(salesMonthLockMessage(salesPeriodFromDate(inv.date)))
+    return
+  }
   editingId.value = inv.id
   Object.assign(form, {
     doc_type: inv.doc_type,
@@ -897,9 +941,16 @@ function copyInvoice(inv: Invoice) {
 
 // Soft delete invoice
 async function deleteInvoice(inv: Invoice) {
+  if (firmStore.isSalesLocked(inv.date)) {
+    return alert(salesMonthLockMessage(salesPeriodFromDate(inv.date)))
+  }
   if (confirm(`Are you sure you want to delete invoice ${inv.bill_no}?`)) {
-    await invoiceStore.remove(inv.id)
-    alert('Invoice deleted successfully.')
+    try {
+      await invoiceStore.remove(inv.id)
+      alert('Invoice deleted successfully.')
+    } catch (err: any) {
+      alert(err?.message || String(err))
+    }
   }
 }
 
@@ -1451,11 +1502,20 @@ onMounted(async () => {
           </div>
 
           <div class="flex gap-2 pt-2">
-            <button @click="saveInvoice" class="pp-btn pp-btn-primary flex-1" :disabled="savingInvoice">
-              {{ savingInvoice ? 'Saving…' : saveButtonLabel }}
+            <button
+              @click="saveInvoice"
+              class="pp-btn pp-btn-primary flex-1"
+              :disabled="savingInvoice || formMonthLocked"
+              :title="formMonthLocked ? salesMonthLockMessage(salesPeriodFromDate(form.date)) : ''"
+            >
+              {{ savingInvoice ? 'Saving…' : (formMonthLocked ? '🔒 Month locked' : saveButtonLabel) }}
             </button>
             <button @click="saveAsTemplate" class="pp-btn pp-btn-ghost" title="Save as template">💾</button>
           </div>
+          <p v-if="formMonthLocked" class="text-[11px] text-rose-700 bg-rose-50 border border-rose-100 rounded px-2 py-1.5">
+            {{ salesMonthLockMessage(salesPeriodFromDate(form.date)) }}
+            Sales History se unlock kar sakte ho.
+          </p>
           <p v-if="!editingId" class="text-[10px] text-slate-500 leading-relaxed">
             Save par invoice number auto + PDF download (3 copies).
           </p>
@@ -1466,6 +1526,36 @@ onMounted(async () => {
 
     <!-- TAB 2: SALES HISTORY -->
     <div v-if="activeTab === 'history'" class="space-y-4">
+      <div class="pp-card p-3 flex flex-wrap gap-3 items-end bg-amber-50/60 border-amber-100">
+        <div>
+          <label class="pp-label">Sales month lock (GSTR-1)</label>
+          <input v-model="lockMonth" type="month" class="pp-input !w-40" />
+        </div>
+        <button
+          type="button"
+          class="pp-btn pp-btn-primary !text-xs"
+          :disabled="lockMonthLocked"
+          @click="lockSelectedSalesMonth"
+        >
+          🔒 Lock month
+        </button>
+        <button
+          type="button"
+          class="pp-btn pp-btn-ghost !text-xs border-amber-300"
+          :disabled="!lockMonthLocked"
+          @click="unlockSelectedSalesMonth"
+        >
+          🔓 Unlock month
+        </button>
+        <p class="text-[11px] text-amber-900 w-full sm:w-auto sm:flex-1 leading-relaxed">
+          GSTR-1 file ke baad month lock karo — us month ke sale bills edit/delete nahi honge.
+          Payment record phir bhi chalega. Purchases par asar nahi.
+          <span v-if="lockedMonthsList.length" class="block mt-1 font-semibold">
+            Locked: {{ lockedMonthsList.map(periodLabelYm).join(', ') }}
+          </span>
+        </p>
+      </div>
+
       <div class="flex gap-3 flex-wrap items-end">
         <input v-model="search" class="pp-input max-w-xs" placeholder="Search Bill No / Client..." />
         <input v-model="histFrom" type="date" class="pp-input !w-36" title="From date" />
@@ -1528,7 +1618,14 @@ onMounted(async () => {
               <td class="px-2 py-2.5 text-center">
                 <input type="checkbox" :checked="selectedHistoryIds.includes(inv.id)" @change="toggleHistorySelect(inv.id)" />
               </td>
-              <td class="px-4 py-2.5 text-slate-500">{{ inv.date }}</td>
+              <td class="px-4 py-2.5 text-slate-500">
+                {{ inv.date }}
+                <span
+                  v-if="firmStore.isSalesLocked(inv.date)"
+                  class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-semibold"
+                  title="Sales month locked"
+                >🔒</span>
+              </td>
               <td class="px-4 py-2.5 font-bold text-navy">{{ inv.bill_no }}</td>
               <td class="px-4 py-2.5">{{ inv.party_name }}</td>
               <td class="px-4 py-2.5 text-right font-semibold text-slate-700">₹{{ inv.grand_total.toLocaleString('en-IN') }}</td>
@@ -1551,9 +1648,19 @@ onMounted(async () => {
                   class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs"
                   title="Download E-Way JSON"
                 >🚚</button>
-                <button @click="editInvoice(inv)" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="Edit Bill">✏️</button>
+                <button
+                  @click="editInvoice(inv)"
+                  class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs"
+                  :disabled="firmStore.isSalesLocked(inv.date)"
+                  :title="firmStore.isSalesLocked(inv.date) ? 'Month locked' : 'Edit Bill'"
+                >✏️</button>
                 <button @click="copyInvoice(inv)" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="Copy Draft">📋</button>
-                <button @click="deleteInvoice(inv)" class="pp-btn pp-btn-danger !px-2 !py-1 text-xs" title="Delete Bill">🗑️</button>
+                <button
+                  @click="deleteInvoice(inv)"
+                  class="pp-btn pp-btn-danger !px-2 !py-1 text-xs"
+                  :disabled="firmStore.isSalesLocked(inv.date)"
+                  :title="firmStore.isSalesLocked(inv.date) ? 'Month locked' : 'Delete Bill'"
+                >🗑️</button>
               </td>
             </tr>
           </tbody>

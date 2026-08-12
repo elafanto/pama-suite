@@ -8,12 +8,22 @@ import { useAccountingStore } from './accounting'
 import { logActivity } from '@/services/activityLog'
 import { recordInvoiceMovements } from '@/services/inventoryLedger'
 import { allocateBillNo } from '@/services/invoiceNumber'
+import { isSalesMonthLocked, salesMonthLockMessage, salesPeriodFromDate } from '@/services/salesMonthLock'
 import type { Invoice } from '@/types/models'
 
 const repo = createRepo<Invoice>(db.invoices)
 const plain = <X>(o: X): X => JSON.parse(JSON.stringify(o))
 let addQueue = Promise.resolve()
 const money = (n: number) => Math.round((Number(n) || 0) * 100) / 100
+
+async function assertSalesMonthWritable(firmId: string, ...dates: Array<string | undefined | null>) {
+  const firm = await db.firms.get(firmId)
+  for (const d of dates) {
+    if (isSalesMonthLocked(firm, d)) {
+      throw new Error(salesMonthLockMessage(salesPeriodFromDate(d) || String(d || '')))
+    }
+  }
+}
 
 async function syncReceiptVoucher(invoice: Invoice) {
   const accounting = useAccountingStore()
@@ -46,11 +56,15 @@ export const useInvoiceStore = defineStore('invoices', () => {
     const accounting = useAccountingStore()
 
     if (!firmId) throw new Error('Active firm required')
+    await assertSalesMonthWritable(firmId, data.date)
 
     let rec!: Invoice
     await db.transaction('rw', db.firms, db.invoices, async () => {
       const firm = await db.firms.get(firmId)
       if (!firm) throw new Error('Active firm required')
+      if (isSalesMonthLocked(firm, data.date)) {
+        throw new Error(salesMonthLockMessage(salesPeriodFromDate(data.date)))
+      }
       const invoices = await db.invoices.where('firm_id').equals(firmId).filter((b) => !b.is_deleted).toArray()
       const payload = { ...data }
 
@@ -99,6 +113,9 @@ export const useInvoiceStore = defineStore('invoices', () => {
   }
 
   async function update(id: string, patch: Partial<Invoice>) {
+    const existing = await repo.get(id)
+    if (!existing) return
+    await assertSalesMonthWritable(existing.firm_id, existing.date, patch.date)
     const rec = await repo.update(id, patch)
     if (rec) {
       const accounting = useAccountingStore()
@@ -112,6 +129,7 @@ export const useInvoiceStore = defineStore('invoices', () => {
 
   async function remove(id: string) {
     const existing = await repo.get(id)
+    if (existing) await assertSalesMonthWritable(existing.firm_id, existing.date)
     await repo.remove(id)
     const accounting = useAccountingStore()
     await accounting.reverseLedgerByRef(id)
@@ -124,6 +142,8 @@ export const useInvoiceStore = defineStore('invoices', () => {
   }
 
   async function restore(id: string) {
+    const existing = await repo.get(id)
+    if (existing) await assertSalesMonthWritable(existing.firm_id, existing.date)
     const rec = await repo.restore(id)
     if (rec) {
       const accounting = useAccountingStore()

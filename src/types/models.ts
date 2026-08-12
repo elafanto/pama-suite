@@ -70,6 +70,8 @@ export interface Firm {
   signature?: string
   prefix?: string
   next_bill_no?: number
+  /** YYYY-MM months whose sales invoices are locked (after GSTR-1 filing). */
+  locked_sales_months?: string[]
   decl?: string
   terms?: string
   created_at: string
