@@ -59,6 +59,8 @@ const ACTION_COLOR: Record<string, string> = {
   create: 'bg-emerald-100 text-emerald-700',
   update: 'bg-blue-100 text-blue-700',
   delete: 'bg-red-100 text-red-700',
+  cancel: 'bg-slate-200 text-slate-800',
+  uncancel: 'bg-amber-100 text-amber-800',
   restore: 'bg-amber-100 text-amber-700',
 }
 
@@ -132,7 +134,7 @@ const b2cRows = computed(() => gstrB2C(filtered.value))
 const hsnRows = computed(() => gstrHsnSummary(filtered.value))
 const itemRows = computed(() => itemSalesReport(filtered.value))
 const receivableDocs = computed(() => invoiceStore.list.filter((i) => {
-  if (i.firm_id !== firmStore.activeFirmId || i.is_deleted) return false
+  if (i.firm_id !== firmStore.activeFirmId || i.is_deleted || i.cancelled_at) return false
   if (from.value && i.date < from.value) return false
   if (to.value && i.date > to.value) return false
   return true
@@ -176,7 +178,7 @@ function exportItemSales() {
 
 async function exportGstrOffline() {
   const res = await downloadGstrOfflineExcel({
-    invoices: invoiceStore.list.filter((i) => i.firm_id === firmStore.activeFirmId),
+    firmId: firmStore.activeFirmId,
     period: gstrMonth.value,
     gstin: firmStore.activeFirm?.gst || '',
     firmName: firmStore.activeFirm?.name,
@@ -190,11 +192,16 @@ async function exportGstrOffline() {
   to.value = bounds.to
   const c = res.counts
   const src = res.usedOfficialTemplate ? 'official V2.2 template' : 'V2.2 sheet format'
+  const docsLines = res.docsSummary.length
+    ? res.docsSummary.map((d) => `  ${d.nature}: ${d.srFrom}→${d.srTo} total ${d.totalNumber}, cancelled ${d.cancelled}`).join('\n')
+    : '  (none)'
   alert(
     `GSTR-1 Excel downloaded (${gstrMonth.value}, ${src}):\n${res.file}\n\n`
     + `B2B: ${c.b2b} · B2CL: ${c.b2cl} · B2CS: ${c.b2cs}\n`
     + `HSN B2B: ${c.hsnB2b} · HSN B2C: ${c.hsnB2c}\n`
-    + `Docs: ${c.docs} · CDNR: ${c.cdnr} · CDNUR: ${c.cdnur}`,
+    + `Docs Table 13: ${c.docsTotal} issued, ${c.docsCancelled} cancelled\n${docsLines}\n`
+    + `CDNR: ${c.cdnr} · CDNUR: ${c.cdnur}\n\n`
+    + `Note: same-month deleted bills stay out of B2B/B2C/HSN; they only count in Table 13 Cancelled.`,
   )
 }
 </script>
@@ -235,6 +242,7 @@ async function exportGstrOffline() {
         <strong>GSTR-1 Excel (V2.2)</strong> downloads one workbook matching
         <code>GSTR1_Excel_Workbook_Template_V2.2</code>
         (<code>b2b,sez,de</code>, <code>b2cs</code>, <code>b2cl</code>, <code>hsn(b2b)</code>, <code>hsn(b2c)</code>, <code>docs</code>, notes).
+        Same-month deleted bills count only in Table 13 Cancelled, not in B2B/B2C/HSN.
         Import this file in the GST Java offline tool.
         File karne ke baad <strong>Billing → Sales History</strong> se us month ko <strong>Lock</strong> kar do taaki bills edit na ho.
       </p>

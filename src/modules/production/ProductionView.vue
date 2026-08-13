@@ -5,7 +5,8 @@ import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useProductionStore } from '@/stores/production'
-import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveRemainingWeightUpdate, resolveDecklePair, deckleFromMm, deckleFromInch, formatDeckleDisplay, estimateReelWeightKg, REEL_CORE_DIA_MM, filterReelsForDeletion, filterReelLinkedMovements, STAGE_LABELS, STOCK_LABELS, type ConsumableStockType, type ReelIntakeCondition } from '@/services/production'
+import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveRemainingWeightUpdate, resolveDecklePair, deckleFromMm, deckleFromInch, formatDeckleDisplay, estimateReelWeightKg, REEL_CORE_DIA_MM, filterReelsForDeletion, filterReelLinkedMovements, STAGE_LABELS, STOCK_LABELS, type ConsumableStockType, type ReelIntakeCondition, type ReelInventoryBreakdownRow } from '@/services/production'
+import { downloadReelAbstractStockPdf, downloadReelLowStockPdf, downloadReelWiseStockPdf } from '@/services/reelStockPdf'
 import { useTableSort } from '@/composables/useTableSort'
 import type { PaperType, ProductionStage, ProductionStockType, ReelStock } from '@/types/models'
 
@@ -298,7 +299,89 @@ const recentReelMoves = computed(() => {
     .slice(0, 12)
 })
 const reelInventory = computed(() => reelInventorySummary(production.reels, production.movements))
-const reelBalanceReportRows = computed(() => reelInventory.value.breakdown)
+const reelBalanceReportRowsBase = computed(() => reelInventory.value.breakdown)
+
+type BreakdownSortKey =
+  | 'paper_type'
+  | 'gsm'
+  | 'bf'
+  | 'deckle'
+  | 'color'
+  | 'reels'
+  | 'active'
+  | 'opening'
+  | 'available'
+  | 'consumed'
+  | 'status'
+
+const breakdownSort = useTableSort<BreakdownSortKey>('paper_type', 'asc')
+const STATUS_SORT_ORDER = { zero: 0, low: 1, ok: 2 } as const
+const reelBalanceReportRows = breakdownSort.sortedFrom(reelBalanceReportRowsBase, {
+  paper_type: (r) => r.paper_type,
+  gsm: (r) => Number(r.gsm) || r.gsm,
+  bf: (r) => Number(r.bf) || r.bf,
+  deckle: (r) => r.deckle,
+  color: (r) => r.color,
+  reels: (r) => r.reels,
+  active: (r) => r.activeReels,
+  opening: (r) => r.openingWeight,
+  available: (r) => r.currentWeight,
+  consumed: (r) => r.consumedWeight,
+  status: (r) => STATUS_SORT_ORDER[r.stockStatus] ?? 9,
+})
+
+function reelPdfFilterNote(): string {
+  const bits: string[] = []
+  if (reelFilters.paper_type) bits.push(`Type ${reelFilters.paper_type}`)
+  if (reelFilters.gsm) bits.push(`GSM ${reelFilters.gsm}`)
+  if (reelFilters.bf) bits.push(`BF ${reelFilters.bf}`)
+  if (reelFilters.deckle) bits.push(`Deckle ${reelFilters.deckle}`)
+  if (reelFilters.color) bits.push(`Color ${reelFilters.color}`)
+  if (reelFilters.status && reelFilters.status !== 'all') bits.push(`Status ${reelFilters.status}`)
+  return bits.length ? bits.join(', ') : 'All filters'
+}
+
+function downloadReelWisePdf() {
+  const res = downloadReelWiseStockPdf({
+    reels: filteredReels.value,
+    firmName: firmStore.activeFirm?.name,
+    filterNote: reelPdfFilterNote(),
+  })
+  alert(`PDF saved: ${res.file}\n${res.rows} reel row(s).`)
+}
+
+function downloadAbstractPdf(rows?: ReelInventoryBreakdownRow[]) {
+  const breakdown = rows || reelBalanceReportRows.value
+  const inv = reelInventory.value
+  const res = downloadReelAbstractStockPdf({
+    breakdown,
+    firmName: firmStore.activeFirm?.name,
+    totals: {
+      totalReels: inv.totalReels,
+      availableKg: inv.currentWeight,
+      consumedKg: inv.consumedWeight,
+      lowStockReels: inv.lowStockReels,
+      zeroStockReels: inv.zeroStockReels,
+    },
+  })
+  alert(`PDF saved: ${res.file}\n${res.rows} config row(s).`)
+}
+
+function downloadLowStockPdf() {
+  const inv = reelInventory.value
+  const res = downloadReelLowStockPdf({
+    breakdown: reelBalanceReportRows.value,
+    firmName: firmStore.activeFirm?.name,
+    totals: {
+      totalReels: inv.totalReels,
+      availableKg: inv.currentWeight,
+      consumedKg: inv.consumedWeight,
+      lowStockReels: inv.lowStockReels,
+      zeroStockReels: inv.zeroStockReels,
+    },
+  })
+  alert(`PDF saved: ${res.file}\n${res.rows} low/zero config row(s).`)
+}
 
 const BREAKDOWN_STATUS_META = {
   zero: { label: 'Zero stock', cls: 'bg-red-100 text-red-700' },
@@ -1062,20 +1145,26 @@ onMounted(async () => {
         </div>
 
         <div class="pp-card p-4 overflow-x-auto">
-          <h3 class="font-semibold text-sm mb-3 border-b pb-2">Breakdown by GSM / BF / Deckle / Color</h3>
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-3 border-b pb-2">
+            <h3 class="font-semibold text-sm">Breakdown by GSM / BF / Deckle / Color</h3>
+            <div class="flex flex-wrap gap-2">
+              <button type="button" class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs" @click="downloadAbstractPdf()">PDF Abstract</button>
+              <button type="button" class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs" @click="downloadLowStockPdf()">PDF Low/Zero</button>
+            </div>
+          </div>
           <table class="w-full text-sm min-w-[980px]">
             <thead class="text-xs uppercase text-slate-500 bg-slate-50">
               <tr>
-                <th class="p-2 text-left">Type</th>
-                <th class="p-2 text-left">GSM</th>
-                <th class="p-2 text-left">BF</th>
-                <th class="p-2 text-left">Deckle</th>
-                <th class="p-2 text-left">Color</th>
-                <th class="p-2 text-right">Reels</th>
-                <th class="p-2 text-right">Active</th>
-                <th class="p-2 text-right">Available KG</th>
-                <th class="p-2 text-right">Consumed KG</th>
-                <th class="p-2 text-center">Status</th>
+                <th class="p-2" :class="breakdownSort.thClass('paper_type')" @click="breakdownSort.toggle('paper_type')">Type{{ breakdownSort.indicator('paper_type') }}</th>
+                <th class="p-2" :class="breakdownSort.thClass('gsm')" @click="breakdownSort.toggle('gsm')">GSM{{ breakdownSort.indicator('gsm') }}</th>
+                <th class="p-2" :class="breakdownSort.thClass('bf')" @click="breakdownSort.toggle('bf')">BF{{ breakdownSort.indicator('bf') }}</th>
+                <th class="p-2" :class="breakdownSort.thClass('deckle')" @click="breakdownSort.toggle('deckle')">Deckle{{ breakdownSort.indicator('deckle') }}</th>
+                <th class="p-2" :class="breakdownSort.thClass('color')" @click="breakdownSort.toggle('color')">Color{{ breakdownSort.indicator('color') }}</th>
+                <th class="p-2" :class="breakdownSort.thClass('reels', 'right')" @click="breakdownSort.toggle('reels', 'desc')">Reels{{ breakdownSort.indicator('reels') }}</th>
+                <th class="p-2" :class="breakdownSort.thClass('active', 'right')" @click="breakdownSort.toggle('active', 'desc')">Active{{ breakdownSort.indicator('active') }}</th>
+                <th class="p-2" :class="breakdownSort.thClass('available', 'right')" @click="breakdownSort.toggle('available', 'desc')">Available KG{{ breakdownSort.indicator('available') }}</th>
+                <th class="p-2" :class="breakdownSort.thClass('consumed', 'right')" @click="breakdownSort.toggle('consumed', 'desc')">Consumed KG{{ breakdownSort.indicator('consumed') }}</th>
+                <th class="p-2" :class="breakdownSort.thClass('status', 'center')" @click="breakdownSort.toggle('status')">Status{{ breakdownSort.indicator('status') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y">
@@ -1122,6 +1211,14 @@ onMounted(async () => {
             </p>
           </div>
           <div class="flex flex-wrap gap-2">
+            <button
+              type="button"
+              class="pp-btn pp-btn-ghost !py-1.5 !px-3 text-xs"
+              title="PDF of filtered reel list (reel number wise)"
+              @click="downloadReelWisePdf"
+            >
+              PDF Reel-wise
+            </button>
             <button
               type="button"
               class="pp-btn pp-btn-primary !py-1.5 !px-3 text-xs"
@@ -1752,7 +1849,14 @@ onMounted(async () => {
       </div>
 
       <div class="pp-card p-6">
-        <h2 class="font-semibold border-b pb-2 mb-4">Reel Balance by Type / GSM / BF / Deckle / Color</h2>
+        <div class="flex flex-wrap items-end justify-between gap-3 border-b pb-2 mb-4">
+          <h2 class="font-semibold">Reel Balance by Type / GSM / BF / Deckle / Color</h2>
+          <div class="flex flex-wrap gap-2">
+            <button type="button" class="pp-btn pp-btn-ghost !py-1.5 !px-3 text-xs" @click="downloadReelWisePdf">PDF Reel-wise</button>
+            <button type="button" class="pp-btn pp-btn-primary !py-1.5 !px-3 text-xs" @click="downloadAbstractPdf()">PDF Abstract</button>
+            <button type="button" class="pp-btn pp-btn-ghost !py-1.5 !px-3 text-xs" @click="downloadLowStockPdf()">PDF Low/Zero</button>
+          </div>
+        </div>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           <div class="pp-card p-3 text-sm">
             <div class="text-slate-500">Total reels</div>
@@ -1775,17 +1879,17 @@ onMounted(async () => {
           <table class="w-full text-sm min-w-[1020px]">
             <thead class="text-xs uppercase text-slate-500 bg-slate-50">
               <tr>
-                <th class="p-3 text-left">Type</th>
-                <th class="p-3 text-left">GSM</th>
-                <th class="p-3 text-left">BF</th>
-                <th class="p-3 text-left">Deckle</th>
-                <th class="p-3 text-left">Color</th>
-                <th class="p-3 text-right">Reels</th>
-                <th class="p-3 text-right">Active</th>
-                <th class="p-3 text-right">Opening KG</th>
-                <th class="p-3 text-right">Available KG</th>
-                <th class="p-3 text-right">Consumed KG</th>
-                <th class="p-3 text-center">Status</th>
+                <th class="p-3" :class="breakdownSort.thClass('paper_type')" @click="breakdownSort.toggle('paper_type')">Type{{ breakdownSort.indicator('paper_type') }}</th>
+                <th class="p-3" :class="breakdownSort.thClass('gsm')" @click="breakdownSort.toggle('gsm')">GSM{{ breakdownSort.indicator('gsm') }}</th>
+                <th class="p-3" :class="breakdownSort.thClass('bf')" @click="breakdownSort.toggle('bf')">BF{{ breakdownSort.indicator('bf') }}</th>
+                <th class="p-3" :class="breakdownSort.thClass('deckle')" @click="breakdownSort.toggle('deckle')">Deckle{{ breakdownSort.indicator('deckle') }}</th>
+                <th class="p-3" :class="breakdownSort.thClass('color')" @click="breakdownSort.toggle('color')">Color{{ breakdownSort.indicator('color') }}</th>
+                <th class="p-3" :class="breakdownSort.thClass('reels', 'right')" @click="breakdownSort.toggle('reels', 'desc')">Reels{{ breakdownSort.indicator('reels') }}</th>
+                <th class="p-3" :class="breakdownSort.thClass('active', 'right')" @click="breakdownSort.toggle('active', 'desc')">Active{{ breakdownSort.indicator('active') }}</th>
+                <th class="p-3" :class="breakdownSort.thClass('opening', 'right')" @click="breakdownSort.toggle('opening', 'desc')">Opening KG{{ breakdownSort.indicator('opening') }}</th>
+                <th class="p-3" :class="breakdownSort.thClass('available', 'right')" @click="breakdownSort.toggle('available', 'desc')">Available KG{{ breakdownSort.indicator('available') }}</th>
+                <th class="p-3" :class="breakdownSort.thClass('consumed', 'right')" @click="breakdownSort.toggle('consumed', 'desc')">Consumed KG{{ breakdownSort.indicator('consumed') }}</th>
+                <th class="p-3" :class="breakdownSort.thClass('status', 'center')" @click="breakdownSort.toggle('status')">Status{{ breakdownSort.indicator('status') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y">

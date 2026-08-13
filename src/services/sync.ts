@@ -273,8 +273,10 @@ async function repairLocalInvoiceNumberState(): Promise<number> {
   let repaired = 0
   const firms = await db.firms.filter((f) => !f.is_deleted).toArray()
   for (const firm of firms) {
-    let invoices = await db.invoices.where('firm_id').equals(firm.id).filter((b) => !b.is_deleted).toArray()
-    const groups = findDuplicateBillNoGroups(invoices)
+    // Include soft-deleted so cancelled bill numbers are never reassigned.
+    let invoices = await db.invoices.where('firm_id').equals(firm.id).toArray()
+    const active = invoices.filter((b) => !b.is_deleted)
+    const groups = findDuplicateBillNoGroups(active)
     for (const group of groups) {
       const ordered = [...group].sort((a, b) =>
         (a.created_at || a.updated_at || '').localeCompare(b.created_at || b.updated_at || ''),
@@ -287,7 +289,7 @@ async function repairLocalInvoiceNumberState(): Promise<number> {
         repaired++
       }
     }
-    const freshInvoices = await db.invoices.where('firm_id').equals(firm.id).filter((b) => !b.is_deleted).toArray()
+    const freshInvoices = await db.invoices.where('firm_id').equals(firm.id).toArray()
     const resolved = resolveNextSequence(firm, freshInvoices)
     if ((firm.next_bill_no || 1) < resolved) {
       await db.firms.put({ ...firm, next_bill_no: resolved, updated_at: nowISO(), _dirty: true })

@@ -138,6 +138,8 @@ export interface Invoice extends BaseRecord {
   amt_paid: number
   pay_status: PayStatus
   notes: string
+  /** Set when bill is Cancelled (visible in history; GSTR Table 13 cancelled). */
+  cancelled_at?: string | null
   editReason?: string
   deletedAt?: string
   deleteReason?: string

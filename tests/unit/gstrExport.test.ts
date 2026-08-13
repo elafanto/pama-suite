@@ -6,6 +6,7 @@ import {
   buildGstrB2BExportRows,
   buildGstrB2clExportRows,
   buildGstrB2csExportRows,
+  buildGstrDocsExportRows,
   buildGstrHsnB2BExportRows,
   formatGstrInvoiceDate,
   formatPlaceOfSupply,
@@ -176,5 +177,122 @@ describe('buildGstr1WorkbookFromPayload', () => {
     const hsn = wb.Sheets['hsn(b2b)']
     expect(hsn.F4.v).toBe('Rate')
     expect(hsn.G4.v).toBe('Taxable Value')
+  })
+})
+
+describe('buildGstrDocsExportRows / Table 13 cancelled', () => {
+  it('counts soft-deleted invoices as Cancelled and keeps them out of B2B', () => {
+    const active = makeInvoice({
+      id: 'a',
+      bill_no: 'INV-0001',
+      taxBuckets: { 5: { taxable: 1000, tax: 50 } },
+      grand_total: 1050,
+    })
+    const cancelled = makeInvoice({
+      id: 'c',
+      bill_no: 'INV-0002',
+      is_deleted: true,
+      taxBuckets: { 5: { taxable: 500, tax: 25 } },
+      grand_total: 525,
+    })
+    const later = makeInvoice({
+      id: 'b',
+      bill_no: 'INV-0003',
+      taxBuckets: { 5: { taxable: 800, tax: 40 } },
+      grand_total: 840,
+    })
+    const docs = buildGstrDocsExportRows([active, cancelled, later])
+    expect(docs).toHaveLength(1)
+    expect(docs[0]).toMatchObject({
+      nature: 'Invoices for outward supply',
+      srFrom: 'INV-0001',
+      srTo: 'INV-0003',
+      totalNumber: 3,
+      cancelled: 1,
+    })
+    const payload = buildGstr1ExportPayload([active, cancelled, later])
+    expect(payload.b2b.every((r) => r.invoiceNumber !== 'INV-0002')).toBe(true)
+    expect(payload.b2b.map((r) => r.invoiceNumber).sort()).toEqual(['INV-0001', 'INV-0003'])
+    expect(payload.docs[0].cancelled).toBe(1)
+  })
+
+  it('counts cancelled_at (visible cancel) in Table 13 and excludes from B2B', () => {
+    const liveCancel = makeInvoice({
+      id: 'x',
+      bill_no: 'INV-0010',
+      cancelled_at: '2026-05-20T10:00:00.000Z',
+      taxBuckets: { 5: { taxable: 100, tax: 5 } },
+      grand_total: 105,
+    })
+    const active = makeInvoice({
+      id: 'y',
+      bill_no: 'INV-0011',
+      taxBuckets: { 5: { taxable: 200, tax: 10 } },
+      grand_total: 210,
+    })
+    const payload = buildGstr1ExportPayload([liveCancel, active])
+    expect(payload.docs[0]).toMatchObject({
+      srFrom: 'INV-0010',
+      srTo: 'INV-0011',
+      totalNumber: 2,
+      cancelled: 1,
+    })
+    expect(payload.b2b.map((r) => r.invoiceNumber)).toEqual(['INV-0011'])
+  })
+
+  it('still emits docs when the period has only cancelled invoices', () => {
+    const onlyCancelled = makeInvoice({
+      id: 'x',
+      bill_no: 'INV-0005',
+      is_deleted: true,
+    })
+    const payload = buildGstr1ExportPayload([onlyCancelled])
+    expect(payload.b2b).toHaveLength(0)
+    expect(payload.b2cs).toHaveLength(0)
+    expect(payload.docs).toEqual([
+      {
+        nature: 'Invoices for outward supply',
+        srFrom: 'INV-0005',
+        srTo: 'INV-0005',
+        totalNumber: 1,
+        cancelled: 1,
+      },
+    ])
+  })
+
+  it('separates Credit Note and Debit Note natures and counts cancelled notes', () => {
+    const cn = makeInvoice({
+      id: 'cn1',
+      bill_no: 'CN-0001',
+      doc_type: 'CREDIT_NOTE',
+    })
+    const cnDel = makeInvoice({
+      id: 'cn2',
+      bill_no: 'CN-0002',
+      doc_type: 'CREDIT_NOTE',
+      is_deleted: true,
+    })
+    const dn = makeInvoice({
+      id: 'dn1',
+      bill_no: 'DN-0001',
+      doc_type: 'DEBIT_NOTE',
+    })
+    const docs = buildGstrDocsExportRows([cn, cnDel, dn])
+    expect(docs).toEqual([
+      {
+        nature: 'Credit Note',
+        srFrom: 'CN-0001',
+        srTo: 'CN-0002',
+        totalNumber: 2,
+        cancelled: 1,
+      },
+      {
+        nature: 'Debit Note',
+        srFrom: 'DN-0001',
+        srTo: 'DN-0001',
+        totalNumber: 1,
+        cancelled: 0,
+      },
+    ])
   })
 })

@@ -538,8 +538,9 @@ async function importLegacyBilling(data: any, mode: ImportMode): Promise<ImportR
 async function repairImportedInvoiceNumbers() {
   const allFirms = await db.firms.filter((f) => !f.is_deleted).toArray()
   for (const f of allFirms) {
-    let invs = await db.invoices.where('firm_id').equals(f.id).filter((i) => !i.is_deleted).toArray()
-    for (const group of findDuplicateBillNoGroups(invs)) {
+    let invs = await db.invoices.where('firm_id').equals(f.id).toArray()
+    const active = invs.filter((i) => !i.is_deleted)
+    for (const group of findDuplicateBillNoGroups(active)) {
       const ordered = [...group].sort((a, b) =>
         (a.created_at || a.updated_at || '').localeCompare(b.created_at || b.updated_at || ''),
       )

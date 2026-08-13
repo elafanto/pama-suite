@@ -1,6 +1,8 @@
 import * as XLSX from 'xlsx'
+import { db } from '@/data/db'
 import { getStateCode, getStateName, isInterstateGst } from '@/services/gst'
 import { gstrB2B, gstrB2C } from '@/services/reports'
+import { isInvoiceDocsCancelled, isInvoiceGstrReportable } from '@/services/invoiceStatus'
 import type { Invoice } from '@/types/models'
 
 /** Official GSTR-1 Excel Workbook Template V2.2 sheet names / columns. */
@@ -449,38 +451,49 @@ export function buildGstrHsnB2CExportRows(invoices: Invoice[]): GstrHsnExportRow
   return buildHsnRows(gstrB2C(invoices.filter(isTaxInvoice)))
 }
 
+function sortBillNos(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { numeric: true })
+}
+
+/** Table 13 docs row for one nature — includes soft-deleted as Cancelled. */
+function docsRowForNature(nature: string, docs: Invoice[]): GstrDocsExportRow | null {
+  const withNos = docs.filter((i) => String(i.bill_no || '').trim())
+  if (!withNos.length) return null
+  const nos = withNos.map((i) => String(i.bill_no).trim()).sort(sortBillNos)
+  const cancelled = withNos.filter((i) => isInvoiceDocsCancelled(i)).length
+  return {
+    nature,
+    srFrom: nos[0],
+    srTo: nos[nos.length - 1],
+    totalNumber: withNos.length,
+    cancelled,
+  }
+}
+
+/**
+ * GSTR-1 Table 13 — Documents Issued.
+ * Pass period docs including soft-deleted / cancelled; cancelled = cancelled_at || is_deleted.
+ */
 export function buildGstrDocsExportRows(invoices: Invoice[]): GstrDocsExportRow[] {
-  const taxInvoices = invoices
-    .filter(isTaxInvoice)
-    .map((i) => i.bill_no || '')
-    .filter(Boolean)
-    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-
-  const notes = invoices
-    .filter(isCreditOrDebitNote)
-    .map((i) => i.bill_no || '')
-    .filter(Boolean)
-    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-
   const rows: GstrDocsExportRow[] = []
-  if (taxInvoices.length) {
-    rows.push({
-      nature: 'Invoices for outward supply',
-      srFrom: taxInvoices[0],
-      srTo: taxInvoices[taxInvoices.length - 1],
-      totalNumber: taxInvoices.length,
-      cancelled: 0,
-    })
-  }
-  if (notes.length) {
-    rows.push({
-      nature: 'Credit Note',
-      srFrom: notes[0],
-      srTo: notes[notes.length - 1],
-      totalNumber: notes.length,
-      cancelled: 0,
-    })
-  }
+  const tax = docsRowForNature(
+    'Invoices for outward supply',
+    invoices.filter(isTaxInvoice),
+  )
+  if (tax) rows.push(tax)
+
+  const credit = docsRowForNature(
+    'Credit Note',
+    invoices.filter((i) => docKind(i) === 'CREDIT_NOTE'),
+  )
+  if (credit) rows.push(credit)
+
+  const debit = docsRowForNature(
+    'Debit Note',
+    invoices.filter((i) => docKind(i) === 'DEBIT_NOTE'),
+  )
+  if (debit) rows.push(debit)
+
   return rows
 }
 
@@ -549,16 +562,21 @@ export function buildGstrCdnurExportRows(invoices: Invoice[]): GstrCdnurExportRo
   return rows
 }
 
+/**
+ * Build full GSTR-1 export payload.
+ * Cancelled / hard-deleted bills are excluded from B2B/B2C/HSN/CDN and counted only in `docs` (Table 13).
+ */
 export function buildGstr1ExportPayload(invoices: Invoice[]): Gstr1ExportPayload {
+  const active = invoices.filter((i) => isInvoiceGstrReportable(i))
   return {
-    b2b: buildGstrB2BExportRows(invoices),
-    b2cl: buildGstrB2clExportRows(invoices),
-    b2cs: buildGstrB2csExportRows(invoices),
-    hsnB2b: buildGstrHsnB2BExportRows(invoices),
-    hsnB2c: buildGstrHsnB2CExportRows(invoices),
+    b2b: buildGstrB2BExportRows(active),
+    b2cl: buildGstrB2clExportRows(active),
+    b2cs: buildGstrB2csExportRows(active),
+    hsnB2b: buildGstrHsnB2BExportRows(active),
+    hsnB2c: buildGstrHsnB2CExportRows(active),
     docs: buildGstrDocsExportRows(invoices),
-    cdnr: buildGstrCdnrExportRows(invoices),
-    cdnur: buildGstrCdnurExportRows(invoices),
+    cdnr: buildGstrCdnrExportRows(active),
+    cdnur: buildGstrCdnurExportRows(active),
   }
 }
 
@@ -674,14 +692,27 @@ export function periodMonthBounds(period: string): { from: string; to: string } 
   return { from: `${p}-01`, to: `${p}-${String(last).padStart(2, '0')}` }
 }
 
-function filterMonthDocs(invoices: Invoice[], from: string, to: string): Invoice[] {
+/** Period tax invoices + notes, including soft-deleted (for Table 13). */
+export function filterMonthDocsAll(invoices: Invoice[], from: string, to: string): Invoice[] {
   return invoices.filter(
     (i) =>
-      !i.is_deleted
-      && i.date >= from
+      i.date >= from
       && i.date <= to
       && (isTaxInvoice(i) || isCreditOrDebitNote(i)),
   )
+}
+
+/** Active (non-deleted, non-cancelled) period docs — B2B/B2C/HSN/CDN. */
+export function filterMonthDocsActive(invoices: Invoice[], from: string, to: string): Invoice[] {
+  return filterMonthDocsAll(invoices, from, to).filter((i) => isInvoiceGstrReportable(i))
+}
+
+/** Load firm invoices for a GSTR month from Dexie (includes soft-deleted). */
+export async function loadPeriodInvoicesForGstr(firmId: string, period: string): Promise<Invoice[]> {
+  if (!firmId) return []
+  const { from, to } = periodMonthBounds(period)
+  const all = await db.invoices.where('firm_id').equals(firmId).toArray()
+  return filterMonthDocsAll(all, from, to)
 }
 
 function sheetTitleRows(title: string, headers: readonly string[]): (string | number)[][] {
@@ -829,14 +860,20 @@ export type GstrDownloadResult =
         hsnB2b: number
         hsnB2c: number
         docs: number
+        docsTotal: number
+        docsCancelled: number
         cdnr: number
         cdnur: number
       }
+      docsSummary: GstrDocsExportRow[]
     }
   | { ok: false; error: string }
 
 export async function downloadGstrOfflineExcel(opts: {
-  invoices: Invoice[]
+  /** When set, loads period invoices from Dexie including soft-deleted (preferred). */
+  firmId?: string
+  /** Fallback / tests when firmId not provided. May include soft-deleted for Table 13. */
+  invoices?: Invoice[]
   period: string
   gstin: string
   firmName?: string
@@ -848,8 +885,10 @@ export async function downloadGstrOfflineExcel(opts: {
   if (!gstin) return { ok: false, error: 'Firm GSTIN missing — add it in Settings → Firm profile.' }
 
   const { from, to } = periodMonthBounds(opts.period)
-  const monthDocs = filterMonthDocs(opts.invoices, from, to)
-  const payload = buildGstr1ExportPayload(monthDocs)
+  const source = opts.firmId
+    ? await loadPeriodInvoicesForGstr(opts.firmId, opts.period)
+    : filterMonthDocsAll(opts.invoices || [], from, to)
+  const payload = buildGstr1ExportPayload(source)
 
   // Default: lightweight workbook with official sheet names + V2.2 column headers.
   // Optional: fill GST portal template (large; can hang mobile / low-RAM browsers).
@@ -868,6 +907,9 @@ export async function downloadGstrOfflineExcel(opts: {
   const file = `GSTR1_${safeGstin}_${fp}_V2.2.xlsx`
   XLSX.writeFile(wb, file)
 
+  const docsTotal = payload.docs.reduce((s, r) => s + r.totalNumber, 0)
+  const docsCancelled = payload.docs.reduce((s, r) => s + r.cancelled, 0)
+
   return {
     ok: true,
     file,
@@ -879,8 +921,11 @@ export async function downloadGstrOfflineExcel(opts: {
       hsnB2b: payload.hsnB2b.length,
       hsnB2c: payload.hsnB2c.length,
       docs: payload.docs.length,
+      docsTotal,
+      docsCancelled,
       cdnr: payload.cdnr.length,
       cdnur: payload.cdnur.length,
     },
+    docsSummary: payload.docs,
   }
 }

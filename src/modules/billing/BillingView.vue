@@ -17,6 +17,7 @@ import { peekBillNo } from '@/services/invoiceNumber'
 import { listItemStockMovements } from '@/services/inventoryLedger'
 import { computeStock, findStockRowForLine } from '@/services/stock'
 import { periodLabelYm, salesMonthLockMessage, salesPeriodFromDate } from '@/services/salesMonthLock'
+import { isInvoiceActive, isInvoiceCancelled } from '@/services/invoiceStatus'
 import { useTableSort } from '@/composables/useTableSort'
 import PpModal from '@/components/PpModal.vue'
 import type { Invoice, InvoiceItemLine, PayStatus, GstType, ItemStockMovement } from '@/types/models'
@@ -60,7 +61,8 @@ const lockMonth = ref(new Date().toISOString().slice(0, 7))
 const formMonthLocked = computed(() => firmStore.isSalesLocked(form.date))
 const lockMonthLocked = computed(() => firmStore.isSalesLocked(lockMonth.value))
 const lockedMonthsList = computed(() => firmStore.lockedSalesMonths)
-const statusFilter = ref<'all' | PayStatus>('all')
+const statusFilter = ref<'all' | PayStatus | 'cancelled'>('all')
+const hideCancelled = ref(false)
 const histFrom = ref('')
 const histTo = ref('')
 const histCustomer = ref('')
@@ -78,6 +80,15 @@ const templateName = ref('')
 const templateDesc = ref('')
 const showTemplateModal = ref(false)
 const stockMovements = ref<ItemStockMovement[]>([])
+
+/** Hard delete / uncancel confirmation modal */
+const dangerModal = ref<{
+  mode: 'hard_delete' | 'uncancel'
+  inv: Invoice
+  typedBill: string
+  typedPhrase: string
+} | null>(null)
+const dangerMenuId = ref<string | null>(null)
 
 // Outstanding Payment Modal State
 const showPaymentModal = ref(false)
@@ -595,7 +606,7 @@ async function saveQuickItem() {
 
 function repeatLastBill() {
   const firmId = firmStore.activeFirmId
-  const active = invoiceStore.list.filter(b => b.firm_id === firmId && !b.is_deleted)
+  const active = invoiceStore.list.filter(b => b.firm_id === firmId && isInvoiceActive(b))
   if (!active.length) return alert('No previous bills found')
   active.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
   copyInvoice(active[0])
@@ -607,24 +618,92 @@ function toggleHistorySelect(id: string) {
   else selectedHistoryIds.value.push(id)
 }
 
-async function bulkDeleteHistory() {
-  if (!selectedHistoryIds.value.length) return alert('Select bills to delete')
-  const locked = selectedHistoryIds.value
+async function bulkCancelHistory() {
+  if (!selectedHistoryIds.value.length) return alert('Select bills to cancel')
+  const targets = selectedHistoryIds.value
     .map((id) => invoiceStore.list.find((b) => b.id === id))
-    .filter((b): b is Invoice => !!b && firmStore.isSalesLocked(b.date))
+    .filter((b): b is Invoice => !!b && isInvoiceActive(b))
+  if (!targets.length) return alert('Selected me koi active bill nahi (cancelled pehle se cancel nahi).')
+  const locked = targets.filter((b) => firmStore.isSalesLocked(b.date))
   if (locked.length) {
     return alert(
       `Locked sales month me ${locked.length} bill(s) hain — pehle month unlock karo.\n`
       + locked.slice(0, 5).map((b) => `${b.bill_no} (${salesPeriodFromDate(b.date)})`).join('\n'),
     )
   }
-  if (!confirm(`Delete ${selectedHistoryIds.value.length} selected bill(s)?`)) return
+  if (!confirm(`Cancel ${targets.length} selected bill(s)?\n\nLedger/stock reverse; history me Cancelled dikhenge; GSTR Table 13 me count.`)) return
   try {
-    for (const id of [...selectedHistoryIds.value]) {
-      await invoiceStore.remove(id)
+    for (const inv of targets) {
+      await invoiceStore.cancel(inv.id)
     }
     selectedHistoryIds.value = []
-    alert('Selected bills deleted.')
+    alert(`${targets.length} bill(s) cancelled.`)
+  } catch (err: any) {
+    alert(err?.message || String(err))
+  }
+}
+
+async function cancelInvoice(inv: Invoice) {
+  if (firmStore.isSalesLocked(inv.date)) {
+    return alert(salesMonthLockMessage(salesPeriodFromDate(inv.date)))
+  }
+  if (!isInvoiceActive(inv)) return alert('Bill already cancelled / deleted')
+  if (!confirm(
+    `Cancel invoice ${inv.bill_no}?\n\n`
+    + `• History me Cancelled badge ke saath dikhega\n`
+    + `• Print/PDF pe CANCELLED watermark\n`
+    + `• Ledger + stock reverse\n`
+    + `• Bill number reserved (GSTR Table 13 cancelled)`,
+  )) return
+  try {
+    await invoiceStore.cancel(inv.id)
+    alert(`Invoice ${inv.bill_no} cancelled.`)
+  } catch (err: any) {
+    alert(err?.message || String(err))
+  }
+}
+
+function openHardDeleteModal(inv: Invoice) {
+  if (firmStore.isSalesLocked(inv.date)) {
+    return alert(salesMonthLockMessage(salesPeriodFromDate(inv.date)))
+  }
+  dangerMenuId.value = null
+  dangerModal.value = { mode: 'hard_delete', inv, typedBill: '', typedPhrase: '' }
+}
+
+function openUncancelModal(inv: Invoice) {
+  if (firmStore.isSalesLocked(inv.date)) {
+    return alert(salesMonthLockMessage(salesPeriodFromDate(inv.date)))
+  }
+  if (!isInvoiceCancelled(inv)) return alert('Bill cancelled nahi hai')
+  dangerMenuId.value = null
+  dangerModal.value = { mode: 'uncancel', inv, typedBill: '', typedPhrase: '' }
+}
+
+function closeDangerModal() {
+  dangerModal.value = null
+}
+
+const dangerModalReady = computed(() => {
+  const m = dangerModal.value
+  if (!m) return false
+  const billOk = m.typedBill.trim().toUpperCase() === m.inv.bill_no.trim().toUpperCase()
+  const phrase = m.mode === 'hard_delete' ? 'HARD DELETE' : 'UNCANCEL'
+  return billOk && m.typedPhrase.trim().toUpperCase() === phrase
+})
+
+async function confirmDangerModal() {
+  const m = dangerModal.value
+  if (!m || !dangerModalReady.value) return
+  try {
+    if (m.mode === 'hard_delete') {
+      await invoiceStore.hardDelete(m.inv.id)
+      alert(`Invoice ${m.inv.bill_no} hard-deleted (history se hide). Number reserved.`)
+    } else {
+      await invoiceStore.uncancel(m.inv.id)
+      alert(`Invoice ${m.inv.bill_no} un-cancelled — ledger/stock restore.`)
+    }
+    closeDangerModal()
   } catch (err: any) {
     alert(err?.message || String(err))
   }
@@ -853,6 +932,10 @@ async function saveInvoice() {
 
 // Edit existing invoice
 function editInvoice(inv: Invoice) {
+  if (isInvoiceCancelled(inv)) {
+    alert(`Invoice ${inv.bill_no} cancelled hai — pehle Un-cancel karo.`)
+    return
+  }
   if (firmStore.isSalesLocked(inv.date)) {
     alert(salesMonthLockMessage(salesPeriodFromDate(inv.date)))
     return
@@ -940,21 +1023,6 @@ function copyInvoice(inv: Invoice) {
   alert('Invoice copied as a new draft!')
 }
 
-// Soft delete invoice
-async function deleteInvoice(inv: Invoice) {
-  if (firmStore.isSalesLocked(inv.date)) {
-    return alert(salesMonthLockMessage(salesPeriodFromDate(inv.date)))
-  }
-  if (confirm(`Are you sure you want to delete invoice ${inv.bill_no}?`)) {
-    try {
-      await invoiceStore.remove(inv.id)
-      alert('Invoice deleted successfully.')
-    } catch (err: any) {
-      alert(err?.message || String(err))
-    }
-  }
-}
-
 // History Filters
 const historyCustomers = computed(() => {
   const names = new Set(invoiceStore.list.map(i => i.party_name).filter(Boolean))
@@ -965,7 +1033,12 @@ const filteredInvoicesBase = computed(() => {
   const q = search.value.toLowerCase().trim()
   return invoiceStore.list.filter(inv => {
     if (inv.is_deleted) return false
-    if (statusFilter.value !== 'all' && inv.pay_status !== statusFilter.value) return false
+    if (hideCancelled.value && isInvoiceCancelled(inv)) return false
+    if (statusFilter.value === 'cancelled') {
+      if (!isInvoiceCancelled(inv)) return false
+    } else if (statusFilter.value !== 'all' && inv.pay_status !== statusFilter.value) {
+      return false
+    }
     if (histFrom.value && inv.date < histFrom.value) return false
     if (histTo.value && inv.date > histTo.value) return false
     if (histCustomer.value && inv.party_name !== histCustomer.value) return false
@@ -1582,7 +1655,12 @@ onMounted(async () => {
           <option value="PAID">Paid</option>
           <option value="PARTIAL">Partial</option>
           <option value="UNPAID">Unpaid</option>
+          <option value="cancelled">Cancelled only</option>
         </select>
+        <label class="inline-flex items-center gap-1.5 text-xs text-slate-600 self-center">
+          <input v-model="hideCancelled" type="checkbox" class="h-4 w-4" />
+          Hide cancelled
+        </label>
         <select
           v-if="selectedHistoryIds.length"
           v-model="bulkPdfCopy"
@@ -1601,8 +1679,8 @@ onMounted(async () => {
         <button
           v-if="selectedHistoryIds.length"
           class="pp-btn pp-btn-danger !text-xs"
-          @click="bulkDeleteHistory"
-        >🗑️ Delete {{ selectedHistoryIds.length }} selected</button>
+          @click="bulkCancelHistory"
+        >✕ Cancel {{ selectedHistoryIds.length }} selected</button>
         <span class="ml-auto self-center text-sm text-slate-400">{{ filteredInvoices.length }} invoices found</span>
       </div>
 
@@ -1627,7 +1705,7 @@ onMounted(async () => {
                 <div class="text-4xl mb-2">🧾</div>No invoices found.
               </td>
             </tr>
-            <tr v-for="inv in filteredInvoices" :key="inv.id" class="border-t border-slate-100 hover:bg-slate-50/50">
+            <tr v-for="inv in filteredInvoices" :key="inv.id" class="border-t border-slate-100 hover:bg-slate-50/50" :class="{ 'bg-slate-50/80': isInvoiceCancelled(inv) }">
               <td class="px-2 py-2.5 text-center">
                 <input type="checkbox" :checked="selectedHistoryIds.includes(inv.id)" @change="toggleHistorySelect(inv.id)" />
               </td>
@@ -1639,41 +1717,90 @@ onMounted(async () => {
                   title="Sales month locked"
                 >🔒</span>
               </td>
-              <td class="px-4 py-2.5 font-bold text-navy">{{ inv.bill_no }}</td>
+              <td class="px-4 py-2.5 font-bold text-navy">
+                {{ inv.bill_no }}
+                <span
+                  v-if="isInvoiceCancelled(inv)"
+                  class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-white font-semibold uppercase tracking-wide"
+                >Cancelled</span>
+              </td>
               <td class="px-4 py-2.5">{{ inv.party_name }}</td>
               <td class="px-4 py-2.5 text-right font-semibold text-slate-700">₹{{ inv.grand_total.toLocaleString('en-IN') }}</td>
               <td class="px-4 py-2.5 text-right text-emerald-600">₹{{ (inv.amt_paid || 0).toLocaleString('en-IN') }}</td>
               <td class="px-4 py-2.5 text-right text-rose-600 font-semibold">₹{{ (inv.grand_total - (inv.amt_paid || 0)).toLocaleString('en-IN') }}</td>
               <td class="px-4 py-2.5 text-center">
-                <span :class="['pp-badge',
+                <span
+                  v-if="isInvoiceCancelled(inv)"
+                  class="pp-badge bg-slate-200 text-slate-700"
+                >CANCELLED</span>
+                <span
+                  v-else
+                  :class="['pp-badge',
                               inv.pay_status === 'PAID' ? 'bg-emerald-100 text-emerald-700' :
-                              inv.pay_status === 'PARTIAL' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700']">
+                              inv.pay_status === 'PARTIAL' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700']"
+                >
                   {{ inv.pay_status }}
                 </span>
               </td>
-              <td class="px-4 py-2.5 text-right whitespace-nowrap space-x-1">
-                <button @click="openPaymentModal(inv)" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="Record Payment">💳</button>
-                <button @click="openPrintPreview(inv)" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="Preview">👁️</button>
-                <button @click="downloadPDF(inv)" class="pp-btn pp-btn-primary !px-2 !py-1 text-xs font-semibold" title="Download PDF">PDF</button>
-                <button
-                  v-if="isEwayEligible(inv)"
-                  @click="downloadEwayForHistoryBill(inv)"
-                  class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs"
-                  title="Download E-Way JSON"
-                >🚚</button>
-                <button
-                  @click="editInvoice(inv)"
-                  class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs"
-                  :disabled="firmStore.isSalesLocked(inv.date)"
-                  :title="firmStore.isSalesLocked(inv.date) ? 'Month locked' : 'Edit Bill'"
-                >✏️</button>
-                <button @click="copyInvoice(inv)" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="Copy Draft">📋</button>
-                <button
-                  @click="deleteInvoice(inv)"
-                  class="pp-btn pp-btn-danger !px-2 !py-1 text-xs"
-                  :disabled="firmStore.isSalesLocked(inv.date)"
-                  :title="firmStore.isSalesLocked(inv.date) ? 'Month locked' : 'Delete Bill'"
-                >🗑️</button>
+              <td class="px-4 py-2.5 text-right whitespace-nowrap">
+                <div class="inline-flex items-center justify-end gap-1 relative">
+                  <button
+                    v-if="isInvoiceActive(inv)"
+                    @click="openPaymentModal(inv)"
+                    class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs"
+                    title="Record Payment"
+                  >💳</button>
+                  <button @click="openPrintPreview(inv)" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="Preview">👁️</button>
+                  <button @click="downloadPDF(inv)" class="pp-btn pp-btn-primary !px-2 !py-1 text-xs font-semibold" title="Download PDF">PDF</button>
+                  <button
+                    v-if="isInvoiceActive(inv) && isEwayEligible(inv)"
+                    @click="downloadEwayForHistoryBill(inv)"
+                    class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs"
+                    title="Download E-Way JSON"
+                  >🚚</button>
+                  <button
+                    v-if="isInvoiceActive(inv)"
+                    @click="editInvoice(inv)"
+                    class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs"
+                    :disabled="firmStore.isSalesLocked(inv.date)"
+                    :title="firmStore.isSalesLocked(inv.date) ? 'Month locked' : 'Edit Bill'"
+                  >✏️</button>
+                  <button @click="copyInvoice(inv)" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="Copy Draft">📋</button>
+                  <button
+                    v-if="isInvoiceActive(inv)"
+                    @click="cancelInvoice(inv)"
+                    class="pp-btn pp-btn-danger !px-2 !py-1 text-xs"
+                    :disabled="firmStore.isSalesLocked(inv.date)"
+                    :title="firmStore.isSalesLocked(inv.date) ? 'Month locked' : 'Cancel Bill'"
+                  >Cancel</button>
+                  <button
+                    type="button"
+                    class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs"
+                    title="More actions"
+                    @click="dangerMenuId = dangerMenuId === inv.id ? null : inv.id"
+                  >⋯</button>
+                  <div
+                    v-if="dangerMenuId === inv.id"
+                    class="absolute right-0 top-full mt-1 z-20 min-w-[11rem] rounded-lg border border-slate-200 bg-white shadow-lg text-left py-1"
+                  >
+                    <button
+                      v-if="isInvoiceCancelled(inv)"
+                      type="button"
+                      class="w-full px-3 py-2 text-xs text-left hover:bg-amber-50 text-amber-900"
+                      @click="openUncancelModal(inv)"
+                    >
+                      Un-cancel…
+                    </button>
+                    <button
+                      type="button"
+                      class="w-full px-3 py-2 text-xs text-left hover:bg-red-50 text-red-700"
+                      :disabled="firmStore.isSalesLocked(inv.date)"
+                      @click="openHardDeleteModal(inv)"
+                    >
+                      Hard delete…
+                    </button>
+                  </div>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -1949,6 +2076,11 @@ onMounted(async () => {
       <div class="flex-1 p-6 overflow-y-auto bg-slate-100 flex items-start justify-center">
         <!-- Rebuilt Print Sheet -->
         <div id="invoice-print-area" class="bg-white w-[800px] p-6 shadow-md border border-slate-300 text-xs leading-normal font-serif text-black relative">
+          <div
+            v-if="previewInvoice.cancelled_at"
+            class="invoice-cancelled-watermark"
+            aria-hidden="true"
+          >CANCELLED</div>
           <!-- Document Header -->
           <div class="text-center border-b border-black pb-2 mb-3">
             <h1 class="text-lg font-bold uppercase tracking-wider">{{ firmStore.activeFirm?.name || 'PAMA PACKAGING' }}</h1>
@@ -2120,6 +2252,11 @@ onMounted(async () => {
   <!-- Print Specific Style Area -->
   <div id="print-view-container" class="print-only">
     <div v-if="previewInvoice" class="bg-white p-0 text-xs leading-normal font-serif text-black relative">
+      <div
+        v-if="previewInvoice.cancelled_at"
+        class="invoice-cancelled-watermark"
+        aria-hidden="true"
+      >CANCELLED</div>
       <!-- Document Header -->
       <div class="text-center border-b border-black pb-2 mb-3">
         <h1 class="text-lg font-bold uppercase tracking-wider">{{ firmStore.activeFirm?.name || 'PAMA PACKAGING' }}</h1>
@@ -2284,6 +2421,60 @@ onMounted(async () => {
       </div>
     </div>
   </div>
+
+  <!-- Hard delete / Un-cancel confirmation -->
+  <div
+    v-if="dangerModal"
+    class="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4 no-print"
+    @click.self="closeDangerModal"
+  >
+    <div class="w-full max-w-md rounded-xl bg-white shadow-2xl p-5 space-y-3">
+      <h3 class="font-bold text-navy">
+        {{ dangerModal.mode === 'hard_delete' ? 'Hard delete invoice' : 'Un-cancel invoice' }}
+      </h3>
+      <p class="text-sm text-slate-600 leading-relaxed">
+        <template v-if="dangerModal.mode === 'hard_delete'">
+          Bill <b>{{ dangerModal.inv.bill_no }}</b> history se hide ho jayega.
+          Number reuse nahi hoga; GSTR Table 13 me cancelled count me rahega.
+          Ye undo mushkil hai (Deleted tab se restore, cancelled state preserve).
+        </template>
+        <template v-else>
+          Bill <b>{{ dangerModal.inv.bill_no }}</b> wapas active hoga — ledger + stock restore.
+          Sirf jab galti se cancel kiya ho.
+        </template>
+      </p>
+      <div>
+        <label class="pp-label">Type exact bill number</label>
+        <input v-model="dangerModal.typedBill" class="pp-input font-mono" :placeholder="dangerModal.inv.bill_no" />
+      </div>
+      <div>
+        <label class="pp-label">
+          Type
+          <span class="font-mono font-bold">{{ dangerModal.mode === 'hard_delete' ? 'HARD DELETE' : 'UNCANCEL' }}</span>
+        </label>
+        <input
+          v-model="dangerModal.typedPhrase"
+          class="pp-input font-mono uppercase"
+          :placeholder="dangerModal.mode === 'hard_delete' ? 'HARD DELETE' : 'UNCANCEL'"
+        />
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button type="button" class="pp-btn pp-btn-ghost" @click="closeDangerModal">Close</button>
+        <button
+          type="button"
+          class="pp-btn"
+          :class="[
+            dangerModal.mode === 'hard_delete' ? 'pp-btn-danger' : 'pp-btn-primary',
+            !dangerModalReady ? 'opacity-50' : '',
+          ]"
+          :disabled="!dangerModalReady"
+          @click="confirmDangerModal"
+        >
+          {{ dangerModal.mode === 'hard_delete' ? 'Hard delete forever' : 'Confirm Un-cancel' }}
+        </button>
+      </div>
+    </div>
+  </div>
 </template>
 
 <style>
@@ -2325,5 +2516,22 @@ onMounted(async () => {
 #invoice-print-area th, #invoice-print-area td {
   border: 1px solid black;
   padding: 4px 6px;
+}
+
+.invoice-cancelled-watermark {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 5;
+  font-size: 72px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: rgba(185, 28, 28, 0.22);
+  transform: rotate(-28deg);
+  text-transform: uppercase;
+  font-family: Helvetica, Arial, sans-serif;
 }
 </style>

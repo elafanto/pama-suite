@@ -8,6 +8,7 @@ import { useAccountingStore } from './accounting'
 import { logActivity } from '@/services/activityLog'
 import { recordInvoiceMovements } from '@/services/inventoryLedger'
 import { allocateBillNo } from '@/services/invoiceNumber'
+import { isInvoiceCancelled, isInvoiceActive } from '@/services/invoiceStatus'
 import { isSalesMonthLocked, salesMonthLockMessage, salesPeriodFromDate } from '@/services/salesMonthLock'
 import type { Invoice } from '@/types/models'
 
@@ -35,6 +36,20 @@ async function syncReceiptVoucher(invoice: Invoice) {
   await accounting.postPaymentVoucher(invoice.id, 'invoice', paid, false, 0, invoice.date, 'Recorded on invoice save')
 }
 
+async function reverseInvoiceEffects(invoice: Invoice) {
+  const accounting = useAccountingStore()
+  await accounting.reverseLedgerByRef(invoice.id)
+  await accounting.reverseLedgerByRef(`${invoice.id}_PAY`)
+  await recordInvoiceMovements({ ...invoice, is_deleted: true })
+}
+
+async function restoreInvoiceEffects(invoice: Invoice) {
+  const accounting = useAccountingStore()
+  await accounting.postSaleToLedger(invoice)
+  await syncReceiptVoucher(invoice)
+  await recordInvoiceMovements(invoice)
+}
+
 export const useInvoiceStore = defineStore('invoices', () => {
   const list = ref<Invoice[]>([])
   const loaded = ref(false)
@@ -43,7 +58,10 @@ export const useInvoiceStore = defineStore('invoices', () => {
     const firm = useFirmStore()
     list.value = await repo.all(firm.activeFirmId)
     loaded.value = true
-    await firm.syncBillSequence(firm.activeFirmId, list.value)
+    const allForSeq = firm.activeFirmId
+      ? await db.invoices.where('firm_id').equals(firm.activeFirmId).toArray()
+      : []
+    await firm.syncBillSequence(firm.activeFirmId, allForSeq)
   }
 
   async function add(
@@ -65,7 +83,7 @@ export const useInvoiceStore = defineStore('invoices', () => {
       if (isSalesMonthLocked(firm, data.date)) {
         throw new Error(salesMonthLockMessage(salesPeriodFromDate(data.date)))
       }
-      const invoices = await db.invoices.where('firm_id').equals(firmId).filter((b) => !b.is_deleted).toArray()
+      const invoices = await db.invoices.where('firm_id').equals(firmId).toArray()
       const payload = { ...data }
 
       if (useAutoNumber) {
@@ -85,6 +103,7 @@ export const useInvoiceStore = defineStore('invoices', () => {
         id: uid(),
         firm_id: firmId,
         bill_no: payload.bill_no.trim(),
+        cancelled_at: null,
         created_at: now,
         updated_at: now,
         is_deleted: false,
@@ -115,6 +134,9 @@ export const useInvoiceStore = defineStore('invoices', () => {
   async function update(id: string, patch: Partial<Invoice>) {
     const existing = await repo.get(id)
     if (!existing) return
+    if (isInvoiceCancelled(existing)) {
+      throw new Error(`Invoice ${existing.bill_no} cancelled hai — pehle Un-cancel karo.`)
+    }
     await assertSalesMonthWritable(existing.firm_id, existing.date, patch.date)
     const rec = await repo.update(id, patch)
     if (rec) {
@@ -127,18 +149,69 @@ export const useInvoiceStore = defineStore('invoices', () => {
     await load()
   }
 
-  async function remove(id: string) {
+  /** Cancel bill: reverse ledger/stock, keep visible with cancelled_at. */
+  async function cancel(id: string) {
     const existing = await repo.get(id)
-    if (existing) await assertSalesMonthWritable(existing.firm_id, existing.date)
-    await repo.remove(id)
-    const accounting = useAccountingStore()
-    await accounting.reverseLedgerByRef(id)
-    await accounting.reverseLedgerByRef(`${id}_PAY`)
-    if (existing) {
-      await recordInvoiceMovements({ ...existing, is_deleted: true })
-      await logActivity(existing.firm_id, 'delete', 'invoice', id, `Invoice ${existing.bill_no} deleted`)
-    }
+    if (!existing || existing.is_deleted) throw new Error('Invoice not found')
+    if (isInvoiceCancelled(existing)) throw new Error(`Invoice ${existing.bill_no} already cancelled`)
+    await assertSalesMonthWritable(existing.firm_id, existing.date)
+
+    const now = nowISO()
+    const cancelled = plain({
+      ...existing,
+      cancelled_at: now,
+      updated_at: now,
+      _dirty: true,
+    }) as Invoice
+    await db.invoices.put(cancelled)
+    await reverseInvoiceEffects(existing)
+    await logActivity(existing.firm_id, 'cancel', 'invoice', id, `Invoice ${existing.bill_no} cancelled`)
     await load()
+    return cancelled
+  }
+
+  /**
+   * Un-cancel: restore ledger/stock. Caller must enforce typed confirmation in UI.
+   */
+  async function uncancel(id: string) {
+    const existing = await repo.get(id)
+    if (!existing || existing.is_deleted) throw new Error('Invoice not found')
+    if (!isInvoiceCancelled(existing)) throw new Error(`Invoice ${existing.bill_no} cancelled nahi hai`)
+    await assertSalesMonthWritable(existing.firm_id, existing.date)
+
+    const now = nowISO()
+    const restored = plain({
+      ...existing,
+      cancelled_at: null,
+      updated_at: now,
+      _dirty: true,
+    }) as Invoice
+    await db.invoices.put(restored)
+    await restoreInvoiceEffects(restored)
+    await logActivity(existing.firm_id, 'uncancel', 'invoice', id, `Invoice ${existing.bill_no} un-cancelled`)
+    await load()
+    return restored
+  }
+
+  /** Hard delete: hide from history (tombstone). Reverse if still active. */
+  async function hardDelete(id: string) {
+    const existing = await repo.get(id)
+    if (!existing) throw new Error('Invoice not found')
+    if (existing.is_deleted) return
+    await assertSalesMonthWritable(existing.firm_id, existing.date)
+
+    if (isInvoiceActive(existing)) {
+      await reverseInvoiceEffects(existing)
+    }
+
+    await repo.remove(id)
+    await logActivity(existing.firm_id, 'delete', 'invoice', id, `Invoice ${existing.bill_no} hard-deleted`)
+    await load()
+  }
+
+  /** @deprecated use hardDelete — kept for older call sites */
+  async function remove(id: string) {
+    return hardDelete(id)
   }
 
   async function restore(id: string) {
@@ -146,11 +219,13 @@ export const useInvoiceStore = defineStore('invoices', () => {
     if (existing) await assertSalesMonthWritable(existing.firm_id, existing.date)
     const rec = await repo.restore(id)
     if (rec) {
-      const accounting = useAccountingStore()
-      await accounting.postSaleToLedger(rec)
-      await syncReceiptVoucher(rec)
-      await recordInvoiceMovements(rec)
-      await logActivity(rec.firm_id, 'restore', 'invoice', id, `Invoice ${rec.bill_no} restored`)
+      // Restored hard-deleted bills stay Cancelled if they were cancelled before delete.
+      if (isInvoiceCancelled(rec)) {
+        await logActivity(rec.firm_id, 'restore', 'invoice', id, `Invoice ${rec.bill_no} restored (still cancelled)`)
+      } else {
+        await restoreInvoiceEffects(rec)
+        await logActivity(rec.firm_id, 'restore', 'invoice', id, `Invoice ${rec.bill_no} restored`)
+      }
     }
     await load()
   }
@@ -158,6 +233,9 @@ export const useInvoiceStore = defineStore('invoices', () => {
   async function recordPayment(id: string, amount: number, isWriteOff: boolean, note = '', date = '') {
     const existing = await repo.get(id)
     if (!existing) return
+    if (!isInvoiceActive(existing)) {
+      throw new Error(`Invoice ${existing.bill_no} cancelled/deleted — payment nahi ho sakta`)
+    }
 
     const previousPaid = money(existing.amt_paid || 0)
     const outstanding = Math.max(0, money(existing.grand_total - previousPaid))
@@ -185,13 +263,23 @@ export const useInvoiceStore = defineStore('invoices', () => {
       notes: isWriteOff ? `${existing.notes || ''} [Write-off: ₹${writeOffAmt.toFixed(2)}]`.trim() : existing.notes
     })
 
-    // Post Receipt Voucher to ledger
     const accounting = useAccountingStore()
     await accounting.postPaymentVoucher(id, 'invoice', cashPaidForVoucher, isWriteOff, writeOffAmt, date, note)
 
     await load()
   }
 
-  return { list, loaded, load, add, update, remove, restore, recordPayment }
+  return {
+    list,
+    loaded,
+    load,
+    add,
+    update,
+    cancel,
+    uncancel,
+    hardDelete,
+    remove,
+    restore,
+    recordPayment,
+  }
 })
-

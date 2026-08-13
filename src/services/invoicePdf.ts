@@ -78,6 +78,7 @@ interface PdfBill {
   sub: number
   roundOff: number
   grandTotal: number
+  cancelled?: boolean
 }
 
 function toPdfFirm(firm: Firm): PdfFirm {
@@ -130,6 +131,7 @@ function toPdfBill(inv: Invoice, partyLookup?: PartyLookup): PdfBill {
     sub: inv.sub || 0,
     roundOff: inv.round_off || 0,
     grandTotal: inv.grand_total || 0,
+    cancelled: !!inv.cancelled_at,
   }
 }
 
@@ -612,6 +614,14 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
   }
   pdf.setFont('helvetica', 'normal').setFontSize(8)
   pdf.text('Authorised Signatory', sigX + footHalf / 2, PH - M - 5, { align: 'center' })
+
+  if (b.cancelled) {
+    pdf.setTextColor(200, 80, 80)
+    pdf.setFont('helvetica', 'bold').setFontSize(54)
+    // Diagonal watermark — low visual weight via light color (print-visible).
+    pdf.text('CANCELLED', PW / 2, PH / 2, { align: 'center', angle: -28 })
+    pdf.setTextColor(0, 0, 0)
+  }
 }
 
 export type InvoicePdfCopy = 'office' | 'transporter' | 'recipient'

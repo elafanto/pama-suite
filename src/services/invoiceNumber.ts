@@ -25,13 +25,13 @@ export function billNoKeys(billNo: string, prefix: string): string[] {
   return [...keys]
 }
 
-/** Highest numeric suffix used for this firm's bill prefix. */
+/** Highest numeric suffix used for this firm's bill prefix (includes soft-deleted). */
 export function maxBillSequence(invoices: Invoice[], firmId: string, prefix: string): number {
   const p = (prefix || 'INV').trim().toUpperCase() || 'INV'
   const prefixRe = new RegExp(`^${escapeRegex(p)}[-/\\s_]*0*(\\d+)`, 'i')
   let max = 0
   for (const inv of invoices) {
-    if (inv.is_deleted || inv.firm_id !== firmId) continue
+    if (inv.firm_id !== firmId) continue
     const no = (inv.bill_no || '').trim()
     if (!no) continue
     const m = no.match(prefixRe)
@@ -63,7 +63,8 @@ export function allocateBillNo(
   let seq = resolveNextSequence(firm, invoices)
   const existing = new Set<string>()
   for (const b of invoices) {
-    if (b.is_deleted || b.firm_id !== firm.id) continue
+    // Soft-deleted numbers stay reserved (GSTR Table 13 serial continuity).
+    if (b.firm_id !== firm.id) continue
     for (const k of billNoKeys(b.bill_no || '', prefix)) existing.add(k)
   }
 

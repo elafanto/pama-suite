@@ -478,7 +478,7 @@ function viewVoucherDetail(v: Voucher) {
 
 const customerLedgerRows = computed(() => {
   const firmId = firmStore.activeFirmId
-  return customerReceivableSummary(invoiceStore.list.filter(i => i.firm_id === firmId && !i.is_deleted))
+  return customerReceivableSummary(invoiceStore.list.filter(i => i.firm_id === firmId && !i.is_deleted && !i.cancelled_at))
 })
 
 const cashBookRows = computed(() => cashBookFromVouchers(accountingStore.vouchers, {

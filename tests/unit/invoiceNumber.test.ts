@@ -28,13 +28,13 @@ describe('maxBillSequence', () => {
     const invoices = [inv({ bill_no: 'INV-0001' }), inv({ bill_no: 'INV-0007' }), inv({ bill_no: 'INV-0003' })]
     expect(maxBillSequence(invoices, 'F1', 'INV')).toBe(7)
   })
-  it('ignores deleted invoices and other firms', () => {
+  it('includes soft-deleted invoices so cancelled numbers stay in the series', () => {
     const invoices = [
       inv({ bill_no: 'INV-0009', is_deleted: true }),
       inv({ bill_no: 'INV-0050', firm_id: 'F2' }),
       inv({ bill_no: 'INV-0004' }),
     ]
-    expect(maxBillSequence(invoices, 'F1', 'INV')).toBe(4)
+    expect(maxBillSequence(invoices, 'F1', 'INV')).toBe(9)
   })
   it('matches loose formats (spaces, slashes, no padding)', () => {
     expect(maxBillSequence([inv({ bill_no: 'INV/12' })], 'F1', 'INV')).toBe(12)
@@ -65,6 +65,11 @@ describe('allocateBillNo', () => {
   it('returns the stored counter when free', () => {
     const { billNo } = allocateBillNo(firm({ next_bill_no: 10 }), [])
     expect(billNo).toBe('INV-0010')
+  })
+  it('does not reuse a soft-deleted invoice number', () => {
+    const invoices = [inv({ bill_no: 'INV-0005', is_deleted: true })]
+    const { billNo } = allocateBillNo(firm({ next_bill_no: 5 }), invoices)
+    expect(billNo).toBe('INV-0006')
   })
 })
 

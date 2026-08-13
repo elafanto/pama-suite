@@ -1,5 +1,6 @@
 import type { Invoice } from '@/types/models'
 import type { Firm } from '@/types/models'
+import { isInvoiceActive } from '@/services/invoiceStatus'
 
 export interface StatementFilters {
   from?: string
@@ -15,7 +16,7 @@ function n2(n: number) {
 }
 
 function filterInvoices(list: Invoice[], firmId: string, f: StatementFilters): Invoice[] {
-  let data = list.filter(i => i.firm_id === firmId && !i.is_deleted)
+  let data = list.filter(i => i.firm_id === firmId && isInvoiceActive(i))
   if (f.from) data = data.filter(b => b.date >= f.from!)
   if (f.to) data = data.filter(b => b.date <= f.to!)
   if (f.customer) data = data.filter(b => b.party_name === f.customer)

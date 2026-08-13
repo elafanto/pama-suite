@@ -1,4 +1,5 @@
 import type { Account, Invoice } from '@/types/models'
+import { isInvoiceActive } from '@/services/invoiceStatus'
 
 const STATE_NAMES: Record<string, string> = {
   '01': 'Jammu & Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab', '04': 'Chandigarh',
@@ -30,7 +31,7 @@ export function filterInvoices(
   to?: string
 ): Invoice[] {
   let list = invoices.filter(
-    i => !i.is_deleted && i.firm_id === firmId && (i.doc_type === 'INVOICE' || i.doc_type === 'invoice')
+    i => isInvoiceActive(i) && i.firm_id === firmId && (i.doc_type === 'INVOICE' || i.doc_type === 'invoice')
   )
   if (from) list = list.filter(i => i.date >= from)
   if (to) list = list.filter(i => i.date <= to)
