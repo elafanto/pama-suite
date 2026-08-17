@@ -112,9 +112,13 @@ export async function attachDocumentFromFile(input: AttachDocumentInput): Promis
   if (!firmId || !input.entityId) return null
 
   validateDocumentFileSize(input.file)
+
   const prepared = await prepareDocumentFile(input.file)
   if (prepared.blob.size > DOCUMENT_MAX_BYTES) {
-    throw new Error(`Compressed file bhi ${formatBytes(DOCUMENT_MAX_BYTES)} se badi hai. Chhota photo/PDF upload karein.`)
+    throw new Error(
+      `${input.file.name}: file ${formatBytes(prepared.blob.size)} hai after compression. `
+      + `Maximum ${formatBytes(DOCUMENT_MAX_BYTES)} allowed — chhota PDF ya kam pages wali file use karein.`,
+    )
   }
 
   const stats = await getDocumentStorageStats(firmId)

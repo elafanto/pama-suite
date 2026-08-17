@@ -1,6 +1,10 @@
 const MAX_IMAGE_DIM = 2000
 const JPEG_QUALITY = 0.82
 const TARGET_MAX_BYTES = 1.2 * 1024 * 1024
+/** Re-render large scan PDFs as JPEG pages so cloud storage stays manageable. */
+const PDF_COMPRESS_THRESHOLD_BYTES = 8 * 1024 * 1024
+const STORAGE_PDF_SCALE = 1.3
+const STORAGE_JPEG_QUALITY = 0.68
 
 export interface PreparedDocumentFile {
   blob: Blob
@@ -72,9 +76,46 @@ async function compressImageFile(file: File): Promise<PreparedDocumentFile> {
   }
 }
 
-/** Compress photos for cloud storage; PDFs pass through unchanged. */
+async function compressPdfForStorage(file: File): Promise<PreparedDocumentFile> {
+  const { extractPdfPageImages } = await import('@/services/pdfPageImages')
+  const { jsPDF } = await import('jspdf')
+  const pages = await extractPdfPageImages(file, {
+    scale: STORAGE_PDF_SCALE,
+    jpegQuality: STORAGE_JPEG_QUALITY,
+  })
+  if (!pages.length) throw new Error(`${file.name}: PDF has no pages`)
+
+  let doc: InstanceType<typeof jsPDF> | null = null
+  for (const page of pages) {
+    const img = `data:image/jpeg;base64,${page.base64}`
+    const orient = page.width > page.height ? 'landscape' : 'portrait'
+    if (!doc) {
+      doc = new jsPDF({ orientation: orient, unit: 'px', format: [page.width, page.height], compress: true })
+    } else {
+      doc.addPage([page.width, page.height], orient)
+    }
+    doc.addImage(img, 'JPEG', 0, 0, page.width, page.height, undefined, 'FAST')
+  }
+
+  const blob = doc!.output('blob') as Blob
+  return {
+    blob,
+    mime: 'application/pdf',
+    originalSize: file.size,
+    compressed: blob.size < file.size,
+  }
+}
+
+/** Compress photos for cloud storage; large PDFs are re-rendered to a smaller file. */
 export async function prepareDocumentFile(file: File): Promise<PreparedDocumentFile> {
   if (isPdf(file)) {
+    if (file.size > PDF_COMPRESS_THRESHOLD_BYTES) {
+      try {
+        return await compressPdfForStorage(file)
+      } catch {
+        return { blob: file, mime: 'application/pdf', originalSize: file.size, compressed: false }
+      }
+    }
     return { blob: file, mime: 'application/pdf', originalSize: file.size, compressed: false }
   }
   if (isImage(file)) {

@@ -15,6 +15,15 @@ export type PdfPageImage = {
   pageNumber: number
   base64: string
   mime: 'image/jpeg'
+  width: number
+  height: number
+}
+
+export type ExtractPdfPageOptions = {
+  maxPages?: number
+  scale?: number
+  jpegQuality?: number
+  onPageRendered?: (pageNumber: number, totalPages: number) => void
 }
 
 async function loadPdfDocument(file: File) {
@@ -29,11 +38,13 @@ export async function getPdfPageCount(file: File): Promise<number> {
 
 export async function extractPdfPageImages(
   file: File,
-  opts?: { maxPages?: number; onPageRendered?: (pageNumber: number, totalPages: number) => void },
+  opts?: ExtractPdfPageOptions,
 ): Promise<PdfPageImage[]> {
   const pdf = await loadPdfDocument(file)
   const totalPages = pdf.numPages
   const maxPages = Math.min(opts?.maxPages ?? MAX_PDF_PAGES, totalPages, MAX_PDF_PAGES)
+  const scale = opts?.scale ?? PAGE_RENDER_SCALE
+  const jpegQuality = opts?.jpegQuality ?? JPEG_QUALITY
 
   if (totalPages > MAX_PDF_PAGES) {
     throw new Error(`${file.name}: PDF has ${totalPages} pages. Maximum supported is ${MAX_PDF_PAGES}.`)
@@ -42,7 +53,7 @@ export async function extractPdfPageImages(
   const pages: PdfPageImage[] = []
   for (let pageNumber = 1; pageNumber <= maxPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber)
-    const viewport = page.getViewport({ scale: PAGE_RENDER_SCALE })
+    const viewport = page.getViewport({ scale })
     const canvas = document.createElement('canvas')
     canvas.width = Math.ceil(viewport.width)
     canvas.height = Math.ceil(viewport.height)
@@ -50,11 +61,17 @@ export async function extractPdfPageImages(
     if (!context) throw new Error(`Could not render PDF page ${pageNumber}`)
 
     await page.render({ canvasContext: context, viewport }).promise
-    const dataUrl = canvas.toDataURL('image/jpeg', JPEG_QUALITY)
+    const dataUrl = canvas.toDataURL('image/jpeg', jpegQuality)
     const base64 = dataUrl.split(',')[1]
     if (!base64) throw new Error(`Could not encode PDF page ${pageNumber}`)
 
-    pages.push({ pageNumber, base64, mime: 'image/jpeg' })
+    pages.push({
+      pageNumber,
+      base64,
+      mime: 'image/jpeg',
+      width: canvas.width,
+      height: canvas.height,
+    })
     opts?.onPageRendered?.(pageNumber, totalPages)
   }
 

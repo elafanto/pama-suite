@@ -4,7 +4,7 @@ import { downloadAttachmentBlob } from '@/services/documentAttachments'
 import { sanitizePathSegment } from '@/services/documentNaming'
 import type { DocumentAttachment } from '@/types/models'
 
-export const DOCUMENT_MAX_BYTES = 10 * 1024 * 1024
+export const DOCUMENT_MAX_BYTES = 20 * 1024 * 1024
 
 export interface IndianFYRange {
   label: string
