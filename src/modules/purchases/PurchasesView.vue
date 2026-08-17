@@ -9,7 +9,7 @@ import { usePurchaseStore } from '@/stores/purchases'
 import { useSettingsStore } from '@/stores/settings'
 import PpModal from '@/components/PpModal.vue'
 import AiScanPanel from '@/components/AiScanPanel.vue'
-import { fileToBase64, scanPurchaseBillsPdf, type ScanResult } from '@/services/aiScanner'
+import { scanPurchaseBillsFromFile, formatMultiBillScanWaitHint, type ScanResult } from '@/services/aiScanner'
 import {
   attachDocumentFromFile,
   openEntityDocument,
@@ -882,15 +882,25 @@ async function scanBulkPurchaseFiles(e: Event) {
       bulkScanFileStatuses.value[idx] = {
         name: file.name,
         status: 'scanning',
-        message: `Scanning ${idx + 1}/${files.length}`,
+        message: formatMultiBillScanWaitHint(file.size, file.type || 'application/pdf'),
       }
       bulkScanStatus.value = files.length === 1
-        ? 'Scanning bill file with Gemini...'
-        : `Scanning ${idx + 1} of ${files.length} bill files with Gemini...`
+        ? formatMultiBillScanWaitHint(file.size, file.type || 'application/pdf')
+        : `File ${idx + 1}/${files.length}: ${formatMultiBillScanWaitHint(file.size, file.type || 'application/pdf')}`
 
       try {
-        const { base64, mime } = await fileToBase64(file, { allowImages: true, allowPdf: true })
-        const result = await scanPurchaseBillsPdf(settingsStore.geminiKey, base64, mime)
+        const result = await scanPurchaseBillsFromFile(settingsStore.geminiKey, file, {
+          onProgress: ({ message }) => {
+            bulkScanFileStatuses.value[idx] = {
+              name: file.name,
+              status: 'scanning',
+              message,
+            }
+            bulkScanStatus.value = files.length === 1
+              ? message
+              : `File ${idx + 1}/${files.length}: ${message}`
+          },
+        })
         const bills = (result.bills || [])
           .filter((b) => b.supplierName || b.billNo || b.items?.length)
           .map((b) => ({ ...b, _sourceFile: file }))
@@ -1587,6 +1597,7 @@ onMounted(async () => {
           <div class="min-w-0">
             <p class="text-sm font-semibold text-navy">AI Multi-Bill Scan</p>
             <p class="text-xs text-slate-500">Ek popup me multiple PDF ya image files select kar sakte ho. Har file me ek ya multiple bills ho sakte hain.</p>
+            <p class="text-xs text-slate-400">Large PDFs (4+ pages or 4MB+) scan page-by-page — 20–30 page file ~15–20 min. Max 20MB / 50 pages.</p>
             <p class="text-xs text-slate-400">Mobile file picker agar multiple select restrict kare, phir bhi upload button yahin se use karo.</p>
           </div>
           <label class="pp-btn pp-btn-primary w-full cursor-pointer text-center sm:w-auto">

@@ -3,9 +3,18 @@
 const GEMINI_MODEL = 'gemini-2.5-flash'
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta'
 const GEMINI_TIMEOUT_MS = 45_000
+/** Multi-page purchase PDFs need more time than a single invoice photo. */
+const GEMINI_MULTI_BILL_TIMEOUT_MS = 120_000
+const GEMINI_LARGE_PDF_TIMEOUT_MS = 180_000
+const GEMINI_PAGE_SCAN_TIMEOUT_MS = 60_000
+const LARGE_PDF_BYTES = 2 * 1024 * 1024
+/** Whole-PDF scan is unreliable above this size — use page-by-page instead. */
+export const PAGE_BY_PAGE_PDF_BYTES = 4 * 1024 * 1024
+export const PAGE_BY_PAGE_MIN_PAGES = 4
 const GEMINI_MAX_ATTEMPTS = 3
+const GEMINI_MULTI_BILL_MAX_ATTEMPTS = 2
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
-const MAX_PDF_BYTES = 10 * 1024 * 1024
+const MAX_PDF_BYTES = 20 * 1024 * 1024
 
 const SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 const SUPPORTED_PDF_MIME_TYPES = new Set(['application/pdf'])
@@ -84,6 +93,60 @@ function isRetryableError(err: unknown) {
   return err instanceof Error && (err.name === 'AbortError' || err.name === 'TypeError')
 }
 
+function isTimeoutError(err: unknown) {
+  return err instanceof Error && /timed out/i.test(err.message)
+}
+
+/** How long to wait for Gemini (multi-bill PDF/image scans). */
+export function resolveMultiBillScanTimeoutMs(fileSizeBytes?: number, mimeType?: string): number {
+  if (mimeType === 'application/pdf') {
+    if (fileSizeBytes && fileSizeBytes >= PAGE_BY_PAGE_PDF_BYTES) return GEMINI_LARGE_PDF_TIMEOUT_MS
+    if (fileSizeBytes && fileSizeBytes >= LARGE_PDF_BYTES) return GEMINI_LARGE_PDF_TIMEOUT_MS
+    return GEMINI_MULTI_BILL_TIMEOUT_MS
+  }
+  return GEMINI_MULTI_BILL_TIMEOUT_MS
+}
+
+export function shouldUsePageByPagePdfScan(fileSizeBytes: number, pageCount: number): boolean {
+  return pageCount >= PAGE_BY_PAGE_MIN_PAGES || fileSizeBytes >= PAGE_BY_PAGE_PDF_BYTES
+}
+
+export function formatMultiBillScanWaitHint(
+  fileSizeBytes?: number,
+  mimeType?: string,
+  pageCount?: number,
+): string {
+  if (mimeType === 'application/pdf' && pageCount && shouldUsePageByPagePdfScan(fileSizeBytes || 0, pageCount)) {
+    const secPerPage = Math.round(GEMINI_PAGE_SCAN_TIMEOUT_MS / 1000)
+    const estMin = Math.max(1, Math.ceil((pageCount * secPerPage) / 60))
+    return `${pageCount}-page PDF — scanning page-by-page (~${estMin} min). Keep this tab open.`
+  }
+  const sec = Math.round(resolveMultiBillScanTimeoutMs(fileSizeBytes, mimeType) / 1000)
+  if (mimeType === 'application/pdf' && fileSizeBytes && fileSizeBytes >= LARGE_PDF_BYTES) {
+    return `Large PDF — up to ${sec}s per attempt. Keep this tab open.`
+  }
+  if (mimeType === 'application/pdf') {
+    return `PDF scan — up to ${sec}s. Multi-page bills take longer.`
+  }
+  return `Scanning — up to ${sec}s.`
+}
+
+export type ScanProgressCallback = (info: {
+  phase: 'render' | 'scan'
+  current: number
+  total: number
+  message: string
+}) => void
+
+function isMeaningfulBill(bill: ScanResult) {
+  return Boolean(bill.supplierName?.trim() || bill.billNo?.trim() || bill.items?.length)
+}
+
+type GenerateJsonOptions = {
+  timeoutMs?: number
+  maxAttempts?: number
+}
+
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
   const controller = new AbortController()
   const timeoutId = globalThis.setTimeout(() => controller.abort(), timeoutMs)
@@ -150,9 +213,18 @@ function tryParseJson(text: string): { ok: true; value: unknown } | { ok: false 
   }
 }
 
-async function generateJson<T>(apiKey: string, prompt: string, base64: string, mimeType: string, label: string): Promise<T> {
+async function generateJson<T>(
+  apiKey: string,
+  prompt: string,
+  base64: string,
+  mimeType: string,
+  label: string,
+  options: GenerateJsonOptions = {},
+): Promise<T> {
   if (!apiKey) throw new Error('Gemini API key missing — Settings me save karo')
 
+  const timeoutMs = options.timeoutMs ?? GEMINI_TIMEOUT_MS
+  const maxAttempts = options.maxAttempts ?? GEMINI_MAX_ATTEMPTS
   const url = `${GEMINI_API_BASE}/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`
   const init: RequestInit = {
     method: 'POST',
@@ -169,14 +241,14 @@ async function generateJson<T>(apiKey: string, prompt: string, base64: string, m
   }
 
   let lastError: unknown
-  for (let attempt = 1; attempt <= GEMINI_MAX_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      const res = await fetchWithTimeout(url, init, GEMINI_TIMEOUT_MS)
+      const res = await fetchWithTimeout(url, init, timeoutMs)
 
       if (!res.ok) {
         const err = await res.text()
         const message = `Gemini ${GEMINI_MODEL} error while scanning ${label}: ${res.status} ${err.slice(0, 240)}`
-        if (attempt < GEMINI_MAX_ATTEMPTS && isRetryableStatus(res.status)) {
+        if (attempt < maxAttempts && isRetryableStatus(res.status)) {
           lastError = new Error(message)
           await sleep(500 * attempt)
           continue
@@ -189,12 +261,12 @@ async function generateJson<T>(apiKey: string, prompt: string, base64: string, m
       return extractJsonPayload(text, label) as T
     } catch (err) {
       lastError = err
-      if (attempt < GEMINI_MAX_ATTEMPTS && isRetryableError(err)) {
+      if (attempt < maxAttempts && isRetryableError(err)) {
         await sleep(500 * attempt)
         continue
       }
       throw err instanceof Error && err.name === 'AbortError'
-        ? new Error(`Gemini ${GEMINI_MODEL} timed out while scanning ${label}`)
+        ? new Error(`Gemini ${GEMINI_MODEL} timed out while scanning ${label} (waited ${Math.round(timeoutMs / 1000)}s)`)
         : err
     }
   }
@@ -206,7 +278,8 @@ async function generateJson<T>(apiKey: string, prompt: string, base64: string, m
 export async function scanInvoiceImage(
   apiKey: string,
   base64: string,
-  mimeType: string
+  mimeType: string,
+  opts?: { timeoutMs?: number },
 ): Promise<ScanResult> {
   const prompt = `You are an invoice OCR assistant for Indian GST bills. Extract JSON only (no markdown):
 For paper reel stock lines, extract reel metadata when visible. Use paperType "KRAFT" for kraft paper and "DUPLEX" for duplex paper. Use color "NS" for Natural Shade/Natural Brown/Neutral Brown and "GY" for Golden Yellow. Deckle/reel size can go in deckleSize and reelSize.
@@ -231,14 +304,18 @@ For paper reel stock lines, extract reel metadata when visible. Use paperType "K
   }],
   "sub": 0, "totalTax": 0, "grandTotal": 0
 }`
-  return generateJson<ScanResult>(apiKey, prompt, base64, mimeType, 'purchase invoice')
+  return generateJson<ScanResult>(apiKey, prompt, base64, mimeType, 'purchase invoice', {
+    timeoutMs: opts?.timeoutMs,
+  })
 }
 
 export async function scanPurchaseBillsPdf(
   apiKey: string,
   base64: string,
   mimeType: string,
+  opts?: { fileSizeBytes?: number; pageCount?: number },
 ): Promise<PurchaseBillsScanResult> {
+  const timeoutMs = resolveMultiBillScanTimeoutMs(opts?.fileSizeBytes, mimeType)
   const prompt = `You are an OCR assistant for Indian purchase invoice documents.
 The uploaded file may be a PDF or image and may contain one or many supplier bills/invoices, often one invoice per page.
 Extract all purchase bills as JSON only, no markdown. If uncertain, still return the best structured data and leave missing fields blank.
@@ -284,8 +361,111 @@ For paper reel lines, extract paperType ("KRAFT" for kraft paper, "DUPLEX" for d
     }
   ]
 }`
-  const result = await generateJson<PurchaseBillsScanResult>(apiKey, prompt, base64, mimeType, 'multi purchase bill document')
-  return { bills: Array.isArray(result?.bills) ? result.bills : [] }
+  try {
+    const result = await generateJson<PurchaseBillsScanResult>(
+      apiKey,
+      prompt,
+      base64,
+      mimeType,
+      'multi purchase bill document',
+      { timeoutMs, maxAttempts: GEMINI_MULTI_BILL_MAX_ATTEMPTS },
+    )
+    const bills = Array.isArray(result?.bills) ? result.bills : []
+    if (bills.length) return { bills }
+  } catch (err) {
+    if (!isTimeoutError(err)) throw err
+    // Fallback: treat whole document as one invoice (faster prompt path).
+    try {
+      const single = await scanInvoiceImage(apiKey, base64, mimeType, { timeoutMs })
+      if (single.supplierName || single.billNo || single.items?.length) {
+        return { bills: [single] }
+      }
+    } catch {
+      /* keep original timeout error */
+    }
+    throw new Error(
+      `${err instanceof Error ? err.message : 'Scan timed out'}. `
+      + 'Try a smaller PDF, fewer pages, or scan one bill at a time from the New Bill tab.',
+    )
+  }
+  return { bills: [] }
+}
+
+export async function scanPurchaseBillsFromFile(
+  apiKey: string,
+  file: File,
+  opts?: { onProgress?: ScanProgressCallback },
+): Promise<PurchaseBillsScanResult> {
+  const { mime, isPdf } = validateScanFile(file, { allowImages: true, allowPdf: true })
+
+  if (!isPdf) {
+    const { base64 } = await fileToBase64(file, { allowImages: true, allowPdf: true })
+    return scanPurchaseBillsPdf(apiKey, base64, mime, { fileSizeBytes: file.size })
+  }
+
+  const { getPdfPageCount, extractPdfPageImages } = await import('@/services/pdfPageImages')
+  const pageCount = await getPdfPageCount(file)
+
+  if (!shouldUsePageByPagePdfScan(file.size, pageCount)) {
+    const { base64 } = await fileToBase64(file, { allowImages: true, allowPdf: true })
+    return scanPurchaseBillsPdf(apiKey, base64, mime, { fileSizeBytes: file.size, pageCount })
+  }
+
+  opts?.onProgress?.({
+    phase: 'render',
+    current: 0,
+    total: pageCount,
+    message: `Preparing ${pageCount}-page PDF...`,
+  })
+
+  const pages = await extractPdfPageImages(file, {
+    onPageRendered: (current, total) => {
+      opts?.onProgress?.({
+        phase: 'render',
+        current,
+        total,
+        message: `Rendering page ${current}/${total}...`,
+      })
+    },
+  })
+
+  const bills: ScanResult[] = []
+  let failedPages = 0
+
+  for (const page of pages) {
+    opts?.onProgress?.({
+      phase: 'scan',
+      current: page.pageNumber,
+      total: pages.length,
+      message: `Scanning page ${page.pageNumber}/${pages.length} with Gemini...`,
+    })
+
+    try {
+      const bill = await scanInvoiceImage(apiKey, page.base64, page.mime, {
+        timeoutMs: GEMINI_PAGE_SCAN_TIMEOUT_MS,
+      })
+      if (isMeaningfulBill(bill)) bills.push(bill)
+    } catch {
+      failedPages += 1
+    }
+  }
+
+  if (!bills.length && failedPages === pages.length) {
+    throw new Error(
+      `${file.name}: All ${pages.length} page scans failed. Check Gemini API key and network, then retry.`,
+    )
+  }
+
+  if (failedPages) {
+    opts?.onProgress?.({
+      phase: 'scan',
+      current: pages.length,
+      total: pages.length,
+      message: `${bills.length} bill(s) from ${pages.length - failedPages}/${pages.length} pages.`,
+    })
+  }
+
+  return { bills }
 }
 
 export interface VoucherScanResult {
