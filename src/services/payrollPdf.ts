@@ -128,8 +128,11 @@ function addPayslipPage(
   const drawContinuingHeader = (): number => {
     let hy = 12
     pdf.setFont('helvetica', 'bold').setFontSize(10)
-    pdf.text(`${firm?.name || 'Firm'} — ${line.staff_name}`, L, hy)
-    hy += 5
+    const headerLines = pdf.splitTextToSize(`${firm?.name || 'Firm'} — ${line.staff_name}`, W)
+    headerLines.forEach((row: string) => {
+      pdf.text(row, L, hy)
+      hy += 4.5
+    })
     pdf.setFont('helvetica', 'normal').setFontSize(8)
     pdf.text(`Day-wise detail continued — ${periodLabel(period)}`, L, hy)
     hy += 6
@@ -138,12 +141,18 @@ function addPayslipPage(
 
   // —— Summary header ——
   pdf.setFont('helvetica', 'bold').setFontSize(14)
-  pdf.text((firm?.name || 'Firm').toUpperCase(), PW / 2, y, { align: 'center' })
-  y += 5
+  const firmNameLines = pdf.splitTextToSize((firm?.name || 'Firm').toUpperCase(), W)
+  firmNameLines.forEach((line: string) => {
+    pdf.text(line, PW / 2, y, { align: 'center' })
+    y += 5
+  })
   pdf.setFont('helvetica', 'normal').setFontSize(8)
   if (firm?.addr) {
-    pdf.text(firm.addr, PW / 2, y, { align: 'center', maxWidth: W - 10 })
-    y += 4
+    const addrLines = pdf.splitTextToSize(firm.addr, W - 10)
+    addrLines.forEach((line: string) => {
+      pdf.text(line, PW / 2, y, { align: 'center' })
+      y += 4
+    })
   }
   if (firm?.phone) {
     pdf.text(`Phone: ${firm.phone}`, PW / 2, y, { align: 'center' })
@@ -161,9 +170,12 @@ function addPayslipPage(
   y += 2
 
   pdf.setFont('helvetica', 'normal').setFontSize(9)
-  pdf.text(`Employee: ${line.staff_name}`, L, y)
+  const empLines = pdf.splitTextToSize(`Employee: ${line.staff_name}`, W * 0.58)
+  empLines.forEach((row: string, idx: number) => {
+    pdf.text(row, L, y + idx * 4.5)
+  })
   pdf.text(`Type: ${payrollPayTypeLabel(line.pay_type)}`, R, y, { align: 'right' })
-  y += 5
+  y += Math.max(5, empLines.length * 4.5)
   pdf.text(`Monthly: ${money(line.monthly_amount)}`, L, y)
   pdf.text(`Daily: ${money(line.daily_wage)}  |  Hourly: ${money(line.hourly_wage)}`, R, y, { align: 'right' })
   y += 5

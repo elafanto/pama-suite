@@ -2133,10 +2133,10 @@ onMounted(async () => {
           >CANCELLED</div>
           <!-- Document Header -->
           <div class="text-center border-b border-black pb-2 mb-3">
-            <h1 class="text-lg font-bold uppercase tracking-wider">{{ firmStore.activeFirm?.name || 'PAMA PACKAGING' }}</h1>
-            <p>{{ firmStore.activeFirm?.addr || '' }}</p>
-            <p>PIN: {{ firmStore.activeFirm?.pin || '-' }} | Mob: {{ firmStore.activeFirm?.phone || '' }} | Email: {{ firmStore.activeFirm?.email || '-' }}</p>
-            <p class="text-sm font-semibold mt-1">
+            <h1 class="text-lg font-bold uppercase tracking-wider break-words">{{ firmStore.activeFirm?.name || 'PAMA PACKAGING' }}</h1>
+            <p class="break-words whitespace-pre-wrap">{{ firmStore.activeFirm?.addr || '' }}</p>
+            <p class="break-words">PIN: {{ firmStore.activeFirm?.pin || '-' }} | Mob: {{ firmStore.activeFirm?.phone || '' }} | Email: {{ firmStore.activeFirm?.email || '-' }}</p>
+            <p class="text-sm font-semibold mt-1 break-words">
               GSTIN: {{ formatGstin(firmStore.activeFirm?.gst) || '-' }} | State: {{ getStateName(firmStore.activeFirm?.gst || firmStore.activeFirm?.state) }} (Code: {{ firmStore.activeFirm?.state || '-' }})
             </p>
             <div class="text-center uppercase font-bold text-xs bg-black text-white py-1 mt-2 tracking-widest">
@@ -2147,28 +2147,28 @@ onMounted(async () => {
           <!-- Customer Cards & Invoice Meta -->
           <table class="w-full mb-3 border-collapse text-left">
             <tr>
-              <td class="w-[35%] border border-black p-2 vertical-align-top text-[11px]">
+              <td class="w-[35%] border border-black p-2 align-top text-[11px] break-words">
                 <strong class="block mb-1 border-b border-black pb-0.5">Bill To (Buyer):</strong>
-                <strong>{{ previewInvoice.party_name }}</strong><br />
-                {{ previewBuyerDetails.addr || '' }}<br />
+                <strong class="break-words">{{ previewInvoice.party_name }}</strong><br />
+                <span class="whitespace-pre-wrap break-words">{{ previewBuyerDetails.addr || '' }}</span><br />
                 {{ previewBuyerDetails.city }} - {{ previewBuyerDetails.pin }}<br />
                 <span class="text-sm font-semibold font-mono">GSTIN: {{ previewBuyerDetails.gst || 'URD (Consumer)' }}</span><br />
                 State: {{ getStateName(previewBuyerDetails.gst || previewBuyerDetails.state) }} (Code: {{ previewBuyerDetails.state || '-' }})
               </td>
-              <td class="w-[35%] border border-black p-2 vertical-align-top text-[11px]">
+              <td class="w-[35%] border border-black p-2 align-top text-[11px] break-words">
                 <strong class="block mb-1 border-b border-black pb-0.5">Ship To (Consignee):</strong>
                 <template v-if="previewInvoice.sameAsBuyer !== false">
                   <em>Same as Buyer</em>
                 </template>
                 <template v-else-if="previewShipDetails">
-                  <strong>{{ previewShipDetails.name }}</strong><br />
-                  {{ previewShipDetails.addr }}<br />
+                  <strong class="break-words">{{ previewShipDetails.name }}</strong><br />
+                  <span class="whitespace-pre-wrap break-words">{{ previewShipDetails.addr }}</span><br />
                   {{ previewShipDetails.city }} - {{ previewShipDetails.pin }}<br />
                   <span class="text-sm font-semibold font-mono">GSTIN: {{ previewShipDetails.gstin || 'URD' }}</span><br />
                   State: {{ getStateName(previewShipDetails.gstin || previewShipDetails.state) }} (Code: {{ previewShipDetails.state || '-' }})
                 </template>
               </td>
-              <td class="w-[30%] border border-black p-2 vertical-align-top text-[11px] space-y-1">
+              <td class="w-[30%] border border-black p-2 align-top text-[11px] space-y-1 break-words">
                 <div><strong>Invoice No:</strong> {{ previewInvoice.bill_no }}</div>
                 <div><strong>Date:</strong> {{ new Date(previewInvoice.date).toLocaleDateString('en-IN') }}</div>
                 <div><strong>Ref:</strong> {{ previewInvoice.ref || '-' }}</div>
@@ -2180,14 +2180,14 @@ onMounted(async () => {
           <!-- Transport Info -->
           <table class="w-full mb-3 border-collapse text-left">
             <tr class="border-b border-black">
-              <td class="border border-black p-1 text-[10px]"><strong>Dispatch:</strong> {{ previewInvoice.dispatch || '-' }}</td>
-              <td class="border border-black p-1 text-[10px]"><strong>LR/RR No:</strong> {{ previewInvoice.lr || '-' }}</td>
-              <td class="border border-black p-1 text-[10px]"><strong>Vehicle:</strong> {{ previewInvoice.vehicle || '-' }}</td>
+              <td class="border border-black p-1 text-[10px] break-words"><strong>Dispatch:</strong> {{ previewInvoice.dispatch || '-' }}</td>
+              <td class="border border-black p-1 text-[10px] break-words"><strong>LR/RR No:</strong> {{ previewInvoice.lr || '-' }}</td>
+              <td class="border border-black p-1 text-[10px] break-words"><strong>Vehicle:</strong> {{ previewInvoice.vehicle || '-' }}</td>
             </tr>
             <tr>
-              <td class="border border-black p-1 text-[10px]"><strong>E-Way Bill:</strong> {{ previewInvoice.eway || '-' }}</td>
-              <td class="border border-black p-1 text-[10px]"><strong>Destination:</strong> {{ previewInvoice.dest || '-' }}</td>
-              <td class="border border-black p-1 text-[10px]"><strong>Distance:</strong> {{ previewInvoice.distance || 0 }} km</td>
+              <td class="border border-black p-1 text-[10px] break-words"><strong>E-Way Bill:</strong> {{ previewInvoice.eway || '-' }}</td>
+              <td class="border border-black p-1 text-[10px] break-words"><strong>Destination:</strong> {{ previewInvoice.dest || '-' }}</td>
+              <td class="border border-black p-1 text-[10px] break-words"><strong>Distance:</strong> {{ previewInvoice.distance || 0 }} km</td>
             </tr>
           </table>
 
@@ -2208,8 +2208,8 @@ onMounted(async () => {
             <tbody>
               <tr v-for="(r, idx) in previewInvoice.items" :key="idx" class="border-b border-black/40 text-[11px]">
                 <td class="border-r border-black p-1 text-center">{{ idx + 1 }}</td>
-                <td class="border-r border-black p-1">
-                  <strong>{{ r.name }}</strong>
+                <td class="border-r border-black p-1 break-words">
+                  <strong class="break-words">{{ r.name }}</strong>
                   <div v-if="r.size || r.gsm || r.bf || r.extra" class="text-[9px] text-slate-500 italic mt-0.5">
                     {{ [r.size, r.gsm ? r.gsm+'gsm' : '', r.bf ? r.bf+'bf' : '', r.extra].filter(Boolean).join(' | ') }}
                   </div>
@@ -2288,8 +2288,8 @@ onMounted(async () => {
                 {{ firmStore.activeFirm?.terms || 'We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.' }}
               </div>
             </div>
-            <div class="text-center flex flex-col justify-between items-center h-28 pt-2">
-              <strong class="uppercase text-[9px]">For {{ firmStore.activeFirm?.name || 'PAMA PACKAGING' }}</strong>
+            <div class="text-center flex flex-col justify-between items-center min-h-28 pt-2">
+              <strong class="uppercase text-[9px] break-words px-1">For {{ firmStore.activeFirm?.name || 'PAMA PACKAGING' }}</strong>
               <img v-if="firmSignatureUrl()" :src="firmSignatureUrl()" alt="Signature" class="max-h-14 max-w-[140px] object-contain" />
               <div class="border-t border-black/40 w-32 pt-1 font-bold text-[9px] uppercase">Authorised Signatory</div>
             </div>
@@ -2309,10 +2309,10 @@ onMounted(async () => {
       >CANCELLED</div>
       <!-- Document Header -->
       <div class="text-center border-b border-black pb-2 mb-3">
-        <h1 class="text-lg font-bold uppercase tracking-wider">{{ firmStore.activeFirm?.name || 'PAMA PACKAGING' }}</h1>
-        <p>{{ firmStore.activeFirm?.addr || '' }}</p>
-        <p>PIN: {{ firmStore.activeFirm?.pin || '-' }}<template v-if="firmStore.activeFirm?.phone"> | Mob: {{ firmStore.activeFirm.phone }}</template> | Email: {{ firmStore.activeFirm?.email || '-' }}</p>
-        <p class="text-sm font-semibold mt-1">
+        <h1 class="text-lg font-bold uppercase tracking-wider break-words">{{ firmStore.activeFirm?.name || 'PAMA PACKAGING' }}</h1>
+        <p class="break-words whitespace-pre-wrap">{{ firmStore.activeFirm?.addr || '' }}</p>
+        <p class="break-words">PIN: {{ firmStore.activeFirm?.pin || '-' }}<template v-if="firmStore.activeFirm?.phone"> | Mob: {{ firmStore.activeFirm.phone }}</template> | Email: {{ firmStore.activeFirm?.email || '-' }}</p>
+        <p class="text-sm font-semibold mt-1 break-words">
           GSTIN: {{ formatGstin(firmStore.activeFirm?.gst) || '-' }} | State: {{ getStateName(firmStore.activeFirm?.gst || firmStore.activeFirm?.state) }} (Code: {{ firmStore.activeFirm?.state || '-' }})
         </p>
         <div class="text-center uppercase font-bold text-xs bg-black text-white py-1 mt-2 tracking-widest">
@@ -2323,28 +2323,28 @@ onMounted(async () => {
       <!-- Customer Cards & Invoice Meta -->
       <table class="w-full mb-3 border-collapse text-left">
         <tr>
-          <td class="w-[35%] border border-black p-2 vertical-align-top text-[11px]">
+          <td class="w-[35%] border border-black p-2 align-top text-[11px] break-words">
             <strong class="block mb-1 border-b border-black pb-0.5">Bill To (Buyer):</strong>
-            <strong>{{ previewInvoice.party_name }}</strong><br />
-            {{ previewBuyerDetails.addr || '' }}<br />
+            <strong class="break-words">{{ previewInvoice.party_name }}</strong><br />
+            <span class="whitespace-pre-wrap break-words">{{ previewBuyerDetails.addr || '' }}</span><br />
             {{ previewBuyerDetails.city }} - {{ previewBuyerDetails.pin }}<br />
             <span class="text-sm font-semibold font-mono">GSTIN: {{ previewBuyerDetails.gst || 'URD (Consumer)' }}</span><br />
             State: {{ getStateName(previewBuyerDetails.gst || previewBuyerDetails.state) }} (Code: {{ previewBuyerDetails.state || '-' }})
           </td>
-          <td class="w-[35%] border border-black p-2 vertical-align-top text-[11px]">
+          <td class="w-[35%] border border-black p-2 align-top text-[11px] break-words">
             <strong class="block mb-1 border-b border-black pb-0.5">Ship To (Consignee):</strong>
             <template v-if="previewInvoice.sameAsBuyer !== false">
               <em>Same as Buyer</em>
             </template>
             <template v-else-if="previewShipDetails">
-              <strong>{{ previewShipDetails.name }}</strong><br />
-              {{ previewShipDetails.addr }}<br />
+              <strong class="break-words">{{ previewShipDetails.name }}</strong><br />
+              <span class="whitespace-pre-wrap break-words">{{ previewShipDetails.addr }}</span><br />
               {{ previewShipDetails.city }} - {{ previewShipDetails.pin }}<br />
               <span class="text-sm font-semibold font-mono">GSTIN: {{ previewShipDetails.gstin || 'URD' }}</span><br />
               State: {{ getStateName(previewShipDetails.gstin || previewShipDetails.state) }} (Code: {{ previewShipDetails.state || '-' }})
             </template>
           </td>
-          <td class="w-[30%] border border-black p-2 vertical-align-top text-[11px] space-y-1">
+          <td class="w-[30%] border border-black p-2 align-top text-[11px] space-y-1 break-words">
             <div><strong>Invoice No:</strong> {{ previewInvoice.bill_no }}</div>
             <div><strong>Date:</strong> {{ new Date(previewInvoice.date).toLocaleDateString('en-IN') }}</div>
             <div><strong>Ref:</strong> {{ previewInvoice.ref || '-' }}</div>
@@ -2356,14 +2356,14 @@ onMounted(async () => {
       <!-- Transport Info -->
       <table class="w-full mb-3 border-collapse text-left">
         <tr class="border-b border-black">
-          <td class="border border-black p-1 text-[10px]"><strong>Dispatch:</strong> {{ previewInvoice.dispatch || '-' }}</td>
-          <td class="border border-black p-1 text-[10px]"><strong>LR/RR No:</strong> {{ previewInvoice.lr || '-' }}</td>
-          <td class="border border-black p-1 text-[10px]"><strong>Vehicle:</strong> {{ previewInvoice.vehicle || '-' }}</td>
+          <td class="border border-black p-1 text-[10px] break-words"><strong>Dispatch:</strong> {{ previewInvoice.dispatch || '-' }}</td>
+          <td class="border border-black p-1 text-[10px] break-words"><strong>LR/RR No:</strong> {{ previewInvoice.lr || '-' }}</td>
+          <td class="border border-black p-1 text-[10px] break-words"><strong>Vehicle:</strong> {{ previewInvoice.vehicle || '-' }}</td>
         </tr>
         <tr>
-          <td class="border border-black p-1 text-[10px]"><strong>E-Way Bill:</strong> {{ previewInvoice.eway || '-' }}</td>
-          <td class="border border-black p-1 text-[10px]"><strong>Destination:</strong> {{ previewInvoice.dest || '-' }}</td>
-          <td class="border border-black p-1 text-[10px]"><strong>Distance:</strong> {{ previewInvoice.distance || 0 }} km</td>
+          <td class="border border-black p-1 text-[10px] break-words"><strong>E-Way Bill:</strong> {{ previewInvoice.eway || '-' }}</td>
+          <td class="border border-black p-1 text-[10px] break-words"><strong>Destination:</strong> {{ previewInvoice.dest || '-' }}</td>
+          <td class="border border-black p-1 text-[10px] break-words"><strong>Distance:</strong> {{ previewInvoice.distance || 0 }} km</td>
         </tr>
       </table>
 
@@ -2384,8 +2384,8 @@ onMounted(async () => {
         <tbody>
           <tr v-for="(r, idx) in previewInvoice.items" :key="idx" class="border-b border-black/40 text-[11px]">
             <td class="border-r border-black p-1 text-center">{{ idx + 1 }}</td>
-            <td class="border-r border-black p-1">
-              <strong>{{ r.name }}</strong>
+            <td class="border-r border-black p-1 break-words">
+              <strong class="break-words">{{ r.name }}</strong>
               <div v-if="r.size || r.gsm || r.bf || r.extra" class="text-[9px] text-slate-500 italic mt-0.5">
                 {{ [r.size, r.gsm ? r.gsm+'gsm' : '', r.bf ? r.bf+'bf' : '', r.extra].filter(Boolean).join(' | ') }}
               </div>
@@ -2464,8 +2464,8 @@ onMounted(async () => {
             {{ firmStore.activeFirm?.terms || 'We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.' }}
           </div>
         </div>
-        <div class="text-center flex flex-col justify-between items-center h-28 pt-2">
-          <strong class="uppercase text-[9px]">For {{ firmStore.activeFirm?.name || 'PAMA PACKAGING' }}</strong>
+        <div class="text-center flex flex-col justify-between items-center min-h-28 pt-2">
+          <strong class="uppercase text-[9px] break-words px-1">For {{ firmStore.activeFirm?.name || 'PAMA PACKAGING' }}</strong>
           <div class="border-t border-black/40 w-32 pt-1 font-bold text-[9px] uppercase">Authorised Signatory</div>
         </div>
       </div>
@@ -2563,9 +2563,12 @@ onMounted(async () => {
   border-collapse: collapse;
 }
 
-#invoice-print-area th, #invoice-print-area td {
+#invoice-print-area th, #invoice-print-area td,
+#print-view-container th, #print-view-container td {
   border: 1px solid black;
   padding: 4px 6px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .invoice-cancelled-watermark {

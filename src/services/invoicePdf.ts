@@ -15,6 +15,50 @@ function n2(n: number) {
   return (n || 0).toFixed(2)
 }
 
+type PdfAlign = 'left' | 'center' | 'right'
+
+export function wrapPdfText(pdf: jsPDF, text: string, maxWidth: number): string[] {
+  const raw = String(text || '').replace(/\r\n/g, '\n').trim()
+  if (!raw) return []
+  const width = Math.max(6, maxWidth)
+  const out: string[] = []
+  for (const para of raw.split('\n')) {
+    const line = para.replace(/[ \t]+/g, ' ').trim()
+    if (!line) continue
+    out.push(...(pdf.splitTextToSize(line, width) as string[]))
+  }
+  return out
+}
+
+function drawWrappedText(
+  pdf: jsPDF,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  lineH: number,
+  align: PdfAlign = 'left',
+): number {
+  const lines = wrapPdfText(pdf, text, maxWidth)
+  if (!lines.length) return y
+  for (const line of lines) {
+    pdf.text(line, x, y, align === 'left' ? undefined : { align })
+    y += lineH
+  }
+  return y
+}
+
+function wrappedBlockHeight(pdf: jsPDF, texts: Array<{ text: string; font?: 'bold' | 'normal' | 'italic'; size?: number }>, maxWidth: number, lineH: number): number {
+  let h = 0
+  for (const row of texts) {
+    if (!row.text) continue
+    pdf.setFont('helvetica', row.font || 'normal').setFontSize(row.size || 8)
+    const n = Math.max(1, wrapPdfText(pdf, row.text, maxWidth).length)
+    h += n * lineH
+  }
+  return h
+}
+
 function formatPayStatusForPdf(payStatus: string, amtPaid: number): string {
   const key = (payStatus || '').toUpperCase()
   if (key === 'PAID') return 'Paid'
@@ -181,26 +225,23 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
           : 'TAX INVOICE'
 
   pdf.setFont('helvetica', 'bold').setFontSize(15)
-  pdf.text(String(f.name || '').toUpperCase(), PW / 2, y + 5, { align: 'center' })
-  y += 6
+  y = drawWrappedText(pdf, String(f.name || '').toUpperCase(), PW / 2, y + 5, W - 8, 5.5, 'center')
 
   pdf.setFont('helvetica', 'normal').setFontSize(9)
-  const addrLines = pdf.splitTextToSize(f.addr || '', W - 30)
-  addrLines.forEach((line: string) => {
-    pdf.text(line, PW / 2, y + 3, { align: 'center' })
-    y += 3.5
-  })
+  y = drawWrappedText(pdf, f.addr || '', PW / 2, y + 1, W - 16, 3.6, 'center')
   const contactLine = `PIN: ${f.pin || '-'}${f.phone ? ' | Mob: ' + f.phone : ''} | Email: ${f.email || '-'}`
-  pdf.text(contactLine, PW / 2, y + 3, { align: 'center' })
-  y += 4
+  y = drawWrappedText(pdf, contactLine, PW / 2, y + 0.5, W - 16, 3.6, 'center')
   pdf.setFont('helvetica', 'bold').setFontSize(10)
-  pdf.text(
+  y = drawWrappedText(
+    pdf,
     `GSTIN: ${f.gst || '-'}  |  State: ${getStateName(f.gst)} (${getStateCode(f.gst) || f.state || '-'})`,
     PW / 2,
-    y + 3,
-    { align: 'center' },
+    y + 0.5,
+    W - 16,
+    4,
+    'center',
   )
-  y += 5
+  y += 2
 
   pdf.setFillColor(0, 0, 0)
   pdf.rect(L, y, W, 6, 'F')
@@ -213,123 +254,94 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
 
   const colW = W / 3
   const buyer = b.custDetails || {}
-
-  pdf.line(L + colW, y, L + colW, y + 30)
-  pdf.line(L + 2 * colW, y, L + 2 * colW, y + 30)
-
-  pdf.setFont('helvetica', 'bold').setFontSize(8)
-  pdf.text('BILL TO (BUYER):', L + 1, y + 4)
-  pdf.setFont('helvetica', 'bold').setFontSize(9)
-  pdf.text(b.custName || '', L + 1, y + 8)
-  pdf.setFont('helvetica', 'normal').setFontSize(8)
-  let ty = y + 11
-  const buyerAddrLines = pdf.splitTextToSize(buyer.addr || '', colW - 2)
-  buyerAddrLines.forEach((line: string) => {
-    pdf.text(line, L + 1, ty)
-    ty += 3.2
-  })
-  const bAddrL = (buyer.addr || '').toLowerCase()
-  if (buyer.city && !bAddrL.includes(buyer.city.toLowerCase())) {
-    pdf.text(`${buyer.city}${buyer.pin ? ' - ' + buyer.pin : ''}`, L + 1, ty)
-    ty += 3.2
-  } else if (buyer.pin && !bAddrL.includes(buyer.pin)) {
-    pdf.text(buyer.pin, L + 1, ty)
-    ty += 3.2
-  }
-  if (buyer.is_consumer) {
-    pdf.setFont('helvetica', 'bold').setFontSize(7.5)
-    pdf.setTextColor(22, 163, 74)
-    pdf.text('Consumer (B2C)', L + 1, ty)
-    ty += 3.2
-    pdf.setTextColor(0, 0, 0)
-    pdf.setFont('helvetica', 'normal').setFontSize(8)
-  } else if (buyer.gst) {
-    pdf.setFont('helvetica', 'bold').setFontSize(8.5)
-    pdf.text(`GSTIN: ${buyer.gst}`, L + 1, ty)
-    ty += 3.2
-    pdf.setFont('helvetica', 'normal').setFontSize(8)
-  }
-  pdf.text(
-    `State: ${getStateName(buyer.gst || buyer.state)} (${getStateCode(buyer.gst) || buyer.state || '-'})`,
-    L + 1,
-    ty,
-  )
-
-  pdf.setFont('helvetica', 'bold').setFontSize(8)
-  pdf.text('SHIP TO (CONSIGNEE):', L + colW + 1, y + 4)
-  ty = y + 8
+  const innerW = colW - 3
+  const lineH = 3.3
   const ship = b.sameAsBuyer !== false ? null : b.ship || null
-  if (ship) {
-    pdf.setFont('helvetica', 'bold').setFontSize(9)
-    pdf.text(ship.name || b.custName || '', L + colW + 1, ty)
-    pdf.setFont('helvetica', 'normal').setFontSize(8)
-    ty += 3
-    const shipAddrLines = pdf.splitTextToSize(ship.addr || '', colW - 2)
-    shipAddrLines.forEach((line: string) => {
-      pdf.text(line, L + colW + 1, ty)
-      ty += 3.2
-    })
-    const sAddrL = (ship.addr || '').toLowerCase()
-    if (ship.city && !sAddrL.includes(ship.city.toLowerCase())) {
-      pdf.text(`${ship.city}${ship.pin ? ' - ' + ship.pin : ''}`, L + colW + 1, ty)
-      ty += 3.2
-    } else if (ship.pin && !sAddrL.includes(ship.pin)) {
-      pdf.text(ship.pin, L + colW + 1, ty)
-      ty += 3.2
-    }
-    if (ship.gstin) {
-      pdf.setFont('helvetica', 'bold').setFontSize(8.5)
-      pdf.text(`GSTIN: ${ship.gstin}`, L + colW + 1, ty)
-      ty += 3.2
-      pdf.setFont('helvetica', 'normal').setFontSize(8)
-    }
-    pdf.text(
-      `State: ${getStateName(ship.gstin || ship.state)} (${getStateCode(ship.gstin) || ship.state || '-'})`,
-      L + colW + 1,
-      ty,
-    )
-  } else {
-    pdf.setFont('helvetica', 'italic').setFontSize(8)
-    pdf.text('— Same as Buyer Address —', L + colW + 1, ty)
+  const cityPin = (city?: string, pin?: string, addr?: string) => {
+    const addrL = (addr || '').toLowerCase()
+    if (city && !addrL.includes(city.toLowerCase())) return `${city}${pin ? ' - ' + pin : ''}`
+    if (pin && !addrL.includes(pin)) return pin
+    return ''
   }
 
   pdf.setFont('helvetica', 'bold').setFontSize(8)
-  pdf.text('INVOICE DETAILS:', L + 2 * colW + 1, y + 4)
-  pdf.setFont('helvetica', 'normal').setFontSize(8)
-  ty = y + 8
-  const infoColW = colW - 2
-  const infoLines = [
-    `Invoice No: ${b.billNo}`,
-    `Date: ${fmtDate(b.date)}`,
-    `Ref: ${b.ref || '-'}`,
-    `Payment: ${b.payment || '-'}`,
-    `Status: ${formatPayStatusForPdf(b.payStatus, b.amtPaid)}`,
+  const buyerRows: Array<{ text: string; font?: 'bold' | 'normal' | 'italic'; size?: number }> = [
+    { text: 'BILL TO (BUYER):', font: 'bold', size: 8 },
+    { text: b.custName || '', font: 'bold', size: 9 },
+    { text: buyer.addr || '', font: 'normal', size: 8 },
+    { text: cityPin(buyer.city, buyer.pin, buyer.addr), font: 'normal', size: 8 },
+    buyer.is_consumer
+      ? { text: 'Consumer (B2C)', font: 'bold', size: 7.5 }
+      : { text: buyer.gst ? `GSTIN: ${buyer.gst}` : '', font: 'bold', size: 8.5 },
+    { text: `State: ${getStateName(buyer.gst || buyer.state)} (${getStateCode(buyer.gst) || buyer.state || '-'})`, font: 'normal', size: 8 },
   ]
-  infoLines.forEach((line) => {
-    pdf.splitTextToSize(line, infoColW).forEach((wrapped: string) => {
-      pdf.text(wrapped, L + 2 * colW + 1, ty)
-      ty += 3.5
-    })
-  })
+  const shipRows: Array<{ text: string; font?: 'bold' | 'normal' | 'italic'; size?: number }> = ship
+    ? [
+      { text: 'SHIP TO (CONSIGNEE):', font: 'bold', size: 8 },
+      { text: ship.name || b.custName || '', font: 'bold', size: 9 },
+      { text: ship.addr || '', font: 'normal', size: 8 },
+      { text: cityPin(ship.city, ship.pin, ship.addr), font: 'normal', size: 8 },
+      { text: ship.gstin ? `GSTIN: ${ship.gstin}` : '', font: 'bold', size: 8.5 },
+      { text: `State: ${getStateName(ship.gstin || ship.state)} (${getStateCode(ship.gstin) || ship.state || '-'})`, font: 'normal', size: 8 },
+    ]
+    : [
+      { text: 'SHIP TO (CONSIGNEE):', font: 'bold', size: 8 },
+      { text: '— Same as Buyer Address —', font: 'italic', size: 8 },
+    ]
+  const infoRows: Array<{ text: string; font?: 'bold' | 'normal' | 'italic'; size?: number }> = [
+    { text: 'INVOICE DETAILS:', font: 'bold', size: 8 },
+    { text: `Invoice No: ${b.billNo}`, font: 'normal', size: 8 },
+    { text: `Date: ${fmtDate(b.date)}`, font: 'normal', size: 8 },
+    { text: `Ref: ${b.ref || '-'}`, font: 'normal', size: 8 },
+    { text: `Payment: ${b.payment || '-'}`, font: 'normal', size: 8 },
+    { text: `Status: ${formatPayStatusForPdf(b.payStatus, b.amtPaid)}`, font: 'normal', size: 8 },
+  ]
 
-  y += 30
+  const partyH = Math.max(
+    wrappedBlockHeight(pdf, buyerRows, innerW, lineH),
+    wrappedBlockHeight(pdf, shipRows, innerW, lineH),
+    wrappedBlockHeight(pdf, infoRows, innerW, lineH),
+    22,
+  ) + 4
+
+  pdf.line(L + colW, y, L + colW, y + partyH)
+  pdf.line(L + 2 * colW, y, L + 2 * colW, y + partyH)
+
+  const drawPartyCol = (rows: typeof buyerRows, x: number) => {
+    let ty = y + 4
+    for (const row of rows) {
+      if (!row.text) continue
+      pdf.setFont('helvetica', row.font || 'normal').setFontSize(row.size || 8)
+      if (row.text === 'Consumer (B2C)') pdf.setTextColor(22, 163, 74)
+      ty = drawWrappedText(pdf, row.text, x, ty, innerW, lineH)
+      pdf.setTextColor(0, 0, 0)
+    }
+  }
+  drawPartyCol(buyerRows, L + 1)
+  drawPartyCol(shipRows, L + colW + 1)
+  drawPartyCol(infoRows, L + 2 * colW + 1)
+
+  y += partyH
   pdf.line(L, y, R, y)
 
+  const transportRows = [
+    [`Dispatch: ${b.dispatch || '-'}`, `LR/RR: ${b.lr || '-'}`, `Vehicle: ${b.vehicle || '-'}`],
+    [`E-Way: ${b.eway || '-'}`, `Destination: ${b.dest || '-'}`, `Distance: ${b.distance || 0} km`],
+  ]
   pdf.setFont('helvetica', 'normal').setFontSize(8)
-  pdf.text(`Dispatch: ${b.dispatch || '-'}`, L + 1, y + 4)
-  pdf.text(`LR/RR: ${b.lr || '-'}`, L + colW + 1, y + 4)
-  pdf.text(`Vehicle: ${b.vehicle || '-'}`, L + 2 * colW + 1, y + 4)
-  pdf.line(L + colW, y, L + colW, y + 11)
-  pdf.line(L + 2 * colW, y, L + 2 * colW, y + 11)
-  y += 5
-  pdf.line(L, y, R, y)
-  pdf.text(`E-Way: ${b.eway || '-'}`, L + 1, y + 4)
-  pdf.text(`Destination: ${b.dest || '-'}`, L + colW + 1, y + 4)
-  pdf.text(`Distance: ${b.distance || 0} km`, L + 2 * colW + 1, y + 4)
-  pdf.line(L + colW, y, L + colW, y + 6)
-  pdf.line(L + 2 * colW, y, L + 2 * colW, y + 6)
-  y += 6
-  pdf.line(L, y, R, y)
+  for (const row of transportRows) {
+    const rowH = Math.max(
+      ...row.map((cell) => wrappedBlockHeight(pdf, [{ text: cell, size: 8 }], innerW, 3.2)),
+      6,
+    ) + 2
+    pdf.line(L + colW, y, L + colW, y + rowH)
+    pdf.line(L + 2 * colW, y, L + 2 * colW, y + rowH)
+    row.forEach((cell, idx) => {
+      drawWrappedText(pdf, cell, L + idx * colW + 1, y + 4, innerW, 3.2)
+    })
+    y += rowH
+    pdf.line(L, y, R, y)
+  }
 
   const cSl = 8
   const cHsn = 18
@@ -598,7 +610,8 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
   pdf.setFillColor(240, 240, 240)
   pdf.rect(sigX, y, footHalf, 5, 'F')
   pdf.setFont('helvetica', 'bold').setFontSize(8)
-  pdf.text(`For ${f.name}`, sigX + footHalf / 2, y + 3.5, { align: 'center' })
+  pdf.setFont('helvetica', 'bold').setFontSize(9)
+  drawWrappedText(pdf, `For ${f.name}`, sigX + footHalf / 2, y + 3.5, footHalf - 4, 3.5, 'center')
   if (f.signature) {
     try {
       const fmt = f.signature.startsWith('data:image/png') ? 'PNG' : 'JPEG'

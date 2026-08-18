@@ -31,24 +31,42 @@ export function downloadStockStatementPdf(statement: StockStatement, firm?: Firm
   const stockGrandTotal = grandTotal(lines)
 
   pdf.setFont('helvetica', 'bold').setFontSize(14)
-  pdf.text((statement.bank_name || 'UNION BANK OF INDIA').toUpperCase(), PW / 2, y, { align: 'center' })
-  y += 6
+  const bankLines = pdf.splitTextToSize((statement.bank_name || 'UNION BANK OF INDIA').toUpperCase(), W)
+  bankLines.forEach((line: string) => {
+    pdf.text(line, PW / 2, y, { align: 'center' })
+    y += 6
+  })
   pdf.setFont('helvetica', 'bold').setFontSize(12)
   pdf.text('STATEMENT OF STOCK POSITION', PW / 2, y, { align: 'center' })
   y += 7
 
   pdf.setFont('helvetica', 'normal').setFontSize(8.5)
-  pdf.text(`Name of the Account: ${firm?.name || '-'}`, L, y)
-  pdf.text(`Branch: ${statement.branch_name || '-'}`, L + 105, y)
-  y += 4.5
-  pdf.text(`Address of Contact Office: ${firm?.addr || '-'}`, L, y)
-  y += 4.5
+  const accountLines = pdf.splitTextToSize(`Name of the Account: ${firm?.name || '-'}`, 98)
+  const branchLines = pdf.splitTextToSize(`Branch: ${statement.branch_name || '-'}`, 82)
+  const headerRows = Math.max(accountLines.length, branchLines.length)
+  accountLines.forEach((line: string, idx: number) => pdf.text(line, L, y + idx * 4))
+  branchLines.forEach((line: string, idx: number) => pdf.text(line, L + 105, y + idx * 4))
+  y += headerRows * 4 + 0.5
+  const officeAddrLines = pdf.splitTextToSize(`Address of Contact Office: ${firm?.addr || '-'}`, W)
+  officeAddrLines.forEach((line: string) => {
+    pdf.text(line, L, y)
+    y += 4
+  })
   pdf.text(`Tel No: ${firm?.phone || '-'}`, L, y)
   y += 4.5
-  pdf.text(`Contact Person: ${statement.remarks || 'Authorized Signatory'}`, L, y)
-  y += 5
-  pdf.text(`We give below the particulars of goods held in your name on your account as on ${statement.statement_date || '-'}`, L, y)
-  y += 5
+  const contactLines = pdf.splitTextToSize(`Contact Person: ${statement.remarks || 'Authorized Signatory'}`, W)
+  contactLines.forEach((line: string) => {
+    pdf.text(line, L, y)
+    y += 4.5
+  })
+  const asOnLines = pdf.splitTextToSize(
+    `We give below the particulars of goods held in your name on your account as on ${statement.statement_date || '-'}`,
+    W,
+  )
+  asOnLines.forEach((line: string) => {
+    pdf.text(line, L, y)
+    y += 4.5
+  })
 
   const cDesc = 88
   const cStore = 35
@@ -152,36 +170,43 @@ export function downloadStockStatementPdf(statement: StockStatement, firm?: Firm
     pdf.setFont('helvetica', 'normal').setFontSize(8)
     const printableRows = rows.length ? rows : [null]
     printableRows.forEach((line) => {
-      ensurePage(7)
-      pdf.rect(L, y, W, 7)
+      const name = isPaper
+        ? (line && line.segment === 'paper' ? (line.paper_name || '-') : '-')
+        : (line && line.segment !== 'paper' ? (line.item_name || '-') : '-')
+      const nameW = (isPaper ? colsP.name : colsS.name) - 4
+      const nameLines = pdf.splitTextToSize(name, nameW) as string[]
+      const rowH = Math.max(7, nameLines.length * 3.5 + 2)
+      ensurePage(rowH)
+      pdf.rect(L, y, W, rowH)
+      const textY = y + 4.5
       if (isPaper) {
         let x = L
-        pdf.text(line && line.segment === 'paper' ? (line.paper_name || '-') : '-', x + 2, y + 4.5)
+        nameLines.forEach((nl: string, idx: number) => pdf.text(nl, x + 2, textY + idx * 3.5))
         x += colsP.name
-        pdf.line(x, y, x, y + 7); pdf.text(line && line.segment === 'paper' ? (line.bf || '-') : '-', x + 2, y + 4.5)
+        pdf.line(x, y, x, y + rowH); pdf.text(line && line.segment === 'paper' ? (line.bf || '-') : '-', x + 2, textY)
         x += colsP.bf
-        pdf.line(x, y, x, y + 7); pdf.text(line && line.segment === 'paper' ? (line.gsm || '-') : '-', x + 2, y + 4.5)
+        pdf.line(x, y, x, y + rowH); pdf.text(line && line.segment === 'paper' ? (line.gsm || '-') : '-', x + 2, textY)
         x += colsP.gsm
-        pdf.line(x, y, x, y + 7); pdf.text(line ? n2(line.qty) : '-', x + colsP.qty - 2, y + 4.5, { align: 'right' })
+        pdf.line(x, y, x, y + rowH); pdf.text(line ? n2(line.qty) : '-', x + colsP.qty - 2, textY, { align: 'right' })
         x += colsP.qty
-        pdf.line(x, y, x, y + 7); pdf.text(line?.unit || '-', x + colsP.unit / 2, y + 4.5, { align: 'center' })
+        pdf.line(x, y, x, y + rowH); pdf.text(line?.unit || '-', x + colsP.unit / 2, textY, { align: 'center' })
         x += colsP.unit
-        pdf.line(x, y, x, y + 7); pdf.text(line ? n2(line.rate) : '-', x + colsP.rate - 2, y + 4.5, { align: 'right' })
+        pdf.line(x, y, x, y + rowH); pdf.text(line ? n2(line.rate) : '-', x + colsP.rate - 2, textY, { align: 'right' })
         x += colsP.rate
-        pdf.line(x, y, x, y + 7); pdf.text(line ? n2(line.amount) : '-', x + colsP.amount - 2, y + 4.5, { align: 'right' })
+        pdf.line(x, y, x, y + rowH); pdf.text(line ? n2(line.amount) : '-', x + colsP.amount - 2, textY, { align: 'right' })
       } else {
         let x = L
-        pdf.text(line && line.segment !== 'paper' ? (line.item_name || '-') : '-', x + 2, y + 4.5)
+        nameLines.forEach((nl: string, idx: number) => pdf.text(nl, x + 2, textY + idx * 3.5))
         x += colsS.name
-        pdf.line(x, y, x, y + 7); pdf.text(line ? n2(line.qty) : '-', x + colsS.qty - 2, y + 4.5, { align: 'right' })
+        pdf.line(x, y, x, y + rowH); pdf.text(line ? n2(line.qty) : '-', x + colsS.qty - 2, textY, { align: 'right' })
         x += colsS.qty
-        pdf.line(x, y, x, y + 7); pdf.text(line?.unit || '-', x + colsS.unit / 2, y + 4.5, { align: 'center' })
+        pdf.line(x, y, x, y + rowH); pdf.text(line?.unit || '-', x + colsS.unit / 2, textY, { align: 'center' })
         x += colsS.unit
-        pdf.line(x, y, x, y + 7); pdf.text(line ? n2(line.rate) : '-', x + colsS.rate - 2, y + 4.5, { align: 'right' })
+        pdf.line(x, y, x, y + rowH); pdf.text(line ? n2(line.rate) : '-', x + colsS.rate - 2, textY, { align: 'right' })
         x += colsS.rate
-        pdf.line(x, y, x, y + 7); pdf.text(line ? n2(line.amount) : '-', x + colsS.amount - 2, y + 4.5, { align: 'right' })
+        pdf.line(x, y, x, y + rowH); pdf.text(line ? n2(line.amount) : '-', x + colsS.amount - 2, textY, { align: 'right' })
       }
-      y += 7
+      y += rowH
     })
 
     pdf.setFont('helvetica', 'bold').setFontSize(8.5)

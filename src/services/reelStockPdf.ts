@@ -101,14 +101,25 @@ function drawHeader(
   const { title, firmName, subtitle, pageW } = opts
   let y = 12
   pdf.setFont('helvetica', 'bold').setFontSize(13)
-  pdf.text(firmName || 'Pama Suite', pageW / 2, y, { align: 'center' })
-  y += 6
+  const nameLines = pdf.splitTextToSize(firmName || 'Pama Suite', pageW - 20)
+  nameLines.forEach((line: string) => {
+    pdf.text(line, pageW / 2, y, { align: 'center' })
+    y += 5.5
+  })
   pdf.setFontSize(11)
-  pdf.text(title, pageW / 2, y, { align: 'center' })
-  y += 5
+  const titleLines = pdf.splitTextToSize(title, pageW - 20)
+  titleLines.forEach((line: string) => {
+    pdf.text(line, pageW / 2, y, { align: 'center' })
+    y += 5
+  })
   pdf.setFont('helvetica', 'normal').setFontSize(8)
-  pdf.text(`As on ${todayStamp()}${subtitle ? ` · ${subtitle}` : ''}`, pageW / 2, y, { align: 'center' })
-  y += 6
+  const sub = `As on ${todayStamp()}${subtitle ? ` · ${subtitle}` : ''}`
+  const subLines = pdf.splitTextToSize(sub, pageW - 20)
+  subLines.forEach((line: string) => {
+    pdf.text(line, pageW / 2, y, { align: 'center' })
+    y += 4
+  })
+  y += 2
   return y
 }
 
@@ -172,7 +183,10 @@ export function downloadReelWiseStockPdf(opts: {
   let sumCur = 0
   pdf.setFont('helvetica', 'normal').setFontSize(6.5)
   for (const row of rows) {
-    y = ensurePage(pdf, y, 6, pageH)
+    const millLines = pdf.splitTextToSize(row.mill || '—', 33) as string[]
+    const deckleLines = pdf.splitTextToSize(row.deckle || '—', 25) as string[]
+    const rowH = Math.max(5.5, Math.max(millLines.length, deckleLines.length) * 3.2 + 1.4)
+    y = ensurePage(pdf, y, rowH + 1, pageH)
     if (y === 12) drawTableHeader()
     sumOpen += row.openingKg
     sumCur += row.currentKg
@@ -180,8 +194,8 @@ export function downloadReelWiseStockPdf(opts: {
     const cells: Record<string, string> = {
       reelNo: row.reelNo,
       paperType: row.paperType,
-      mill: row.mill.slice(0, 28),
-      deckle: row.deckle.slice(0, 22),
+      mill: row.mill,
+      deckle: row.deckle,
       gsm: row.gsm,
       bf: row.bf,
       color: row.color,
@@ -193,11 +207,14 @@ export function downloadReelWiseStockPdf(opts: {
     }
     for (const c of cols) {
       const val = cells[c.key] || ''
-      if ('num' in c && c.num) pdf.text(val, x + c.w - 2, y + 4, { align: 'right' })
+      if (c.key === 'mill' || c.key === 'deckle') {
+        const lines = pdf.splitTextToSize(val, c.w - 3) as string[]
+        lines.forEach((line: string, idx: number) => pdf.text(line, x, y + 4 + idx * 3.2))
+      } else if ('num' in c && c.num) pdf.text(val, x + c.w - 2, y + 4, { align: 'right' })
       else pdf.text(val, x, y + 4)
       x += c.w
     }
-    y += 5.5
+    y += rowH
   }
 
   y = ensurePage(pdf, y, 10, pageH)
@@ -285,14 +302,16 @@ export function downloadReelAbstractStockPdf(opts: {
   pdf.setFont('helvetica', 'normal').setFontSize(7)
 
   for (const row of rows) {
-    y = ensurePage(pdf, y, 6, pageH)
+    const deckleLines = pdf.splitTextToSize(String(row.deckle || '—'), 25) as string[]
+    const rowH = Math.max(5.5, deckleLines.length * 3.2 + 1.4)
+    y = ensurePage(pdf, y, rowH + 1, pageH)
     if (y === 12) drawTableHeader()
     let x = L + 1
     const cells: Record<string, string> = {
       paperType: row.paperType,
       gsm: row.gsm,
       bf: row.bf,
-      deckle: String(row.deckle).slice(0, 20),
+      deckle: String(row.deckle),
       color: row.color,
       reels: String(row.reels),
       activeReels: String(row.activeReels),
@@ -303,11 +322,13 @@ export function downloadReelAbstractStockPdf(opts: {
     }
     for (const c of cols) {
       const val = cells[c.key] || ''
-      if ('num' in c && c.num) pdf.text(val, x + c.w - 2, y + 4, { align: 'right' })
+      if (c.key === 'deckle') {
+        deckleLines.forEach((line: string, idx: number) => pdf.text(line, x, y + 4 + idx * 3.2))
+      } else if ('num' in c && c.num) pdf.text(val, x + c.w - 2, y + 4, { align: 'right' })
       else pdf.text(val, x, y + 4)
       x += c.w
     }
-    y += 5.5
+    y += rowH
   }
 
   const file = opts.filename || `Reel_Stock_Abstract_${todayStamp()}.pdf`
