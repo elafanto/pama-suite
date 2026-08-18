@@ -283,7 +283,7 @@ function resetForm() {
 const nextBillPreview = computed(() => {
   const firm = firmStore.activeFirm
   if (!firm || editingId.value) return ''
-  return peekBillNo(firm, invoiceStore.list)
+  return peekBillNo(firm, invoiceStore.list, form.date)
 })
 
 const saveButtonLabel = computed(() => {

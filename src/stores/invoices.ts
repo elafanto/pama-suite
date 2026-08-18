@@ -87,7 +87,7 @@ export const useInvoiceStore = defineStore('invoices', () => {
       const payload = { ...data }
 
       if (useAutoNumber) {
-        const { billNo, nextSequenceAfter } = allocateBillNo(firm, invoices)
+        const { billNo, nextSequenceAfter } = allocateBillNo(firm, invoices, payload.date)
         payload.bill_no = billNo
         await db.firms.put(plain({ ...firm, next_bill_no: nextSequenceAfter, updated_at: nowISO(), _dirty: true }))
       } else if (!payload.bill_no?.trim()) {

@@ -385,6 +385,7 @@ async function importLegacyBilling(data: any, mode: ImportMode): Promise<ImportR
       bank_name: f.bankName || f.bank_name || '', bank_acno: f.bankAcno || f.bank_acno || '',
       bank_ifsc: f.bankIfsc || f.bank_ifsc || '',
       prefix: f.prefix || 'INV', next_bill_no: f.nextBillNo || f.next_bill_no || 1,
+      bill_no_format: f.billNoFormat || f.bill_no_format || 'dash_4',
       signature: f.signature || undefined,
       created_at: f.createdAt || nowISO(), updated_at: nowISO(), is_deleted: !!f.isDeleted, _dirty: true,
     })
@@ -545,7 +546,7 @@ async function repairImportedInvoiceNumbers() {
         (a.created_at || a.updated_at || '').localeCompare(b.created_at || b.updated_at || ''),
       )
       for (const dup of ordered.slice(1)) {
-        const { billNo } = allocateBillNo(f, invs)
+        const { billNo } = allocateBillNo(f, invs, dup.date)
         const updated = { ...dup, bill_no: billNo, updated_at: nowISO(), _dirty: true }
         await db.invoices.put(updated)
         invs = invs.map((i) => i.id === dup.id ? updated : i)

@@ -7,26 +7,34 @@ import {
   allocateBillNo,
   findDuplicateBillNoGroups,
   peekBillNo,
+  indianFYShort,
 } from '@/services/invoiceNumber'
 
 const firm = (over: Partial<Firm> = {}): Firm =>
-  ({ id: 'F1', prefix: 'INV', next_bill_no: 1, ...over }) as Firm
+  ({ id: 'F1', prefix: 'INV', next_bill_no: 1, bill_no_format: 'dash_4', ...over }) as Firm
 
 const inv = (over: Partial<Invoice> = {}): Invoice =>
-  ({ id: Math.random().toString(36).slice(2), firm_id: 'F1', bill_no: '', is_deleted: false, ...over }) as Invoice
+  ({ id: Math.random().toString(36).slice(2), firm_id: 'F1', bill_no: '', is_deleted: false, date: '2025-08-01', ...over }) as Invoice
 
 describe('formatBillNo', () => {
-  it('pads and uppercases prefix', () => {
+  it('pads and uppercases prefix (dash_4 default)', () => {
     expect(formatBillNo('inv', 5)).toBe('INV-0005')
     expect(formatBillNo('', 12)).toBe('INV-0012')
     expect(formatBillNo('PAMA', 1234)).toBe('PAMA-1234')
+  })
+
+  it('supports alternate per-firm formats', () => {
+    expect(formatBillNo(firm({ prefix: 'PAMA', bill_no_format: 'slash_4' }), 7)).toBe('PAMA/0007')
+    expect(formatBillNo(firm({ prefix: 'ABC', bill_no_format: 'compact_4' }), 3)).toBe('ABC0003')
+    expect(formatBillNo(firm({ prefix: 'X', bill_no_format: 'dash_plain' }), 9)).toBe('X-9')
+    expect(formatBillNo(firm({ prefix: 'INV', bill_no_format: 'fy_slash_4' }), 2, '2025-08-01')).toBe(`INV/${indianFYShort('2025-08-01')}/0002`)
   })
 })
 
 describe('maxBillSequence', () => {
   it('finds the highest numeric suffix for the firm + prefix', () => {
     const invoices = [inv({ bill_no: 'INV-0001' }), inv({ bill_no: 'INV-0007' }), inv({ bill_no: 'INV-0003' })]
-    expect(maxBillSequence(invoices, 'F1', 'INV')).toBe(7)
+    expect(maxBillSequence(invoices, firm())).toBe(7)
   })
   it('includes soft-deleted invoices so cancelled numbers stay in the series', () => {
     const invoices = [
@@ -34,11 +42,20 @@ describe('maxBillSequence', () => {
       inv({ bill_no: 'INV-0050', firm_id: 'F2' }),
       inv({ bill_no: 'INV-0004' }),
     ]
-    expect(maxBillSequence(invoices, 'F1', 'INV')).toBe(9)
+    expect(maxBillSequence(invoices, firm())).toBe(9)
   })
-  it('matches loose formats (spaces, slashes, no padding)', () => {
-    expect(maxBillSequence([inv({ bill_no: 'INV/12' })], 'F1', 'INV')).toBe(12)
-    expect(maxBillSequence([inv({ bill_no: 'inv 8' })], 'F1', 'INV')).toBe(8)
+  it('matches loose legacy formats', () => {
+    expect(maxBillSequence([inv({ bill_no: 'INV/12' })], firm())).toBe(12)
+    expect(maxBillSequence([inv({ bill_no: 'inv 8' })], firm())).toBe(8)
+  })
+  it('scopes financial-year format to the invoice date FY', () => {
+    const fy = indianFYShort('2025-08-01')
+    const f = firm({ bill_no_format: 'fy_slash_4' })
+    const invoices = [
+      inv({ bill_no: `INV/${fy}/0005`, date: '2025-08-01' }),
+      inv({ bill_no: 'INV/23-24/0099', date: '2024-01-01' }),
+    ]
+    expect(maxBillSequence(invoices, f, '2025-08-01')).toBe(5)
   })
 })
 
@@ -52,6 +69,7 @@ describe('resolveNextSequence', () => {
 describe('peekBillNo', () => {
   it('previews the next number without consuming it', () => {
     expect(peekBillNo(firm({ next_bill_no: 3 }), [])).toBe('INV-0003')
+    expect(peekBillNo(firm({ prefix: 'PAMA', bill_no_format: 'slash_4', next_bill_no: 12 }), [])).toBe('PAMA/0012')
   })
 })
 

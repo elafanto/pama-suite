@@ -9,7 +9,8 @@ import { useSettingsStore } from '@/stores/settings'
 import { exportAll, downloadBackup, importBackup, previewImport, type ImportPreview, type ImportResult } from '@/services/backup'
 import { getSyncDiagnostics, runSync, runFullPullFromCloud, runFullPushToCloud } from '@/services/sync'
 import { usePwaInstall } from '@/composables/usePwaInstall'
-import type { Firm } from '@/types/models'
+import type { BillNoFormat, Firm } from '@/types/models'
+import { peekBillNo, BILL_NO_FORMAT_OPTIONS } from '@/services/invoiceNumber'
 import { formatGstin } from '@/services/gst'
 import { getDocumentStorageStats } from '@/services/documentAttachments'
 import { exportGstAuditZip, listRecentIndianFYLabels } from '@/services/documentAuditExport'
@@ -44,7 +45,7 @@ const MAX_SIGNATURE_BYTES = 512 * 1024
 const blank = (): NewFirm => ({
   name: '', gst: '', addr: '', city: '', state: '05', pin: '', phone: '', email: '',
   bank_name: '', bank_acno: '', bank_ifsc: '',
-  prefix: 'INV', next_bill_no: 1,
+  prefix: 'INV', next_bill_no: 1, bill_no_format: 'dash_4' as BillNoFormat,
   signature: undefined,
 })
 const form = reactive<NewFirm>(blank())
@@ -60,6 +61,7 @@ function openEdit(f: Firm) {
     name: f.name, gst: f.gst, addr: f.addr, city: f.city, state: f.state, pin: f.pin,
     phone: f.phone, email: f.email, bank_name: f.bank_name, bank_acno: f.bank_acno, bank_ifsc: f.bank_ifsc,
     prefix: f.prefix || 'INV', next_bill_no: f.next_bill_no || 1,
+    bill_no_format: f.bill_no_format || 'dash_4',
     signature: f.signature || undefined,
   })
   showModal.value = true
@@ -88,6 +90,17 @@ function onSignatureFile(e: Event) {
 function clearSignature() {
   form.signature = undefined
 }
+
+const billNoPreview = computed(() =>
+  peekBillNo(
+    { prefix: form.prefix, bill_no_format: form.bill_no_format, next_bill_no: form.next_bill_no, id: '' } as Firm,
+    [],
+  ),
+)
+
+const selectedBillFormatHint = computed(() =>
+  BILL_NO_FORMAT_OPTIONS.find((o) => o.value === form.bill_no_format)?.hint || '',
+)
 
 async function save() {
   if (!form.name.trim()) return alert('Firm name required')
@@ -344,7 +357,7 @@ onMounted(async () => {
               <span v-if="f.id === firmStore.activeFirmId" class="pp-badge bg-accent text-white ml-1">Active</span>
             </div>
             <div class="text-xs text-slate-500">
-              {{ formatGstin(f.gst) || 'No GST' }} · {{ f.city || '—' }} · Bill: {{ f.prefix || 'INV' }}-xxxx (next {{ f.next_bill_no || 1 }})
+              {{ formatGstin(f.gst) || 'No GST' }} · {{ f.city || '—' }} · Bill: {{ peekBillNo(f, []) }} (next {{ f.next_bill_no || 1 }})
               <span v-if="f.signature" class="ml-1 text-green-700">· ✍️ Signature</span>
             </div>
           </div>
@@ -569,6 +582,17 @@ onMounted(async () => {
         <div class="grid grid-cols-2 gap-3">
           <div><label class="pp-label">Bill Prefix</label><input v-model="form.prefix" class="pp-input uppercase" placeholder="INV" /></div>
           <div><label class="pp-label">Next Bill No.</label><input v-model.number="form.next_bill_no" type="number" min="1" class="pp-input" /></div>
+        </div>
+        <div>
+          <label class="pp-label">Invoice Number Format</label>
+          <select v-model="form.bill_no_format" class="pp-input">
+            <option v-for="opt in BILL_NO_FORMAT_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+          </select>
+          <p class="text-xs text-slate-500 mt-1">Preview: <span class="font-semibold text-navy">{{ billNoPreview || '—' }}</span></p>
+          <p v-if="selectedBillFormatHint" class="text-xs text-slate-400 mt-1">{{ selectedBillFormatHint }}</p>
+          <p v-if="form.bill_no_format === 'fy_slash_4'" class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-2">
+            Har April (naye financial year) se <strong>Next Bill No.</strong> ko 1 set karein.
+          </p>
         </div>
         <div><label class="pp-label">Firm Name *</label><input v-model="form.name" class="pp-input" /></div>
         <div class="grid grid-cols-2 gap-3">

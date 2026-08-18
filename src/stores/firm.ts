@@ -45,7 +45,7 @@ export const useFirmStore = defineStore('firm', () => {
         id: uid(), name: 'Pama Packaging', gst: '', addr: '', city: 'Jaspur',
         state: '05', pin: '', phone: '', email: '',
         bank_name: 'Union Bank of India', bank_acno: '663205090000180', bank_ifsc: '',
-        prefix: 'INV', next_bill_no: 1,
+        prefix: 'INV', next_bill_no: 1, bill_no_format: 'dash_4',
         created_at: now, updated_at: now, is_deleted: false, _dirty: true,
       }
       await db.firms.add(def)
@@ -57,17 +57,18 @@ export const useFirmStore = defineStore('firm', () => {
     }
 
     for (const f of firms.value) {
-      if (!f.prefix || !f.next_bill_no) {
+      if (!f.prefix || !f.next_bill_no || !f.bill_no_format) {
         await db.firms.put(plain({
           ...f,
           prefix: f.prefix || 'INV',
           next_bill_no: f.next_bill_no || 1,
+          bill_no_format: f.bill_no_format || 'dash_4',
           updated_at: nowISO(),
           _dirty: true,
         }))
       }
     }
-    if (firms.value.some((f) => !f.prefix || !f.next_bill_no)) {
+    if (firms.value.some((f) => !f.prefix || !f.next_bill_no || !f.bill_no_format)) {
       firms.value = (await db.firms.filter((x) => !x.is_deleted).toArray())
         .sort((a, b) => a.name.localeCompare(b.name))
     }
@@ -93,6 +94,7 @@ export const useFirmStore = defineStore('firm', () => {
       ...data,
       prefix: data.prefix || 'INV',
       next_bill_no: data.next_bill_no || 1,
+      bill_no_format: data.bill_no_format || 'dash_4',
       id: uid(),
       created_at: now,
       updated_at: now,

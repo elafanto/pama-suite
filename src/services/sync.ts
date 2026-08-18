@@ -232,6 +232,7 @@ async function upsertCloudRow(
       logo: rec.logo, signature: rec.signature, decl: rec.decl, terms: rec.terms,
       prefix: rec.prefix || 'INV',
       next_bill_no: Math.max(Number(rec.next_bill_no) || 1, Number(remoteFirm?.next_bill_no) || 1),
+      bill_no_format: rec.bill_no_format || 'dash_4',
       locked_sales_months: Array.isArray(rec.locked_sales_months) ? rec.locked_sales_months : [],
     })
   } else if (localName === 'parties') {
@@ -282,7 +283,7 @@ async function repairLocalInvoiceNumberState(): Promise<number> {
         (a.created_at || a.updated_at || '').localeCompare(b.created_at || b.updated_at || ''),
       )
       for (const dup of ordered.slice(1)) {
-        const { billNo } = allocateBillNo(firm, invoices)
+        const { billNo } = allocateBillNo(firm, invoices, dup.date)
         const updated = { ...dup, bill_no: billNo, updated_at: nowISO(), _dirty: true }
         await db.invoices.put(updated)
         invoices = invoices.map((b) => (b.id === dup.id ? updated : b))
@@ -465,6 +466,7 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
         terms: r.terms || '',
         prefix: r.prefix || 'INV',
         next_bill_no: r.next_bill_no || 1,
+        bill_no_format: r.bill_no_format || 'dash_4',
         locked_sales_months: Array.isArray(r.locked_sales_months) ? r.locked_sales_months : [],
         created_at: r.created_at,
         updated_at: r.updated_at,

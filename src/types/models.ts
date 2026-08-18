@@ -53,6 +53,16 @@ export interface Item extends BaseRecord {
   purchase_rate?: number      // last/standard buy rate (for stock value)
 }
 
+/** Per-firm sales invoice numbering style (prefix is separate on Firm). */
+export type BillNoFormat =
+  | 'dash_4'       // INV-0001
+  | 'slash_4'      // INV/0001
+  | 'compact_4'    // INV0001
+  | 'dash_5'       // INV-00001
+  | 'dash_3'       // INV-001
+  | 'dash_plain'   // INV-1
+  | 'fy_slash_4'   // INV/24-25/0001
+
 export interface Firm {
   id: string
   name: string
@@ -70,6 +80,8 @@ export interface Firm {
   signature?: string
   prefix?: string
   next_bill_no?: number
+  /** Sales invoice number layout — per firm. Default INV-0001 style. */
+  bill_no_format?: BillNoFormat
   /** YYYY-MM months whose sales invoices are locked (after GSTR-1 filing). */
   locked_sales_months?: string[]
   decl?: string
