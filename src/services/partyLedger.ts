@@ -1,3 +1,4 @@
+import { isInvoiceActive } from '@/services/invoiceStatus'
 import type { Invoice, Party, Purchase } from '@/types/models'
 
 export type PartyLedgerMode = 'customer' | 'vendor' | 'both'
@@ -135,7 +136,7 @@ export function buildPartyLedger(
 
   if (filters.mode === 'customer' || filters.mode === 'both') {
     for (const inv of invoices) {
-      if (inv.firm_id !== filters.firmId || inv.is_deleted) continue
+      if (inv.firm_id !== filters.firmId || !isInvoiceActive(inv)) continue
       if (!isCustomerDebitDoc(inv) && !isCustomerCreditDoc(inv)) continue
       if (!inDateRange(inv.date, filters)) continue
       if (!matchesParty(inv.party_id, inv.party_name, filters)) continue
@@ -291,7 +292,7 @@ export function partyLedgerOptions(
   }
 
   invoices
-    .filter((inv) => inv.firm_id === firmId && !inv.is_deleted)
+    .filter((inv) => inv.firm_id === firmId && isInvoiceActive(inv))
     .forEach((inv) => addDocOption(inv.party_name, 'customer'))
 
   purchases

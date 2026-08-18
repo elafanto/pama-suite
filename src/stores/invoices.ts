@@ -40,7 +40,7 @@ async function reverseInvoiceEffects(invoice: Invoice) {
   const accounting = useAccountingStore()
   await accounting.reverseLedgerByRef(invoice.id)
   await accounting.reverseLedgerByRef(`${invoice.id}_PAY`)
-  await recordInvoiceMovements({ ...invoice, is_deleted: true })
+  await recordInvoiceMovements({ ...invoice, is_deleted: true, cancelled_at: invoice.cancelled_at || nowISO() })
 }
 
 async function restoreInvoiceEffects(invoice: Invoice) {
@@ -164,7 +164,7 @@ export const useInvoiceStore = defineStore('invoices', () => {
       _dirty: true,
     }) as Invoice
     await db.invoices.put(cancelled)
-    await reverseInvoiceEffects(existing)
+    await reverseInvoiceEffects(cancelled)
     await logActivity(existing.firm_id, 'cancel', 'invoice', id, `Invoice ${existing.bill_no} cancelled`)
     await load()
     return cancelled

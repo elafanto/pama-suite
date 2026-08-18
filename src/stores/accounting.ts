@@ -5,6 +5,7 @@ import { createRepo } from '@/data/repo'
 import { useFirmStore } from './firm'
 import { nowISO } from '@/data/util'
 import { isInterstateGst } from '@/services/gst'
+import { isInvoiceActive } from '@/services/invoiceStatus'
 import { softDeleteAttachmentsForEntity } from '@/services/documentAttachments'
 import type { Voucher, Account, LedgerEntry, Invoice, Purchase } from '@/types/models'
 
@@ -185,6 +186,7 @@ export const useAccountingStore = defineStore('accounting', () => {
   async function postSaleToLedger(bill: Invoice) {
     if (!bill.firm_id) return
     await reverseLedgerByRef(bill.id)
+    if (!isInvoiceActive(bill)) return
 
     const firmId = bill.firm_id
     const entries: LedgerEntry[] = []
@@ -635,14 +637,21 @@ export const useAccountingStore = defineStore('accounting', () => {
     if (!firmId) return { invoices: 0, purchases: 0 }
     await load()
 
-    const invoices = await db.invoices.where('firm_id').equals(firmId).filter((b) => !b.is_deleted).toArray()
+    const invoices = await db.invoices.where('firm_id').equals(firmId).toArray()
     const purchases = await db.purchases.where('firm_id').equals(firmId).filter((p) => !p.is_deleted).toArray()
+    const activeInvoices = invoices.filter((b) => isInvoiceActive(b))
 
-    for (const inv of invoices) await postSaleToLedger(inv)
+    // Reverse cancelled/deleted first so leftover sale vouchers are removed,
+    // then re-post only live invoices.
+    for (const inv of invoices.filter((b) => !isInvoiceActive(b))) {
+      await reverseLedgerByRef(inv.id)
+      await reverseLedgerByRef(`${inv.id}_PAY`)
+    }
+    for (const inv of activeInvoices) await postSaleToLedger(inv)
     for (const pur of purchases) await postPurchaseToLedger(pur)
 
     await load()
-    return { invoices: invoices.length, purchases: purchases.length }
+    return { invoices: activeInvoices.length, purchases: purchases.length }
   }
 
   return {

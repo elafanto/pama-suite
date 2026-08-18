@@ -75,6 +75,14 @@ describe('computeStock', () => {
     expect(rows[0].sold).toBe(0)
     expect(rows[0].onHand).toBe(100)
   })
+
+  it('ignores cancelled invoices so stock is restored', () => {
+    const items = [item({ opening_stock: 100 })]
+    const cancelled = invoice([{ item_id: 'I1', name: 'Kraft 120', qty: 40 }], { cancelled_at: '2026-08-01T00:00:00.000Z' })
+    const rows = computeStock(items, [], [cancelled], FIRM)
+    expect(rows[0].sold).toBe(0)
+    expect(rows[0].onHand).toBe(100)
+  })
 })
 
 describe('stockSummary', () => {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
+import { isInvoiceActive } from '@/services/invoiceStatus'
 import { useInvoiceStore } from '@/stores/invoices'
 import { usePurchaseStore } from '@/stores/purchases'
 import { usePartyStore } from '@/stores/parties'
@@ -36,7 +37,7 @@ const prevMonthPrefix = (() => {
 
 const stockRows = computed(() => {
   const firmId = firmStore.activeFirmId
-  const bills = invoiceStore.list.filter(b => b.firm_id === firmId && !b.is_deleted)
+  const bills = invoiceStore.list.filter(b => b.firm_id === firmId && isInvoiceActive(b))
   const purchases = purchaseStore.list.filter(p => p.firm_id === firmId && !p.is_deleted)
   return computeStock(itemsStore.list, purchases, bills, firmId, movements.value)
 })
@@ -57,7 +58,7 @@ const lowReelAlerts = computed(() =>
 
 const stats = computed(() => {
   const firmId = firmStore.activeFirmId
-  const bills = invoiceStore.list.filter(b => b.firm_id === firmId && !b.is_deleted)
+  const bills = invoiceStore.list.filter(b => b.firm_id === firmId && isInvoiceActive(b))
   const purchases = purchaseStore.list.filter(p => p.firm_id === firmId && !p.is_deleted)
   const aging = outstandingAging(bills)
   const totalOut = aging.reduce((s, r) => s + r.total, 0)
@@ -92,14 +93,14 @@ const stats = computed(() => {
 
 const topCustomers = computed(() => {
   const firmId = firmStore.activeFirmId
-  const bills = invoiceStore.list.filter(b => b.firm_id === firmId && !b.is_deleted)
+  const bills = invoiceStore.list.filter(b => b.firm_id === firmId && isInvoiceActive(b))
   return outstandingAging(bills).slice(0, 5)
 })
 
 const recentBills = computed(() => {
   const firmId = firmStore.activeFirmId
   return [...invoiceStore.list]
-    .filter(b => b.firm_id === firmId && !b.is_deleted)
+    .filter(b => b.firm_id === firmId && isInvoiceActive(b))
     .sort((a, b) => (b.created_at || b.date).localeCompare(a.created_at || a.date))
     .slice(0, 8) as Invoice[]
 })

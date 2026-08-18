@@ -153,7 +153,7 @@ export async function recordPurchaseMovements(purchase: Purchase): Promise<ItemS
 }
 
 export async function recordInvoiceMovements(invoice: Invoice): Promise<ItemStockMovement[]> {
-  if (invoice.is_deleted || (invoice.doc_type !== 'INVOICE' && invoice.doc_type !== 'invoice')) {
+  if (invoice.is_deleted || invoice.cancelled_at || (invoice.doc_type !== 'INVOICE' && invoice.doc_type !== 'invoice')) {
     return replaceMovementsForRef(invoice.firm_id, 'invoice', 'invoice', invoice.id, [])
   }
 

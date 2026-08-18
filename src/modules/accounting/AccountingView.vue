@@ -7,6 +7,7 @@ import { usePartyStore } from '@/stores/parties'
 import { usePurchaseStore } from '@/stores/purchases'
 import { useSettingsStore } from '@/stores/settings'
 import { cashBookFromVouchers, customerReceivableSummary } from '@/services/reports'
+import { isInvoiceActive } from '@/services/invoiceStatus'
 import { buildPartyLedger, partyLedgerOptions, type PartyLedgerMode, type PartyLedgerPartyOption } from '@/services/partyLedger'
 import { scanVoucherImage, fileToBase64, type VoucherScanResult } from '@/services/aiScanner'
 import {
@@ -369,11 +370,11 @@ const trialBalanceReport = computed(() => {
 const ledgerHealth = computed(() => accountingStore.verifyTrialBalance(reportAsOnDate.value))
 const rebuilding = ref(false)
 async function doRebuildLedger() {
-  if (!confirm('Rebuild ledger from all invoices & purchases?\n\nSafe & idempotent — re-posts every sale/purchase voucher using the corrected tax logic (fixes any old IGST/round-off drift).')) return
+      if (!confirm('Rebuild ledger from live invoices & purchases?\n\nCancelled bills ledger se nikal jayenge. Safe & idempotent — re-posts every sale/purchase voucher using the corrected tax logic.')) return
   rebuilding.value = true
   try {
     const r = await accountingStore.rebuildLedger()
-    alert(`Ledger rebuilt ✓\n${r.invoices} invoices + ${r.purchases} purchases re-posted.`)
+    alert(`Ledger rebuilt ✓\n${r.invoices} live invoices + ${r.purchases} purchases re-posted. Cancelled bills excluded.`)
   } finally {
     rebuilding.value = false
   }
@@ -478,7 +479,7 @@ function viewVoucherDetail(v: Voucher) {
 
 const customerLedgerRows = computed(() => {
   const firmId = firmStore.activeFirmId
-  return customerReceivableSummary(invoiceStore.list.filter(i => i.firm_id === firmId && !i.is_deleted && !i.cancelled_at))
+  return customerReceivableSummary(invoiceStore.list.filter(i => i.firm_id === firmId && isInvoiceActive(i)))
 })
 
 const cashBookRows = computed(() => cashBookFromVouchers(accountingStore.vouchers, {

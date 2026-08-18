@@ -19,12 +19,12 @@ export interface EwayEligibility {
 }
 
 /** Intra: ≥ ₹50k. Inter-state: all bills (below ₹50k = suggested). */
-export function getEwayEligibility(invoice: Pick<Invoice, 'doc_type' | 'grand_total' | 'gst_type' | 'is_deleted'>): EwayEligibility {
+export function getEwayEligibility(invoice: Pick<Invoice, 'doc_type' | 'grand_total' | 'gst_type' | 'is_deleted' | 'cancelled_at'>): EwayEligibility {
   const dt = String(invoice.doc_type || 'INVOICE').toUpperCase()
   if (dt !== 'INVOICE') {
     return { show: false, autoSelect: false, level: 'none', reason: 'Sirf Tax Invoice ke liye E-Way JSON' }
   }
-  if (invoice.is_deleted) {
+  if (invoice.is_deleted || invoice.cancelled_at) {
     return { show: false, autoSelect: false, level: 'none', reason: '' }
   }
 

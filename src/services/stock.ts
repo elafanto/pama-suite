@@ -1,4 +1,5 @@
 import { manualAdjustmentTotals } from '@/services/inventoryLedger'
+import { isInvoiceActive } from '@/services/invoiceStatus'
 import { isGenericInventoryLine } from '@/services/purchaseLineKind'
 import type { Item, Invoice, Purchase, ItemStockMovement } from '@/types/models'
 
@@ -76,7 +77,7 @@ export function computeStock(
     }
   }
   for (const inv of invoices) {
-    if (inv.is_deleted || inv.firm_id !== firmId) continue
+    if (!isInvoiceActive(inv) || inv.firm_id !== firmId) continue
     if (inv.doc_type !== 'INVOICE' && inv.doc_type !== 'invoice') continue
     for (const l of inv.items || []) {
       const itemId = resolveLineItemId(l.item_id, l.name)
