@@ -14,6 +14,13 @@ import { downloadInvoicePdf, bulkDownloadInvoicePdf, INVOICE_PDF_COPY_OPTIONS, t
 import { resolveFirmSignature } from '@/services/firmSignature'
 import { resolveLivePartyDetails, resolveLiveShipDetails, type PartyLookup } from '@/services/invoiceDisplay'
 import { peekBillNo } from '@/services/invoiceNumber'
+import {
+  normalizeHsn4,
+  resolveHsnGstRate,
+  buildBillGstConfirmMessage,
+  commonBillingHsn4Options,
+  type HsnGstLookup,
+} from '@/services/hsnGst'
 import { listItemStockMovements } from '@/services/inventoryLedger'
 import { computeStock, findStockRowForLine } from '@/services/stock'
 import { periodLabelYm, salesMonthLockMessage, salesPeriodFromDate } from '@/services/salesMonthLock'
@@ -38,7 +45,7 @@ const quickCust = reactive<NewParty>({
   city: '', pin: '', state: '05', is_consumer: false, bank: '', acno: '', ifsc: '', acname: '',
 })
 const quickItem = reactive<NewItem>({
-  name: '', unit: 'KG', hsn: '48043100', gst: 18, rate: 0, size: '', gsm: '', bf: '',
+  name: '', unit: 'KG', hsn: '4804', gst: 18, rate: 0, size: '', gsm: '', bf: '',
 })
 const ITEM_UNITS = ['PCS', 'KG', 'MTR', 'NOS', 'BOX', 'SET', 'SQM', 'DOZEN']
 
@@ -247,6 +254,33 @@ const showFormAddresses = computed(() => !!formBuyerDisplay.value)
 // Helper functions
 const n2 = (val: number) => (val || 0).toFixed(2)
 
+const hsn4Options = commonBillingHsn4Options()
+const rowHsnLookups = ref<Map<string, HsnGstLookup>>(new Map())
+const hsnLookupBusy = ref<Record<number, boolean>>({})
+
+function sanitizeHsnInput(row: InvoiceItemLine) {
+  row.hsn = (row.hsn || '').replace(/\D/g, '').slice(0, 4)
+}
+
+async function onHsnBlur(row: InvoiceItemLine, idx: number) {
+  sanitizeHsnInput(row)
+  const hsn4 = normalizeHsn4(row.hsn)
+  if (!hsn4) return
+  row.hsn = hsn4
+  hsnLookupBusy.value = { ...hsnLookupBusy.value, [idx]: true }
+  try {
+    const lookup = await resolveHsnGstRate(hsn4)
+    if (lookup) {
+      row.gst = lookup.gst
+      rowHsnLookups.value = new Map(rowHsnLookups.value).set(hsn4, lookup)
+    }
+  } finally {
+    const next = { ...hsnLookupBusy.value }
+    delete next[idx]
+    hsnLookupBusy.value = next
+  }
+}
+
 // Incomplete row validation helper
 function isRowIncomplete(row: InvoiceItemLine) {
   const hasContent = row.name.trim() || row.qty > 0 || row.rate > 0
@@ -257,7 +291,7 @@ function addRow(data: Partial<InvoiceItemLine> = {}) {
   form.items.push({
     item_id: data.item_id || null,
     name: data.name || '',
-    hsn: data.hsn || '48043100',
+    hsn: normalizeHsn4(data.hsn) || data.hsn?.replace(/\D/g, '').slice(0, 4) || '4804',
     size: data.size || '',
     gsm: data.gsm || '',
     bf: data.bf || '',
@@ -376,17 +410,23 @@ function detectGstType() {
 watch(() => form.sameAsBuyer, detectGstType)
 
 // Autocomplete item selection per row
-function handleItemSelect(row: InvoiceItemLine) {
+async function handleItemSelect(row: InvoiceItemLine) {
   const match = itemStore.list.find(i => !i.is_deleted && i.name.toLowerCase() === row.name.trim().toLowerCase())
   if (match) {
     row.item_id = match.id
-    row.hsn = match.hsn
+    row.hsn = normalizeHsn4(match.hsn) || match.hsn.replace(/\D/g, '').slice(0, 4) || '4804'
     row.unit = match.unit
-    row.gst = match.gst
     row.rate = match.rate
     row.size = match.size || ''
     row.gsm = match.gsm || ''
     row.bf = match.bf || ''
+    const lookup = await resolveHsnGstRate(row.hsn)
+    if (lookup) {
+      row.gst = lookup.gst
+      rowHsnLookups.value = new Map(rowHsnLookups.value).set(lookup.hsn4, lookup)
+    } else {
+      row.gst = match.gst
+    }
   }
 }
 
@@ -594,7 +634,7 @@ async function saveQuickCust() {
 }
 
 function openQuickItem() {
-  Object.assign(quickItem, { name: '', unit: 'KG', hsn: '48043100', gst: 18, rate: 0, size: '', gsm: '', bf: '' })
+  Object.assign(quickItem, { name: '', unit: 'KG', hsn: '4804', gst: 18, rate: 0, size: '', gsm: '', bf: '' })
   showQuickItem.value = true
 }
 
@@ -832,6 +872,12 @@ async function saveInvoice() {
   }
 
   if (editingId.value && !form.bill_no.trim()) return alert('Invoice number required')
+
+  if (form.doc_type === 'INVOICE') {
+    for (const row of validItems) sanitizeHsnInput(row)
+    const msg = buildBillGstConfirmMessage(validItems, rowHsnLookups.value)
+    if (!confirm(msg)) return
+  }
 
   const customerObj = partyStore.list.find(p => !p.is_deleted && p.name.toLowerCase() === form.party_name.trim().toLowerCase())
 
@@ -1273,6 +1319,9 @@ onMounted(async () => {
       <datalist id="itemList">
         <option v-for="it in itemStore.list.filter(i => !i.is_deleted)" :key="it.id" :value="it.name" />
       </datalist>
+      <datalist id="hsn4List">
+        <option v-for="code in hsn4Options" :key="code" :value="code" />
+      </datalist>
 
       <!-- Main Form Area -->
       <div class="lg:col-span-3 space-y-6">
@@ -1470,7 +1519,18 @@ onMounted(async () => {
                     </div>
                   </td>
                   <td class="p-1">
-                    <input v-model="row.hsn" class="pp-input !py-1.5 !px-2 text-center w-full min-w-[5.5rem]" />
+                    <input
+                      v-model="row.hsn"
+                      list="hsn4List"
+                      maxlength="4"
+                      inputmode="numeric"
+                      class="pp-input !py-1.5 !px-2 text-center w-full min-w-[4.5rem] font-mono"
+                      placeholder="4804"
+                      title="4-digit HSN — GST auto from official slab"
+                      @input="sanitizeHsnInput(row)"
+                      @blur="onHsnBlur(row, idx)"
+                    />
+                    <p v-if="hsnLookupBusy[idx]" class="text-[10px] text-slate-400 mt-0.5">GST lookup…</p>
                   </td>
                   <td class="p-1">
                     <input v-model.number="row.qty" type="number" step="0.001" :class="['pp-input !py-1.5 !px-2.5 text-right w-full min-w-[5.5rem]', rowHasStockWarning(row) ? 'border-red-300 bg-red-50' : '']" />
@@ -2031,7 +2091,7 @@ onMounted(async () => {
       <div class="space-y-3">
         <div><label class="pp-label">Name *</label><input v-model="quickItem.name" class="pp-input" /></div>
         <div class="grid grid-cols-2 gap-3">
-          <div><label class="pp-label">HSN</label><input v-model="quickItem.hsn" class="pp-input" /></div>
+          <div><label class="pp-label">HSN (4 digit)</label><input v-model="quickItem.hsn" maxlength="4" inputmode="numeric" class="pp-input font-mono" placeholder="4804" /></div>
           <div><label class="pp-label">Unit</label>
             <select v-model="quickItem.unit" class="pp-input">
               <option v-for="u in ITEM_UNITS" :key="u" :value="u">{{ u }}</option>
