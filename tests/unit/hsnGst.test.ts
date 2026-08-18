@@ -27,7 +27,7 @@ describe('lookupHsnGstLocal', () => {
 describe('buildBillGstConfirmMessage', () => {
   it('lists each line for confirmation', () => {
     const msg = buildBillGstConfirmMessage(
-      [{ name: 'Kraft', hsn: '4804', gst: 12 }],
+      [{ name: 'Kraft', hsn: '4804', gst: 18 }],
       new Map(),
     )
     expect(msg).toMatch(/4804/)
