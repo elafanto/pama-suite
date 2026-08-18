@@ -16,11 +16,11 @@ describe('normalizeHsn4', () => {
 })
 
 describe('lookupHsnGstLocal', () => {
-  it('returns 12% for kraft paper heading 4804', () => {
-    expect(lookupHsnGstLocal('4804')?.gst).toBe(12)
+  it('returns 18% for kraft paper heading 4804', () => {
+    expect(lookupHsnGstLocal('4804')?.gst).toBe(18)
   })
-  it('returns 12% for cartons heading 4819', () => {
-    expect(lookupHsnGstLocal('4819')?.gst).toBe(12)
+  it('returns 5% for corrugated boxes heading 4819', () => {
+    expect(lookupHsnGstLocal('4819')?.gst).toBe(5)
   })
 })
 
@@ -31,7 +31,7 @@ describe('buildBillGstConfirmMessage', () => {
       new Map(),
     )
     expect(msg).toMatch(/4804/)
-    expect(msg).toMatch(/12%/)
+    expect(msg).toMatch(/18%/)
     expect(msg).toMatch(/Continue/)
   })
 })

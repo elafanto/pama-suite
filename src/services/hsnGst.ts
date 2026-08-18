@@ -15,6 +15,35 @@ const PORTAL_SOURCE = 'gst.gov.in (live lookup)'
 
 const ratesMap = hsnGst4Data.rates as Record<string, HsnGst4Entry>
 
+/**
+ * Pama billing — 4-digit slabs from CBIC tariff lines (override generic chapter aggregate).
+ * Kraft paper reels: 18% | Corrugated cartons/boxes: 5%
+ */
+const BILLING_HSN_GST_OVERRIDES: Record<string, HsnGst4Entry & { description: string }> = {
+  '4804': {
+    gst: 18,
+    description: 'Kraft paper / kraft paperboard (reels)',
+    notificationRef: 'CGST Rate Notification — kraft paper heading 4804',
+  },
+  '4819': {
+    gst: 5,
+    description: 'Corrugated cartons, boxes & cases (paper / paperboard)',
+    notificationRef: 'CGST Rate Notification — 4819 corrugated boxes',
+  },
+}
+
+function lookupOverride(hsn4: string): HsnGstLookup | null {
+  const entry = BILLING_HSN_GST_OVERRIDES[hsn4]
+  if (!entry) return null
+  return {
+    hsn4,
+    gst: entry.gst,
+    description: entry.description,
+    source: `${LOCAL_SOURCE} (packaging tariff line)`,
+    notificationRef: entry.notificationRef,
+  }
+}
+
 /** Normalize any HSN input to 4-digit heading (GSTR-1 ≤ ₹5 Cr turnover). */
 export function normalizeHsn4(hsn: string | number | undefined | null): string | null {
   const digits = String(hsn ?? '').replace(/\D/g, '')
@@ -40,6 +69,8 @@ export function commonBillingHsn4Options(): string[] {
 }
 
 export function lookupHsnGstLocal(hsn4: string): HsnGstLookup | null {
+  const override = lookupOverride(hsn4)
+  if (override) return override
   const entry = ratesMap[hsn4]
   if (!entry) return null
   return {
@@ -105,6 +136,8 @@ export async function fetchHsnGstFromPortal(hsn4: string): Promise<HsnGstLookup 
 export async function resolveHsnGstRate(hsn: string | number | undefined | null): Promise<HsnGstLookup | null> {
   const hsn4 = normalizeHsn4(hsn)
   if (!hsn4) return null
+  const override = lookupOverride(hsn4)
+  if (override) return override
   const live = await fetchHsnGstFromPortal(hsn4)
   if (live) return live
   return lookupHsnGstLocal(hsn4)
