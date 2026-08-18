@@ -1446,47 +1446,37 @@ onMounted(async () => {
               <thead class="bg-slate-100 text-slate-500 uppercase font-semibold">
                 <tr>
                   <th class="px-2 py-2 text-center w-8">Sl</th>
-                  <th class="px-2 py-2 text-left min-w-[200px]">Item Description</th>
-                  <th class="px-2 py-2 text-center w-20">HSN</th>
-                  <th class="px-2 py-2 text-center w-16">Size</th>
-                  <th class="px-2 py-2 text-center w-14">GSM</th>
-                  <th class="px-2 py-2 text-center w-14">BF</th>
-                  <th class="px-2 py-2 text-left">Extra</th>
-                  <th class="px-2 py-2 text-right w-16">Qty</th>
-                  <th class="px-2 py-2 text-center w-16">Unit</th>
-                  <th class="px-2 py-2 text-right w-16">Rate</th>
-                  <th class="px-2 py-2 text-center w-16">GST%</th>
-                  <th class="px-2 py-2 text-right w-20">Amt</th>
+                  <th class="px-2 py-2 text-left min-w-[220px]">Item Description</th>
+                  <th class="px-2 py-2 text-center w-24">HSN</th>
+                  <th class="px-2 py-2 text-right w-24">Qty</th>
+                  <th class="px-2 py-2 text-center w-20">Unit</th>
+                  <th class="px-2 py-2 text-right w-28">Rate</th>
+                  <th class="px-2 py-2 text-center w-20">GST%</th>
+                  <th class="px-2 py-2 text-right w-24">Amt</th>
                   <th class="px-2 py-2 text-center w-8">✕</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="(row, idx) in form.items" :key="idx"
-                  :class="['border-t border-slate-100', rowHasStockWarning(row) ? 'bg-red-50' : isRowIncomplete(row) ? 'bg-amber-50/50' : 'hover:bg-slate-50/30']">
+                  :class="['border-t border-slate-100 align-top', rowHasStockWarning(row) ? 'bg-red-50' : isRowIncomplete(row) ? 'bg-amber-50/50' : 'hover:bg-slate-50/30']">
                   <td class="text-center font-bold text-slate-400 py-2">{{ idx + 1 }}</td>
-                  <td class="p-1">
-                    <input v-model="row.name" list="itemList" @input="handleItemSelect(row)" class="pp-input !py-1 !px-2" placeholder="Product name..." />
+                  <td class="p-1 min-w-[220px]">
+                    <input v-model="row.name" list="itemList" @input="handleItemSelect(row)" class="pp-input !py-1.5 !px-2 w-full" placeholder="Product name..." />
+                    <div class="mt-1.5 grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                      <input v-model="row.size" class="pp-input !py-1 !px-2 text-center min-w-0" placeholder="Size" title="Size" />
+                      <input v-model="row.gsm" class="pp-input !py-1 !px-2 text-center min-w-0" placeholder="GSM" title="GSM" />
+                      <input v-model="row.bf" class="pp-input !py-1 !px-2 text-center min-w-0" placeholder="BF" title="BF" />
+                      <input v-model="row.extra" class="pp-input !py-1 !px-2 min-w-0" placeholder="Extra" title="Extra" />
+                    </div>
                   </td>
                   <td class="p-1">
-                    <input v-model="row.hsn" class="pp-input !py-1 !px-2 text-center" />
+                    <input v-model="row.hsn" class="pp-input !py-1.5 !px-2 text-center w-full min-w-[5.5rem]" />
                   </td>
                   <td class="p-1">
-                    <input v-model="row.size" class="pp-input !py-1 !px-2 text-center" />
+                    <input v-model.number="row.qty" type="number" step="0.001" :class="['pp-input !py-1.5 !px-2.5 text-right w-full min-w-[5.5rem]', rowHasStockWarning(row) ? 'border-red-300 bg-red-50' : '']" />
                   </td>
                   <td class="p-1">
-                    <input v-model="row.gsm" class="pp-input !py-1 !px-2 text-center" />
-                  </td>
-                  <td class="p-1">
-                    <input v-model="row.bf" class="pp-input !py-1 !px-2 text-center" />
-                  </td>
-                  <td class="p-1">
-                    <input v-model="row.extra" class="pp-input !py-1 !px-2" placeholder="extra" />
-                  </td>
-                  <td class="p-1">
-                    <input v-model.number="row.qty" type="number" step="0.001" :class="['pp-input !py-1 !px-2 text-right', rowHasStockWarning(row) ? 'border-red-300 bg-red-50' : '']" />
-                  </td>
-                  <td class="p-1">
-                    <select v-model="row.unit" class="pp-input !py-1 !px-1 text-center">
+                    <select v-model="row.unit" class="pp-input !py-1.5 !px-1.5 text-center w-full min-w-[4.5rem]">
                       <option>KG</option>
                       <option>PCS</option>
                       <option>MTR</option>
@@ -1497,10 +1487,10 @@ onMounted(async () => {
                     </select>
                   </td>
                   <td class="p-1">
-                    <input v-model.number="row.rate" type="number" step="0.01" class="pp-input !py-1 !px-2 text-right" />
+                    <input v-model.number="row.rate" type="number" step="0.01" class="pp-input !py-1.5 !px-2.5 text-right w-full min-w-[6rem]" />
                   </td>
                   <td class="p-1">
-                    <select v-model.number="row.gst" class="pp-input !py-1 !px-1 text-center">
+                    <select v-model.number="row.gst" class="pp-input !py-1.5 !px-1.5 text-center w-full min-w-[4.5rem]">
                       <option :value="0">0%</option>
                       <option :value="5">5%</option>
                       <option :value="12">12%</option>
@@ -1508,10 +1498,10 @@ onMounted(async () => {
                       <option :value="28">28%</option>
                     </select>
                   </td>
-                  <td class="p-1 text-right font-semibold text-navy pr-3">
+                  <td class="p-1 text-right font-semibold text-navy pr-3 pt-2 whitespace-nowrap">
                     ₹ {{ n2(row.qty * row.rate) }}
                   </td>
-                  <td class="p-1 text-center">
+                  <td class="p-1 text-center pt-2">
                     <button @click="removeRow(idx)" class="text-danger hover:text-red-700 text-sm font-bold">✕</button>
                   </td>
                 </tr>
