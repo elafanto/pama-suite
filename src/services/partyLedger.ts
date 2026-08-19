@@ -84,6 +84,7 @@ function customerDocLabel(inv: Invoice) {
   if (kind === 'CREDIT_NOTE') return 'Credit Note'
   if (kind === 'DEBIT_NOTE') return 'Debit Note'
   if (kind === 'BILL_OF_SUPPLY') return 'Bill of Supply'
+  if (kind === 'DELIVERY_CHALLAN') return 'Delivery Challan'
   return 'Invoice'
 }
 

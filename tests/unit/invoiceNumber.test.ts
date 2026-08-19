@@ -5,8 +5,10 @@ import {
   maxBillSequence,
   resolveNextSequence,
   allocateBillNo,
+  allocateChallanNo,
   findDuplicateBillNoGroups,
   peekBillNo,
+  peekChallanNo,
   indianFYShort,
 } from '@/services/invoiceNumber'
 
@@ -101,5 +103,22 @@ describe('findDuplicateBillNoGroups', () => {
   it('does not flag the same number across different firms', () => {
     const rows = [inv({ bill_no: 'INV-0001' }), inv({ bill_no: 'INV-0001', firm_id: 'F2' })]
     expect(findDuplicateBillNoGroups(rows)).toHaveLength(0)
+  })
+})
+
+describe('challan numbering', () => {
+  it('uses a separate DC series and does not consume invoice numbers', () => {
+    const invoices = [
+      inv({ bill_no: 'INV-0008', doc_type: 'INVOICE' }),
+      inv({ bill_no: 'DC-0002', doc_type: 'DELIVERY_CHALLAN' }),
+    ]
+    expect(peekChallanNo(firm({ next_bill_no: 9 }), invoices)).toBe('DC-0003')
+    expect(peekBillNo(firm({ next_bill_no: 9 }), invoices)).toBe('INV-0009')
+    const { billNo } = allocateChallanNo(firm({ next_bill_no: 9 }), invoices)
+    expect(billNo).toBe('DC-0003')
+  })
+
+  it('starts DC-0001 when no challans exist yet', () => {
+    expect(peekChallanNo(firm({ next_bill_no: 40 }), [inv({ bill_no: 'INV-0039' })])).toBe('DC-0001')
   })
 })

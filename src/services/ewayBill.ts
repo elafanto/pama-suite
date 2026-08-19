@@ -18,11 +18,11 @@ export interface EwayEligibility {
   reason: string
 }
 
-/** Intra: ≥ ₹50k. Inter-state: all bills (below ₹50k = suggested). */
+/** Intra: ≥ ₹50k. Inter-state: all bills (below ₹50k = suggested). Job-work challans use the same value rules. */
 export function getEwayEligibility(invoice: Pick<Invoice, 'doc_type' | 'grand_total' | 'gst_type' | 'is_deleted' | 'cancelled_at'>): EwayEligibility {
   const dt = String(invoice.doc_type || 'INVOICE').toUpperCase()
-  if (dt !== 'INVOICE') {
-    return { show: false, autoSelect: false, level: 'none', reason: 'Sirf Tax Invoice ke liye E-Way JSON' }
+  if (dt !== 'INVOICE' && dt !== 'DELIVERY_CHALLAN') {
+    return { show: false, autoSelect: false, level: 'none', reason: 'Sirf Tax Invoice / Delivery Challan ke liye E-Way JSON' }
   }
   if (invoice.is_deleted || invoice.cancelled_at) {
     return { show: false, autoSelect: false, level: 'none', reason: '' }
@@ -68,6 +68,8 @@ const fmtD = (iso: string) => {
 
 const ewbDocType = (dt: string) => {
   const u = String(dt || 'INVOICE').toUpperCase()
+  if (u === 'DELIVERY_CHALLAN') return 'CHL'
+  if (u === 'BILL_OF_SUPPLY') return 'BIL'
   return u === 'CREDIT_NOTE' || u === 'DEBIT_NOTE' ? 'OTH' : 'INV'
 }
 
@@ -215,11 +217,12 @@ export function buildEwayJson(invoices: Invoice[], firm: Firm, partyLookup?: Par
 
     const mainHsn = String(parseInt(String(b.items?.[0]?.hsn || '48043100'), 10) || 48043100)
 
+    const isChallan = String(b.doc_type || '').toUpperCase() === 'DELIVERY_CHALLAN'
     return {
       userGstin: fromGstn,
       supplyType: 'O',
-      subSupplyType: 1,
-      subSupplyDesc: '',
+      subSupplyType: isChallan ? 4 : 1,
+      subSupplyDesc: isChallan ? 'Job Work' : '',
       docType: ewbDocType(b.doc_type),
       docNo: String(b.bill_no),
       docDate: fmtD(b.date),

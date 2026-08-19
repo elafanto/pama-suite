@@ -6,6 +6,7 @@ import { useFirmStore } from './firm'
 import { nowISO } from '@/data/util'
 import { isInterstateGst } from '@/services/gst'
 import { isInvoiceActive } from '@/services/invoiceStatus'
+import { isDeliveryChallan } from '@/services/invoiceDoc'
 import { softDeleteAttachmentsForEntity } from '@/services/documentAttachments'
 import type { Voucher, Account, LedgerEntry, Invoice, Purchase } from '@/types/models'
 
@@ -187,6 +188,7 @@ export const useAccountingStore = defineStore('accounting', () => {
     if (!bill.firm_id) return
     await reverseLedgerByRef(bill.id)
     if (!isInvoiceActive(bill)) return
+    if (isDeliveryChallan(bill)) return
 
     const firmId = bill.firm_id
     const entries: LedgerEntry[] = []

@@ -1,6 +1,7 @@
 import type { Invoice } from '@/types/models'
 import type { Firm } from '@/types/models'
 import { isInvoiceActive } from '@/services/invoiceStatus'
+import { docShortLabel } from '@/services/invoiceDoc'
 
 export interface StatementFilters {
   from?: string
@@ -49,7 +50,7 @@ export function buildStatementHTML(firm: Firm, invoices: Invoice[], filters: Sta
     totTax += tax
     totTotal += b.grand_total || 0
     totPaid += b.amt_paid || 0
-    const docLbl = b.doc_type === 'CREDIT_NOTE' ? 'CN' : b.doc_type === 'DEBIT_NOTE' ? 'DN' : 'INV'
+    const docLbl = docShortLabel(b)
     return `<tr>
       <td>${b.date}</td><td>${b.bill_no}</td><td>${b.party_name}</td><td>${docLbl}</td>
       <td class="num">₹${n2(taxable)}</td><td class="num">₹${n2(tax)}</td><td class="num">₹${n2(b.grand_total)}</td>

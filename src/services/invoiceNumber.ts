@@ -1,4 +1,5 @@
 import type { BillNoFormat, Firm, Invoice } from '@/types/models'
+import { CHALLAN_PREFIX, isDeliveryChallan } from '@/services/invoiceDoc'
 
 export type { BillNoFormat }
 
@@ -202,4 +203,25 @@ export function findDuplicateBillNoGroups(invoices: Invoice[]): Invoice[][] {
     groups.set(key, arr)
   }
   return [...groups.values()].filter((arr) => arr.length > 1)
+}
+
+function challanNumberFirm(firm: Firm): Firm {
+  return { ...firm, prefix: CHALLAN_PREFIX, next_bill_no: 1 }
+}
+
+function challanDocsForFirm(invoices: Invoice[], firmId: string): Invoice[] {
+  return invoices.filter((inv) => inv.firm_id === firmId && isDeliveryChallan(inv))
+}
+
+/** Separate DC- series for job-work delivery challans (does not consume invoice numbers). */
+export function peekChallanNo(firm: Firm, invoices: Invoice[], refDate?: string): string {
+  return peekBillNo(challanNumberFirm(firm), challanDocsForFirm(invoices, firm.id), refDate)
+}
+
+export function allocateChallanNo(
+  firm: Firm,
+  invoices: Invoice[],
+  refDate?: string,
+): { billNo: string; nextSequenceAfter: number } {
+  return allocateBillNo(challanNumberFirm(firm), challanDocsForFirm(invoices, firm.id), refDate)
 }

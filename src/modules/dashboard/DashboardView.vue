@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { isInvoiceActive } from '@/services/invoiceStatus'
+import { isDeliveryChallan } from '@/services/invoiceDoc'
 import { useInvoiceStore } from '@/stores/invoices'
 import { usePurchaseStore } from '@/stores/purchases'
 import { usePartyStore } from '@/stores/parties'
@@ -58,7 +59,7 @@ const lowReelAlerts = computed(() =>
 
 const stats = computed(() => {
   const firmId = firmStore.activeFirmId
-  const bills = invoiceStore.list.filter(b => b.firm_id === firmId && isInvoiceActive(b))
+  const bills = invoiceStore.list.filter(b => b.firm_id === firmId && isInvoiceActive(b) && !isDeliveryChallan(b))
   const purchases = purchaseStore.list.filter(p => p.firm_id === firmId && !p.is_deleted)
   const aging = outstandingAging(bills)
   const totalOut = aging.reduce((s, r) => s + r.total, 0)

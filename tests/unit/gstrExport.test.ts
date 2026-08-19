@@ -295,4 +295,33 @@ describe('buildGstrDocsExportRows / Table 13 cancelled', () => {
       },
     ])
   })
+
+  it('lists job-work delivery challans in Table 13 and keeps them out of B2B', () => {
+    const sale = makeInvoice({
+      id: 'inv1',
+      bill_no: 'INV-0001',
+      taxBuckets: { 5: { taxable: 1000, tax: 50 } },
+      grand_total: 1050,
+    })
+    const challan = makeInvoice({
+      id: 'dc1',
+      bill_no: 'DC-0001',
+      doc_type: 'DELIVERY_CHALLAN',
+      taxBuckets: { 5: { taxable: 400, tax: 20 } },
+      grand_total: 420,
+    })
+    const docs = buildGstrDocsExportRows([sale, challan])
+    expect(docs.map((r) => r.nature)).toEqual([
+      'Invoices for outward supply',
+      'Delivery Challan for job work',
+    ])
+    expect(docs[1]).toMatchObject({
+      srFrom: 'DC-0001',
+      srTo: 'DC-0001',
+      totalNumber: 1,
+      cancelled: 0,
+    })
+    const payload = buildGstr1ExportPayload([sale, challan])
+    expect(payload.b2b.map((r) => r.invoiceNumber)).toEqual(['INV-0001'])
+  })
 })

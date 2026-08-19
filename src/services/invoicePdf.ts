@@ -9,6 +9,14 @@ import {
   type PartyLookup,
 } from '@/services/invoiceDisplay'
 import { resolveFirmSignature } from '@/services/firmSignature'
+import {
+  docFilenamePrefix,
+  docNoLabel,
+  docPdfSubtitle,
+  docPdfTitle,
+  isDeliveryChallan,
+  JOB_WORK_CHALLAN_NOTE,
+} from '@/services/invoiceDoc'
 import type { Firm, Invoice, Party } from '@/types/models'
 
 function n2(n: number) {
@@ -180,8 +188,7 @@ function toPdfBill(inv: Invoice, partyLookup?: PartyLookup): PdfBill {
 }
 
 function pdfFilename(inv: Invoice): string {
-  const docPrefix =
-    inv.doc_type === 'CREDIT_NOTE' ? 'CN' : inv.doc_type === 'DEBIT_NOTE' ? 'DN' : 'Invoice'
+  const docPrefix = docFilenamePrefix(inv)
   const safeName = (inv.party_name || '').replace(/[^a-z0-9]/gi, '_').substring(0, 20)
   return `${docPrefix}_${inv.bill_no}_${safeName}.pdf`
 }
@@ -215,14 +222,9 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
     pdf.setTextColor(0, 0, 0)
   }
 
-  const docTitle =
-    b.docType === 'CREDIT_NOTE'
-      ? 'CREDIT NOTE'
-      : b.docType === 'DEBIT_NOTE'
-        ? 'DEBIT NOTE'
-        : b.docType === 'BILL_OF_SUPPLY'
-          ? 'BILL OF SUPPLY'
-          : 'TAX INVOICE'
+  const isChallan = isDeliveryChallan(b.docType)
+  const docTitle = docPdfTitle(b.docType)
+  const docSub = docPdfSubtitle(b.docType)
 
   pdf.setFont('helvetica', 'bold').setFontSize(15)
   y = drawWrappedText(pdf, String(f.name || '').toUpperCase(), PW / 2, y + 5, W - 8, 5.5, 'center')
@@ -244,12 +246,17 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
   y += 2
 
   pdf.setFillColor(0, 0, 0)
-  pdf.rect(L, y, W, 6, 'F')
-  pdf.setFont('helvetica', 'bold').setFontSize(12)
+  const titleH = isChallan ? 10 : 6
+  pdf.rect(L, y, W, titleH, 'F')
+  pdf.setFont('helvetica', 'bold').setFontSize(isChallan ? 11 : 12)
   pdf.setTextColor(255, 255, 255)
-  pdf.text(docTitle, PW / 2, y + 4.2, { align: 'center' })
+  pdf.text(docTitle, PW / 2, y + (isChallan ? 4 : 4.2), { align: 'center' })
+  if (docSub) {
+    pdf.setFont('helvetica', 'normal').setFontSize(7)
+    pdf.text(docSub, PW / 2, y + 8, { align: 'center' })
+  }
   pdf.setTextColor(0, 0, 0)
-  y += 6
+  y += titleH
   pdf.line(L, y, R, y)
 
   const colW = W / 3
@@ -266,7 +273,7 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
 
   pdf.setFont('helvetica', 'bold').setFontSize(8)
   const buyerRows: Array<{ text: string; font?: 'bold' | 'normal' | 'italic'; size?: number }> = [
-    { text: 'BILL TO (BUYER):', font: 'bold', size: 8 },
+    { text: isChallan ? 'JOB WORKER / CONSIGNEE:' : 'BILL TO (BUYER):', font: 'bold', size: 8 },
     { text: b.custName || '', font: 'bold', size: 9 },
     { text: buyer.addr || '', font: 'normal', size: 8 },
     { text: cityPin(buyer.city, buyer.pin, buyer.addr), font: 'normal', size: 8 },
@@ -288,14 +295,22 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
       { text: 'SHIP TO (CONSIGNEE):', font: 'bold', size: 8 },
       { text: '— Same as Buyer Address —', font: 'italic', size: 8 },
     ]
-  const infoRows: Array<{ text: string; font?: 'bold' | 'normal' | 'italic'; size?: number }> = [
-    { text: 'INVOICE DETAILS:', font: 'bold', size: 8 },
-    { text: `Invoice No: ${b.billNo}`, font: 'normal', size: 8 },
-    { text: `Date: ${fmtDate(b.date)}`, font: 'normal', size: 8 },
-    { text: `Ref: ${b.ref || '-'}`, font: 'normal', size: 8 },
-    { text: `Payment: ${b.payment || '-'}`, font: 'normal', size: 8 },
-    { text: `Status: ${formatPayStatusForPdf(b.payStatus, b.amtPaid)}`, font: 'normal', size: 8 },
-  ]
+  const infoRows: Array<{ text: string; font?: 'bold' | 'normal' | 'italic'; size?: number }> = isChallan
+    ? [
+      { text: 'CHALLAN DETAILS:', font: 'bold', size: 8 },
+      { text: `${docNoLabel(b.docType)}: ${b.billNo}`, font: 'normal', size: 8 },
+      { text: `Date: ${fmtDate(b.date)}`, font: 'normal', size: 8 },
+      { text: `Ref: ${b.ref || '-'}`, font: 'normal', size: 8 },
+      { text: 'Purpose: Job Work', font: 'normal', size: 8 },
+    ]
+    : [
+      { text: 'INVOICE DETAILS:', font: 'bold', size: 8 },
+      { text: `Invoice No: ${b.billNo}`, font: 'normal', size: 8 },
+      { text: `Date: ${fmtDate(b.date)}`, font: 'normal', size: 8 },
+      { text: `Ref: ${b.ref || '-'}`, font: 'normal', size: 8 },
+      { text: `Payment: ${b.payment || '-'}`, font: 'normal', size: 8 },
+      { text: `Status: ${formatPayStatusForPdf(b.payStatus, b.amtPaid)}`, font: 'normal', size: 8 },
+    ]
 
   const partyH = Math.max(
     wrappedBlockHeight(pdf, buyerRows, innerW, lineH),
@@ -576,35 +591,43 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
   pdf.setFont('helvetica', 'bold').setFontSize(10)
   pdf.setFillColor(240, 240, 240)
   pdf.rect(L, y, footHalf, 5, 'F')
-  pdf.text('Bank Details', L + 3, y + 3.5)
+  pdf.text(isChallan ? 'Job Work Note' : 'Bank Details', L + 3, y + 3.5)
   pdf.setFont('helvetica', 'bold').setFontSize(10)
   let by = y + 8
-  ;(f.bank || '-').split('\n').forEach((line) => {
-    pdf.splitTextToSize(line, footHalf - 6).forEach((ww: string) => {
-      pdf.text(ww, L + 3, by)
-      by += 3.8
+  if (isChallan) {
+    pdf.setFont('helvetica', 'normal').setFontSize(7)
+    pdf.splitTextToSize(JOB_WORK_CHALLAN_NOTE, footHalf - 6).forEach((line: string) => {
+      pdf.text(line, L + 3, by)
+      by += 3.2
     })
-  })
-  by += 3
-  pdf.setFont('helvetica', 'bold').setFontSize(7.5)
-  pdf.text('Declaration:', L + 3, by)
-  by += 3.5
-  pdf.setFont('helvetica', 'normal').setFontSize(7)
-  pdf.splitTextToSize(f.decl || '', footHalf - 6).forEach((line: string) => {
-    pdf.text(line, L + 3, by)
-    by += 2.8
-  })
-  by += 3
-  pdf.setFont('helvetica', 'bold').setFontSize(7.5)
-  pdf.text('Terms & Conditions:', L + 3, by)
-  by += 3.5
-  pdf.setFont('helvetica', 'normal').setFontSize(7)
-  ;(f.terms || '').split('\n').forEach((line) => {
-    pdf.splitTextToSize(line, footHalf - 6).forEach((ww: string) => {
-      pdf.text(ww, L + 3, by)
+  } else {
+    ;(f.bank || '-').split('\n').forEach((line) => {
+      pdf.splitTextToSize(line, footHalf - 6).forEach((ww: string) => {
+        pdf.text(ww, L + 3, by)
+        by += 3.8
+      })
+    })
+    by += 3
+    pdf.setFont('helvetica', 'bold').setFontSize(7.5)
+    pdf.text('Declaration:', L + 3, by)
+    by += 3.5
+    pdf.setFont('helvetica', 'normal').setFontSize(7)
+    pdf.splitTextToSize(f.decl || '', footHalf - 6).forEach((line: string) => {
+      pdf.text(line, L + 3, by)
       by += 2.8
     })
-  })
+    by += 3
+    pdf.setFont('helvetica', 'bold').setFontSize(7.5)
+    pdf.text('Terms & Conditions:', L + 3, by)
+    by += 3.5
+    pdf.setFont('helvetica', 'normal').setFontSize(7)
+    ;(f.terms || '').split('\n').forEach((line) => {
+      pdf.splitTextToSize(line, footHalf - 6).forEach((ww: string) => {
+        pdf.text(ww, L + 3, by)
+        by += 2.8
+      })
+    })
+  }
 
   const sigX = L + footHalf
   pdf.setFillColor(240, 240, 240)
@@ -651,13 +674,26 @@ const INVOICE_PDF_COPY_META: Record<InvoicePdfCopy, { label: string; sub: string
   office: { label: 'TRIPLICATE', sub: 'For Office Use' },
 }
 
+const CHALLAN_PDF_COPY_META: Record<InvoicePdfCopy, { label: string; sub: string }> = {
+  recipient: { label: 'ORIGINAL', sub: 'For Job Worker' },
+  transporter: { label: 'DUPLICATE', sub: 'For Transporter' },
+  office: { label: 'TRIPLICATE', sub: 'For Office Use' },
+}
+
 const INVOICE_PDF_ALL_COPIES = [
   INVOICE_PDF_COPY_META.recipient,
   INVOICE_PDF_COPY_META.transporter,
   INVOICE_PDF_COPY_META.office,
 ]
 
-export function invoicePdfCopyMeta(copy: InvoicePdfCopy = 'office') {
+const CHALLAN_PDF_ALL_COPIES = [
+  CHALLAN_PDF_COPY_META.recipient,
+  CHALLAN_PDF_COPY_META.transporter,
+  CHALLAN_PDF_COPY_META.office,
+]
+
+export function invoicePdfCopyMeta(copy: InvoicePdfCopy = 'office', docType?: string) {
+  if (docType && isDeliveryChallan(docType)) return CHALLAN_PDF_COPY_META[copy]
   return INVOICE_PDF_COPY_META[copy]
 }
 
@@ -665,7 +701,8 @@ export function generateInvoicePdf(invoice: Invoice, firm: Firm, partyLookup?: P
   const b = toPdfBill(invoice, partyLookup)
   const f = toPdfFirm(firm)
   const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true })
-  INVOICE_PDF_ALL_COPIES.forEach((copy, i) => {
+  const copies = isDeliveryChallan(invoice) ? CHALLAN_PDF_ALL_COPIES : INVOICE_PDF_ALL_COPIES
+  copies.forEach((copy, i) => {
     if (i > 0) pdf.addPage()
     drawInvoiceOnPDF(pdf, b, f, copy.label, copy.sub)
   })
@@ -699,10 +736,10 @@ export async function bulkDownloadInvoicePdf(
   if (!invoices.length) return 0
   const f = toPdfFirm(firm)
   const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true })
-  const copyMeta = invoicePdfCopyMeta(copy)
   let firstPage = true
   for (const inv of invoices) {
     const b = toPdfBill(inv, partyLookup)
+    const copyMeta = invoicePdfCopyMeta(copy, inv.doc_type)
     if (!firstPage) pdf.addPage()
     firstPage = false
     drawInvoiceOnPDF(pdf, b, f, copyMeta.label, copyMeta.sub)

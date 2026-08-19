@@ -13,7 +13,15 @@ import { getEwayEligibility, downloadEwayJson } from '@/services/ewayBill'
 import { downloadInvoicePdf, bulkDownloadInvoicePdf, INVOICE_PDF_COPY_OPTIONS, type InvoicePdfCopy } from '@/services/invoicePdf'
 import { resolveFirmSignature } from '@/services/firmSignature'
 import { resolveLivePartyDetails, resolveLiveShipDetails, type PartyLookup } from '@/services/invoiceDisplay'
-import { peekBillNo } from '@/services/invoiceNumber'
+import { peekBillNo, peekChallanNo } from '@/services/invoiceNumber'
+import {
+  DOC_TYPE_OPTIONS,
+  docNoLabel,
+  docPdfSubtitle,
+  docPdfTitle,
+  isDeliveryChallan,
+  JOB_WORK_CHALLAN_NOTE,
+} from '@/services/invoiceDoc'
 import {
   normalizeHsn4,
   resolveHsnGstRate,
@@ -140,7 +148,7 @@ const templatesList = ref<Template[]>([])
 
 // Form state
 const initialFormState = () => ({
-  doc_type: 'INVOICE' as 'INVOICE' | 'BILL_OF_SUPPLY' | 'CREDIT_NOTE' | 'DEBIT_NOTE',
+  doc_type: 'INVOICE' as Invoice['doc_type'],
   bill_no: '',
   date: new Date().toISOString().slice(0, 10),
   ref: '',
@@ -314,16 +322,20 @@ function resetForm() {
   addRow()
 }
 
+const isChallanForm = computed(() => isDeliveryChallan(form.doc_type))
+
 const nextBillPreview = computed(() => {
   const firm = firmStore.activeFirm
   if (!firm || editingId.value) return ''
+  if (isChallanForm.value) return peekChallanNo(firm, invoiceStore.list, form.date)
   return peekBillNo(firm, invoiceStore.list, form.date)
 })
 
 const saveButtonLabel = computed(() => {
-  if (editingId.value) return 'Update Bill'
+  if (editingId.value) return isChallanForm.value ? 'Update Challan' : 'Update Bill'
   if (form.doc_type === 'INVOICE' && formEwayEligibility.value.show) return 'Save Bill + E-Way JSON'
-  return 'Save Bill'
+  if (isChallanForm.value && formEwayEligibility.value.show) return 'Save Challan + E-Way JSON'
+  return isChallanForm.value ? 'Save Challan' : 'Save Bill'
 })
 
 function tryAutoEwayDownload(invoice: Invoice): string {
@@ -408,6 +420,13 @@ function detectGstType() {
 }
 
 watch(() => form.sameAsBuyer, detectGstType)
+
+watch(() => form.doc_type, (dt) => {
+  if (isDeliveryChallan(dt)) {
+    form.pay_status = 'UNPAID'
+    form.amt_paid = 0
+  }
+})
 
 // Autocomplete item selection per row
 async function handleItemSelect(row: InvoiceItemLine) {
@@ -881,9 +900,13 @@ async function saveInvoice() {
 
   const customerObj = partyStore.list.find(p => !p.is_deleted && p.name.toLowerCase() === form.party_name.trim().toLowerCase())
 
-  // Adjust payment status based on amount paid vs grand total
+  const challan = isDeliveryChallan(form.doc_type)
   let finalPayStatus = form.pay_status
-  if (Math.abs(form.amt_paid - grandTotal.value) < 0.01) finalPayStatus = 'PAID'
+  let amtPaid = form.amt_paid
+  if (challan) {
+    finalPayStatus = 'UNPAID'
+    amtPaid = 0
+  } else if (Math.abs(form.amt_paid - grandTotal.value) < 0.01) finalPayStatus = 'PAID'
   else if (form.amt_paid > 0 && form.amt_paid < grandTotal.value) finalPayStatus = 'PARTIAL'
   else if (form.amt_paid === 0) finalPayStatus = 'UNPAID'
 
@@ -932,7 +955,7 @@ async function saveInvoice() {
     total_tax: totalTax.value,
     round_off: roundOff.value,
     grand_total: grandTotal.value,
-    amt_paid: form.amt_paid,
+    amt_paid: amtPaid,
     pay_status: finalPayStatus,
     notes: form.notes.trim()
   }
@@ -943,7 +966,7 @@ async function saveInvoice() {
     if (wasEditing) {
       const editReason = prompt('Enter the reason for modifying this invoice:') || 'Update'
       await invoiceStore.update(editingId.value!, { ...invoiceData, editReason })
-      alert('Invoice updated successfully!')
+      alert(challan ? 'Challan updated successfully!' : 'Invoice updated successfully!')
     } else {
       const savedInvoice = await invoiceStore.add(invoiceData, true)
       const ewayNote = tryAutoEwayDownload(savedInvoice)
@@ -956,7 +979,8 @@ async function saveInvoice() {
         }
       }
       openPrintPreview(savedInvoice)
-      alert(`Invoice ${savedInvoice.bill_no} saved.${ewayNote}\n\nPDF download shuru ho gaya — preview me dubara PDF le sakte ho.`)
+      const kind = isDeliveryChallan(savedInvoice) ? 'Challan' : 'Invoice'
+      alert(`${kind} ${savedInvoice.bill_no} saved.${ewayNote}\n\nPDF download shuru ho gaya — preview me dubara PDF le sakte ho.`)
     }
 
     validItems.forEach(async row => {
@@ -1325,6 +1349,10 @@ onMounted(async () => {
 
       <!-- Main Form Area -->
       <div class="lg:col-span-3 space-y-6">
+        <div v-if="isChallanForm" class="pp-card p-3 border border-sky-200 bg-sky-50 text-sm text-sky-900">
+          <strong>Job work delivery challan</strong> — sales, ledger, stock aur GSTR-1 B2B me nahi jayega.
+          Number alag series se lagta hai (<span class="font-mono">DC-0001</span>). GSTR-1 Table 13 me "Delivery Challan for job work" count hoga.
+        </div>
         <div v-if="formEwayEligibility.show" class="pp-card p-3 border border-amber-200 bg-amber-50 text-sm text-amber-900">
           🚚 <strong>E-Way:</strong> {{ formEwayEligibility.reason }}
           <span class="block text-xs mt-1 text-amber-800">
@@ -1340,14 +1368,11 @@ onMounted(async () => {
             <div>
               <label class="pp-label">Document Type</label>
               <select v-model="form.doc_type" class="pp-input">
-                <option value="INVOICE">Tax Invoice</option>
-                <option value="BILL_OF_SUPPLY">Bill of Supply</option>
-                <option value="CREDIT_NOTE">Credit Note</option>
-                <option value="DEBIT_NOTE">Debit Note</option>
+                <option v-for="opt in DOC_TYPE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
               </select>
             </div>
             <div>
-              <label class="pp-label">Invoice Number</label>
+              <label class="pp-label">{{ docNoLabel(form.doc_type) }}</label>
               <input
                 v-if="editingId"
                 v-model="form.bill_no"
@@ -1614,7 +1639,7 @@ onMounted(async () => {
             </div>
           </div>
 
-          <div class="border-t border-slate-200 pt-4 space-y-3">
+          <div class="border-t border-slate-200 pt-4 space-y-3" v-if="!isChallanForm">
             <div>
               <label class="pp-label">Payment mode</label>
               <select v-model="form.payment" class="pp-input">
@@ -1770,6 +1795,10 @@ onMounted(async () => {
               <td class="px-4 py-2.5 font-bold text-navy">
                 {{ inv.bill_no }}
                 <span
+                  v-if="isDeliveryChallan(inv)"
+                  class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 font-semibold uppercase tracking-wide"
+                >DC</span>
+                <span
                   v-if="isInvoiceCancelled(inv)"
                   class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-white font-semibold uppercase tracking-wide"
                 >Cancelled</span>
@@ -1795,7 +1824,7 @@ onMounted(async () => {
               <td class="px-4 py-2.5 text-right whitespace-nowrap">
                 <div class="inline-flex items-center justify-end gap-1 relative">
                   <button
-                    v-if="isInvoiceActive(inv)"
+                    v-if="isInvoiceActive(inv) && !isDeliveryChallan(inv)"
                     @click="openPaymentModal(inv)"
                     class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs"
                     title="Record Payment"
@@ -2054,9 +2083,7 @@ onMounted(async () => {
             <label class="pp-label">Document type</label>
             <select v-model="stmtDoc" class="pp-input">
               <option value="">All</option>
-              <option value="INVOICE">Tax Invoice</option>
-              <option value="BILL_OF_SUPPLY">Bill of Supply</option>
-              <option value="CREDIT_NOTE">Credit Note</option>
+              <option v-for="opt in DOC_TYPE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
             </select>
           </div>
         </div>
@@ -2140,7 +2167,8 @@ onMounted(async () => {
               GSTIN: {{ formatGstin(firmStore.activeFirm?.gst) || '-' }} | State: {{ getStateName(firmStore.activeFirm?.gst || firmStore.activeFirm?.state) }} (Code: {{ firmStore.activeFirm?.state || '-' }})
             </p>
             <div class="text-center uppercase font-bold text-xs bg-black text-white py-1 mt-2 tracking-widest">
-              {{ previewInvoice.doc_type === 'CREDIT_NOTE' ? 'CREDIT NOTE' : (previewInvoice.doc_type === 'DEBIT_NOTE' ? 'DEBIT NOTE' : (previewInvoice.doc_type === 'BILL_OF_SUPPLY' ? 'BILL OF SUPPLY' : 'TAX INVOICE')) }}
+              {{ docPdfTitle(previewInvoice) }}
+              <div v-if="docPdfSubtitle(previewInvoice)" class="text-[9px] font-normal tracking-normal mt-0.5">{{ docPdfSubtitle(previewInvoice) }}</div>
             </div>
           </div>
 
@@ -2148,7 +2176,7 @@ onMounted(async () => {
           <table class="w-full mb-3 border-collapse text-left">
             <tr>
               <td class="w-[35%] border border-black p-2 align-top text-[11px] break-words">
-                <strong class="block mb-1 border-b border-black pb-0.5">Bill To (Buyer):</strong>
+                <strong class="block mb-1 border-b border-black pb-0.5">{{ isDeliveryChallan(previewInvoice) ? 'Job Worker / Consignee:' : 'Bill To (Buyer):' }}</strong>
                 <strong class="break-words">{{ previewInvoice.party_name }}</strong><br />
                 <span class="whitespace-pre-wrap break-words">{{ previewBuyerDetails.addr || '' }}</span><br />
                 {{ previewBuyerDetails.city }} - {{ previewBuyerDetails.pin }}<br />
@@ -2169,10 +2197,11 @@ onMounted(async () => {
                 </template>
               </td>
               <td class="w-[30%] border border-black p-2 align-top text-[11px] space-y-1 break-words">
-                <div><strong>Invoice No:</strong> {{ previewInvoice.bill_no }}</div>
+                <div><strong>{{ docNoLabel(previewInvoice) }}:</strong> {{ previewInvoice.bill_no }}</div>
                 <div><strong>Date:</strong> {{ new Date(previewInvoice.date).toLocaleDateString('en-IN') }}</div>
                 <div><strong>Ref:</strong> {{ previewInvoice.ref || '-' }}</div>
-                <div><strong>Payment:</strong> {{ previewInvoice.payment }}</div>
+                <div v-if="isDeliveryChallan(previewInvoice)"><strong>Purpose:</strong> Job Work</div>
+                <div v-else><strong>Payment:</strong> {{ previewInvoice.payment }}</div>
               </td>
             </tr>
           </table>
@@ -2277,11 +2306,15 @@ onMounted(async () => {
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-black pt-2">
             <div class="text-[10px] space-y-1">
               <div><strong>Amount in Words:</strong> {{ numberToWords(previewInvoice.grand_total) }}</div>
-              <div class="pt-2 text-base font-bold leading-snug">
+              <div class="pt-2 text-base font-bold leading-snug" v-if="!isDeliveryChallan(previewInvoice)">
                 <strong>Bank details:</strong><br />
                 Bank Name: {{ firmStore.activeFirm?.bank_name || '-' }}<br />
                 A/c No: {{ firmStore.activeFirm?.bank_acno || '-' }}<br />
                 IFSC Code: {{ firmStore.activeFirm?.bank_ifsc || '-' }}
+              </div>
+              <div class="pt-2 text-[9px] text-slate-600 leading-normal" v-else>
+                <strong>Job work note:</strong><br />
+                {{ JOB_WORK_CHALLAN_NOTE }}
               </div>
               <div class="pt-2 text-[9px] text-slate-500 leading-normal">
                 <strong>Terms &amp; Declaration:</strong><br />
@@ -2316,7 +2349,8 @@ onMounted(async () => {
           GSTIN: {{ formatGstin(firmStore.activeFirm?.gst) || '-' }} | State: {{ getStateName(firmStore.activeFirm?.gst || firmStore.activeFirm?.state) }} (Code: {{ firmStore.activeFirm?.state || '-' }})
         </p>
         <div class="text-center uppercase font-bold text-xs bg-black text-white py-1 mt-2 tracking-widest">
-          {{ previewInvoice.doc_type === 'CREDIT_NOTE' ? 'CREDIT NOTE' : (previewInvoice.doc_type === 'DEBIT_NOTE' ? 'DEBIT NOTE' : (previewInvoice.doc_type === 'BILL_OF_SUPPLY' ? 'BILL OF SUPPLY' : 'TAX INVOICE')) }}
+          {{ docPdfTitle(previewInvoice) }}
+          <div v-if="docPdfSubtitle(previewInvoice)" class="text-[9px] font-normal tracking-normal mt-0.5">{{ docPdfSubtitle(previewInvoice) }}</div>
         </div>
       </div>
 
@@ -2324,7 +2358,7 @@ onMounted(async () => {
       <table class="w-full mb-3 border-collapse text-left">
         <tr>
           <td class="w-[35%] border border-black p-2 align-top text-[11px] break-words">
-            <strong class="block mb-1 border-b border-black pb-0.5">Bill To (Buyer):</strong>
+            <strong class="block mb-1 border-b border-black pb-0.5">{{ isDeliveryChallan(previewInvoice) ? 'Job Worker / Consignee:' : 'Bill To (Buyer):' }}</strong>
             <strong class="break-words">{{ previewInvoice.party_name }}</strong><br />
             <span class="whitespace-pre-wrap break-words">{{ previewBuyerDetails.addr || '' }}</span><br />
             {{ previewBuyerDetails.city }} - {{ previewBuyerDetails.pin }}<br />
@@ -2345,10 +2379,11 @@ onMounted(async () => {
             </template>
           </td>
           <td class="w-[30%] border border-black p-2 align-top text-[11px] space-y-1 break-words">
-            <div><strong>Invoice No:</strong> {{ previewInvoice.bill_no }}</div>
+            <div><strong>{{ docNoLabel(previewInvoice) }}:</strong> {{ previewInvoice.bill_no }}</div>
             <div><strong>Date:</strong> {{ new Date(previewInvoice.date).toLocaleDateString('en-IN') }}</div>
             <div><strong>Ref:</strong> {{ previewInvoice.ref || '-' }}</div>
-            <div><strong>Payment:</strong> {{ previewInvoice.payment }}</div>
+            <div v-if="isDeliveryChallan(previewInvoice)"><strong>Purpose:</strong> Job Work</div>
+            <div v-else><strong>Payment:</strong> {{ previewInvoice.payment }}</div>
           </td>
         </tr>
       </table>
@@ -2453,12 +2488,16 @@ onMounted(async () => {
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-black pt-2">
         <div class="text-[10px] space-y-1">
           <div><strong>Amount in Words:</strong> {{ numberToWords(previewInvoice.grand_total) }}</div>
-          <div class="pt-2 text-base font-bold leading-snug">
-            <strong>Bank details:</strong><br />
-            Bank Name: {{ firmStore.activeFirm?.bank_name || '-' }}<br />
-            A/c No: {{ firmStore.activeFirm?.bank_acno || '-' }}<br />
-            IFSC Code: {{ firmStore.activeFirm?.bank_ifsc || '-' }}
-          </div>
+            <div class="pt-2 text-base font-bold leading-snug" v-if="!isDeliveryChallan(previewInvoice)">
+              <strong>Bank details:</strong><br />
+              Bank Name: {{ firmStore.activeFirm?.bank_name || '-' }}<br />
+              A/c No: {{ firmStore.activeFirm?.bank_acno || '-' }}<br />
+              IFSC Code: {{ firmStore.activeFirm?.bank_ifsc || '-' }}
+            </div>
+            <div class="pt-2 text-[9px] text-slate-600 leading-normal" v-else>
+              <strong>Job work note:</strong><br />
+              {{ JOB_WORK_CHALLAN_NOTE }}
+            </div>
           <div class="pt-2 text-[9px] text-slate-500 leading-normal">
             <strong>Terms &amp; Declaration:</strong><br />
             {{ firmStore.activeFirm?.terms || 'We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.' }}

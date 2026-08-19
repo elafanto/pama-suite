@@ -3,6 +3,7 @@ import { db } from '@/data/db'
 import { getStateCode, getStateName, isInterstateGst } from '@/services/gst'
 import { gstrB2B, gstrB2C } from '@/services/reports'
 import { isInvoiceDocsCancelled, isInvoiceGstrReportable } from '@/services/invoiceStatus'
+import { isCreditOrDebitNote, isDeliveryChallan, isGstrMonthDoc, isTaxInvoiceDoc } from '@/services/invoiceDoc'
 import type { Invoice } from '@/types/models'
 
 /** Official GSTR-1 Excel Workbook Template V2.2 sheet names / columns. */
@@ -231,13 +232,7 @@ function docKind(inv: Invoice): string {
 }
 
 function isTaxInvoice(inv: Invoice): boolean {
-  const k = docKind(inv)
-  return k === 'INVOICE' || k === 'BILL_OF_SUPPLY'
-}
-
-function isCreditOrDebitNote(inv: Invoice): boolean {
-  const k = docKind(inv)
-  return k === 'CREDIT_NOTE' || k === 'DEBIT_NOTE'
+  return isTaxInvoiceDoc(inv)
 }
 
 /** GST offline CSV date: 27-May-2026 */
@@ -494,6 +489,12 @@ export function buildGstrDocsExportRows(invoices: Invoice[]): GstrDocsExportRow[
   )
   if (debit) rows.push(debit)
 
+  const challan = docsRowForNature(
+    'Delivery Challan for job work',
+    invoices.filter((i) => isDeliveryChallan(i)),
+  )
+  if (challan) rows.push(challan)
+
   return rows
 }
 
@@ -698,7 +699,7 @@ export function filterMonthDocsAll(invoices: Invoice[], from: string, to: string
     (i) =>
       i.date >= from
       && i.date <= to
-      && (isTaxInvoice(i) || isCreditOrDebitNote(i)),
+      && isGstrMonthDoc(i),
   )
 }
 

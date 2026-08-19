@@ -7,7 +7,8 @@ import { useFirmStore } from './firm'
 import { useAccountingStore } from './accounting'
 import { logActivity } from '@/services/activityLog'
 import { recordInvoiceMovements } from '@/services/inventoryLedger'
-import { allocateBillNo } from '@/services/invoiceNumber'
+import { allocateBillNo, allocateChallanNo } from '@/services/invoiceNumber'
+import { isDeliveryChallan } from '@/services/invoiceDoc'
 import { isInvoiceCancelled, isInvoiceActive } from '@/services/invoiceStatus'
 import { isSalesMonthLocked, salesMonthLockMessage, salesPeriodFromDate } from '@/services/salesMonthLock'
 import type { Invoice } from '@/types/models'
@@ -87,9 +88,14 @@ export const useInvoiceStore = defineStore('invoices', () => {
       const payload = { ...data }
 
       if (useAutoNumber) {
-        const { billNo, nextSequenceAfter } = allocateBillNo(firm, invoices, payload.date)
-        payload.bill_no = billNo
-        await db.firms.put(plain({ ...firm, next_bill_no: nextSequenceAfter, updated_at: nowISO(), _dirty: true }))
+        if (isDeliveryChallan(payload)) {
+          const { billNo } = allocateChallanNo(firm, invoices, payload.date)
+          payload.bill_no = billNo
+        } else {
+          const { billNo, nextSequenceAfter } = allocateBillNo(firm, invoices, payload.date)
+          payload.bill_no = billNo
+          await db.firms.put(plain({ ...firm, next_bill_no: nextSequenceAfter, updated_at: nowISO(), _dirty: true }))
+        }
       } else if (!payload.bill_no?.trim()) {
         throw new Error('Invoice number missing')
       } else {

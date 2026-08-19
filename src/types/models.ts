@@ -120,7 +120,7 @@ export interface ShipDetails {
 }
 
 export interface Invoice extends BaseRecord {
-  doc_type: 'INVOICE' | 'BILL_OF_SUPPLY' | 'CREDIT_NOTE' | 'DEBIT_NOTE' | 'invoice'
+  doc_type: 'INVOICE' | 'BILL_OF_SUPPLY' | 'CREDIT_NOTE' | 'DEBIT_NOTE' | 'DELIVERY_CHALLAN' | 'invoice'
   bill_no: string
   date: string
   ref?: string
