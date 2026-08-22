@@ -21,6 +21,7 @@ import {
   pushPayrollToCloud,
 } from '@/services/payrollCloud'
 import { dedupeAllPayrollRuns } from '@/services/payrollRuns'
+import { onLocalDirty } from '@/services/localDirty'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 
 type SyncTable =
@@ -681,6 +682,79 @@ export async function runSync(): Promise<string> {
 
 let realtimeChannel: RealtimeChannel | null = null
 let syncDebounce: ReturnType<typeof setTimeout> | null = null
+
+/** After a local save — wait briefly so rapid edits batch into one sync. */
+export const AUTO_SYNC_AFTER_CHANGE_MS = 3000
+/** Safety net while the app is open and online. */
+export const AUTO_SYNC_INTERVAL_MS = 30_000
+
+let autoSyncAfterChangeTimer: ReturnType<typeof setTimeout> | null = null
+let autoSyncIntervalTimer: ReturnType<typeof setInterval> | null = null
+let stopDirtyListener: (() => void) | null = null
+let autoSyncOnMessage: ((msg: string) => void) | null = null
+let autoSyncActive = false
+
+async function runAutoSyncQuiet(): Promise<void> {
+  const auth = useAuthStore()
+  if (!auth.canSync || !autoSyncActive) return
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return
+  try {
+    const msg = await runSync()
+    autoSyncOnMessage?.(msg)
+  } catch (err) {
+    console.warn('Auto sync failed', err)
+  }
+}
+
+/** Debounced full sync after local dirty writes (bills, parties, stock, …). */
+export function scheduleAutoSync(delayMs = AUTO_SYNC_AFTER_CHANGE_MS): void {
+  const auth = useAuthStore()
+  if (!auth.canSync || !autoSyncActive) return
+  if (autoSyncAfterChangeTimer) clearTimeout(autoSyncAfterChangeTimer)
+  autoSyncAfterChangeTimer = setTimeout(() => {
+    autoSyncAfterChangeTimer = null
+    void runAutoSyncQuiet()
+  }, delayMs)
+}
+
+function onVisibilityForAutoSync() {
+  if (typeof document === 'undefined') return
+  if (document.visibilityState === 'visible') scheduleAutoSync(800)
+}
+
+/**
+ * Start background sync for all modules:
+ * - ~3s after any local dirty save
+ * - every 30s while the tab is visible
+ * Realtime pull from other devices stays separate (1.5s debounce).
+ */
+export function startAutoSync(onSynced?: (msg: string) => void): void {
+  stopAutoSync()
+  autoSyncActive = true
+  autoSyncOnMessage = onSynced || null
+  stopDirtyListener = onLocalDirty(() => scheduleAutoSync())
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onVisibilityForAutoSync)
+  }
+  autoSyncIntervalTimer = setInterval(() => {
+    void runAutoSyncQuiet()
+  }, AUTO_SYNC_INTERVAL_MS)
+}
+
+export function stopAutoSync(): void {
+  autoSyncActive = false
+  autoSyncOnMessage = null
+  stopDirtyListener?.()
+  stopDirtyListener = null
+  if (autoSyncAfterChangeTimer) clearTimeout(autoSyncAfterChangeTimer)
+  autoSyncAfterChangeTimer = null
+  if (autoSyncIntervalTimer) clearInterval(autoSyncIntervalTimer)
+  autoSyncIntervalTimer = null
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', onVisibilityForAutoSync)
+  }
+}
 
 /** Listen for remote DB changes and debounce-pull (multi-device sync). */
 export function startCloudRealtime(onSynced?: (msg: string) => void): () => void {

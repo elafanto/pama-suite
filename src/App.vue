@@ -4,7 +4,7 @@ import { RouterView, RouterLink, useRoute } from 'vue-router'
 import { navGroups } from '@/router'
 import { useFirmStore } from '@/stores/firm'
 import { useAuthStore } from '@/stores/auth'
-import { runSync, startCloudRealtime, stopCloudRealtime } from '@/services/sync'
+import { runSync, startCloudRealtime, stopCloudRealtime, startAutoSync, stopAutoSync } from '@/services/sync'
 import PwaInstallPrompt from '@/components/PwaInstallPrompt.vue'
 import { useBrowserBack } from '@/composables/useBrowserBack'
 
@@ -106,9 +106,11 @@ watch(
   (can) => {
     stopRealtime?.()
     stopRealtime = null
+    stopAutoSync()
     if (can) {
       cloudSync()
       stopRealtime = startCloudRealtime((msg) => { syncMsg.value = msg })
+      startAutoSync((msg) => { syncMsg.value = msg })
     } else {
       stopCloudRealtime()
     }
@@ -126,6 +128,7 @@ onUnmounted(() => {
   window.removeEventListener('online', onOnline)
   stopRealtime?.()
   stopCloudRealtime()
+  stopAutoSync()
 })
 </script>
 

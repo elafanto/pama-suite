@@ -10,6 +10,7 @@ import {
   persistFirmSignature,
 } from '@/services/firmSignature'
 import { syncSignatureToCloudIfReady } from '@/services/firmSignatureCloud'
+import { notifyLocalDirty } from '@/services/localDirty'
 import type { Firm, Invoice } from '@/types/models'
 import {
   isSalesMonthLocked,
@@ -108,6 +109,7 @@ export const useFirmStore = defineStore('firm', () => {
     }
     await load()
     setActive(rec.id)
+    notifyLocalDirty()
     return rec
   }
 
@@ -128,6 +130,7 @@ export const useFirmStore = defineStore('firm', () => {
       persistFirmSignature(id, next.signature, next.name)
     }
     await load()
+    notifyLocalDirty()
   }
 
   async function linkedCounts(firmId: string): Promise<FirmLinkedCounts> {

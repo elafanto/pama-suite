@@ -9,6 +9,7 @@ import { logActivity } from '@/services/activityLog'
 import { recordInvoiceMovements } from '@/services/inventoryLedger'
 import { allocateBillNo, allocateChallanNo } from '@/services/invoiceNumber'
 import { isDeliveryChallan } from '@/services/invoiceDoc'
+import { notifyLocalDirty } from '@/services/localDirty'
 import { isInvoiceCancelled, isInvoiceActive } from '@/services/invoiceStatus'
 import { isSalesMonthLocked, salesMonthLockMessage, salesPeriodFromDate } from '@/services/salesMonthLock'
 import type { Invoice } from '@/types/models'
@@ -129,6 +130,7 @@ export const useInvoiceStore = defineStore('invoices', () => {
     await logActivity(firmId, 'create', 'invoice', rec.id, `Invoice ${rec.bill_no} created`)
 
     await load()
+    notifyLocalDirty()
     return rec
     }
 
@@ -173,6 +175,7 @@ export const useInvoiceStore = defineStore('invoices', () => {
     await reverseInvoiceEffects(cancelled)
     await logActivity(existing.firm_id, 'cancel', 'invoice', id, `Invoice ${existing.bill_no} cancelled`)
     await load()
+    notifyLocalDirty()
     return cancelled
   }
 
@@ -196,6 +199,7 @@ export const useInvoiceStore = defineStore('invoices', () => {
     await restoreInvoiceEffects(restored)
     await logActivity(existing.firm_id, 'uncancel', 'invoice', id, `Invoice ${existing.bill_no} un-cancelled`)
     await load()
+    notifyLocalDirty()
     return restored
   }
 

@@ -1,5 +1,6 @@
 import type { Table } from 'dexie'
 import { uid, nowISO } from './util'
+import { notifyLocalDirty } from '@/services/localDirty'
 
 /** Strip Vue reactivity / proxies → plain cloneable object (IndexedDB-safe). */
 const plain = <X>(o: X): X => JSON.parse(JSON.stringify(o))
@@ -14,7 +15,7 @@ interface SyncFields {
 
 /**
  * Generic repository over a Dexie table. Stamps sync metadata on every write
- * so a future cloud-sync layer can replicate via _dirty + updated_at.
+ * so cloud sync can replicate via _dirty + updated_at.
  */
 export function createRepo<T extends SyncFields>(table: Table<T, string>) {
   return {
@@ -41,6 +42,7 @@ export function createRepo<T extends SyncFields>(table: Table<T, string>) {
         _dirty: true,
       }) as T
       await table.add(rec)
+      notifyLocalDirty()
       return rec
     },
 
@@ -49,6 +51,7 @@ export function createRepo<T extends SyncFields>(table: Table<T, string>) {
       if (!existing) return undefined
       const rec = plain({ ...existing, ...patch, updated_at: nowISO(), _dirty: true }) as T
       await table.put(rec)
+      notifyLocalDirty()
       return rec
     },
 
@@ -61,6 +64,7 @@ export function createRepo<T extends SyncFields>(table: Table<T, string>) {
       const existing = await table.get(id)
       if (!existing) return
       await table.put({ ...existing, is_deleted: true, updated_at: nowISO(), _dirty: true })
+      notifyLocalDirty()
     },
 
     async restore(id: string): Promise<T | undefined> {
@@ -68,10 +72,11 @@ export function createRepo<T extends SyncFields>(table: Table<T, string>) {
       if (!existing) return undefined
       const rec = plain({ ...existing, is_deleted: false, updated_at: nowISO(), _dirty: true }) as T
       await table.put(rec)
+      notifyLocalDirty()
       return rec
     },
 
-    /** Records pending push to cloud (for the future sync queue). */
+    /** Records pending push to cloud. */
     async dirty(): Promise<T[]> {
       return table.filter((r) => r._dirty === true).toArray()
     },

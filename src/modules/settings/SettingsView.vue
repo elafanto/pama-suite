@@ -451,6 +451,11 @@ onMounted(async () => {
       <p class="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mb-3">
         💰 Payroll staff + attendance + salary <strong>cloud sync</strong> — tables <code>staff</code>, <code>staff_advances</code>, <code>payroll_runs</code> (migration <code>011</code>) + extra snapshot <code>org_settings.payroll_backup</code> (migration <code>012</code>). Har save / Sync Now par backup.
       </p>
+      <p class="text-xs text-sky-900 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2 mb-3">
+        🔄 <strong>Auto sync (sab modules):</strong> save ke ~3 second baad cloud push;
+        har 30 second pe background sync; dusre device se change ~1.5s me pull.
+        Manual <strong>Sync Now</strong> abhi bhi turant chalega.
+      </p>
 
       <div v-if="!auth.isConfigured || !auth.canSync" class="mb-4 p-4 rounded-lg border border-slate-200 bg-slate-50 space-y-3">
         <p class="text-xs text-slate-600">
