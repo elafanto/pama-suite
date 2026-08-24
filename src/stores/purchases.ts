@@ -6,6 +6,10 @@ import { useFirmStore } from './firm'
 import { useAccountingStore } from './accounting'
 import { logActivity } from '@/services/activityLog'
 import { recordPurchaseMovements } from '@/services/inventoryLedger'
+import {
+  allocateVendorPayment,
+  payStatusFromPaidPurchase,
+} from '@/services/partyPaymentAllocation'
 import { movePurchaseBillsToFirm, type MovePurchaseBillsResult } from '@/services/purchaseCorrection'
 import {
   assertPurchaseReelsHaveNoConsumptionHistory,
@@ -151,37 +155,50 @@ export const usePurchaseStore = defineStore('purchases', () => {
     const existing = await repo.get(id)
     if (!existing) return
 
-    const previousPaid = money(existing.amt_paid || 0)
-    const outstanding = Math.max(0, money(existing.grand_total - previousPaid))
-    const paymentAmount = money(Math.min(Math.max(amount, 0), outstanding))
-    const newAmtPaid = money(previousPaid + paymentAmount)
-    let newPayStatus = existing.pay_status
-    const writeOffAmt = isWriteOff ? money(Math.max(0, outstanding - paymentAmount)) : 0
+    const paymentAmount = money(Math.max(0, amount))
+    if (paymentAmount <= 0) return
 
-    const totalRecorded = money(newAmtPaid + writeOffAmt)
+    if (isWriteOff) {
+      const previousPaid = money(existing.amt_paid || 0)
+      const outstanding = Math.max(0, money(existing.grand_total - previousPaid))
+      const applied = money(Math.min(paymentAmount, outstanding))
+      const writeOffAmt = money(Math.max(0, outstanding - applied))
 
-    if (Math.abs(totalRecorded - existing.grand_total) < 0.01 || isWriteOff) {
-      newPayStatus = 'PAID'
-    } else if (totalRecorded > 0) {
-      newPayStatus = 'PARTIAL'
-    } else {
-      newPayStatus = 'UNPAID'
+      await repo.update(id, {
+        amt_paid: existing.grand_total,
+        pay_status: 'PAID',
+        notes: `${existing.notes || ''} [Write-off: ₹${writeOffAmt.toFixed(2)}]`.trim(),
+      })
+
+      const accounting = useAccountingStore()
+      await accounting.postPaymentVoucher(id, 'purchase', applied, true, writeOffAmt, date, note, paymentAccountName)
+      await load()
+      return
     }
 
-    const finalAmtPaid = isWriteOff ? existing.grand_total : newAmtPaid
-    const cashPaidForVoucher = isWriteOff ? newAmtPaid : finalAmtPaid
+    const firmPurchases = await db.purchases.where('firm_id').equals(existing.firm_id).toArray()
+    const allocations = allocateVendorPayment(firmPurchases, id, paymentAmount)
+    if (allocations.length === 0) {
+      throw new Error('Is supplier par koi open purchase nahi mila.')
+    }
 
-    await repo.update(id, {
-      amt_paid: finalAmtPaid,
-      pay_status: newPayStatus,
-      notes: isWriteOff
-        ? `${existing.notes || ''} [Write-off: ₹${writeOffAmt.toFixed(2)}]`.trim()
-        : existing.notes,
-    })
+    for (const allocation of allocations) {
+      const pur = firmPurchases.find((row) => row.id === allocation.id)
+      if (!pur) continue
+      const newAmtPaid = money((pur.amt_paid || 0) + allocation.amount)
+      await repo.update(pur.id, {
+        amt_paid: newAmtPaid,
+        pay_status: payStatusFromPaidPurchase(pur.grand_total, newAmtPaid),
+      })
+    }
 
-    // Post Payment Voucher to ledger
     const accounting = useAccountingStore()
-    await accounting.postPaymentVoucher(id, 'purchase', cashPaidForVoucher, isWriteOff, writeOffAmt, date, note, paymentAccountName)
+    const appliedTotal = money(allocations.reduce((sum, row) => sum + row.amount, 0))
+    const excess = money(paymentAmount - appliedTotal)
+    const finalNote = excess > 0.01
+      ? `${note}${note ? ' | ' : ''}₹${excess.toFixed(2)} open bills se zyada — supplier advance`
+      : note
+    await accounting.postPaymentVoucher(id, 'purchase', paymentAmount, false, 0, date, finalNote, paymentAccountName)
 
     await load()
   }

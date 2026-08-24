@@ -11,6 +11,7 @@ import { allocateBillNo, allocateChallanNo } from '@/services/invoiceNumber'
 import { isDeliveryChallan } from '@/services/invoiceDoc'
 import { notifyLocalDirty } from '@/services/localDirty'
 import { isInvoiceCancelled, isInvoiceActive } from '@/services/invoiceStatus'
+import { allocateCustomerReceipt, payStatusFromPaid } from '@/services/partyPaymentAllocation'
 import { isSalesMonthLocked, salesMonthLockMessage, salesPeriodFromDate } from '@/services/salesMonthLock'
 import type { Invoice } from '@/types/models'
 
@@ -247,34 +248,50 @@ export const useInvoiceStore = defineStore('invoices', () => {
       throw new Error(`Invoice ${existing.bill_no} cancelled/deleted — payment nahi ho sakta`)
     }
 
-    const previousPaid = money(existing.amt_paid || 0)
-    const outstanding = Math.max(0, money(existing.grand_total - previousPaid))
-    const paymentAmount = money(Math.min(Math.max(amount, 0), outstanding))
-    const newAmtPaid = money(previousPaid + paymentAmount)
-    let newPayStatus = existing.pay_status
-    const writeOffAmt = isWriteOff ? money(Math.max(0, outstanding - paymentAmount)) : 0
+    const paymentAmount = money(Math.max(0, amount))
+    if (paymentAmount <= 0) return
 
-    const totalRecorded = money(newAmtPaid + writeOffAmt)
+    if (isWriteOff) {
+      const previousPaid = money(existing.amt_paid || 0)
+      const outstanding = Math.max(0, money(existing.grand_total - previousPaid))
+      const applied = money(Math.min(paymentAmount, outstanding))
+      const writeOffAmt = money(Math.max(0, outstanding - applied))
 
-    if (Math.abs(totalRecorded - existing.grand_total) < 0.01 || isWriteOff) {
-      newPayStatus = 'PAID'
-    } else if (totalRecorded > 0) {
-      newPayStatus = 'PARTIAL'
-    } else {
-      newPayStatus = 'UNPAID'
+      await repo.update(id, {
+        amt_paid: existing.grand_total,
+        pay_status: 'PAID',
+        notes: `${existing.notes || ''} [Write-off: ₹${writeOffAmt.toFixed(2)}]`.trim(),
+      })
+
+      const accounting = useAccountingStore()
+      await accounting.postPaymentVoucher(id, 'invoice', applied, true, writeOffAmt, date, note)
+      await load()
+      return
     }
 
-    const finalAmtPaid = isWriteOff ? existing.grand_total : newAmtPaid
-    const cashPaidForVoucher = isWriteOff ? newAmtPaid : finalAmtPaid
+    const firmInvoices = await db.invoices.where('firm_id').equals(existing.firm_id).toArray()
+    const allocations = allocateCustomerReceipt(firmInvoices, id, paymentAmount)
+    if (allocations.length === 0) {
+      throw new Error('Is party par koi open invoice nahi mila.')
+    }
 
-    await repo.update(id, {
-      amt_paid: finalAmtPaid,
-      pay_status: newPayStatus,
-      notes: isWriteOff ? `${existing.notes || ''} [Write-off: ₹${writeOffAmt.toFixed(2)}]`.trim() : existing.notes
-    })
+    for (const allocation of allocations) {
+      const inv = firmInvoices.find((row) => row.id === allocation.id)
+      if (!inv) continue
+      const newAmtPaid = money((inv.amt_paid || 0) + allocation.amount)
+      await repo.update(inv.id, {
+        amt_paid: newAmtPaid,
+        pay_status: payStatusFromPaid(inv.grand_total, newAmtPaid),
+      })
+    }
 
     const accounting = useAccountingStore()
-    await accounting.postPaymentVoucher(id, 'invoice', cashPaidForVoucher, isWriteOff, writeOffAmt, date, note)
+    const appliedTotal = money(allocations.reduce((sum, row) => sum + row.amount, 0))
+    const excess = money(paymentAmount - appliedTotal)
+    const finalNote = excess > 0.01
+      ? `${note}${note ? ' | ' : ''}₹${excess.toFixed(2)} open bills se zyada — party advance`
+      : note
+    await accounting.postPaymentVoucher(id, 'invoice', paymentAmount, false, 0, date, finalNote)
 
     await load()
   }

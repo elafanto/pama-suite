@@ -1,4 +1,9 @@
 import { isInvoiceActive } from '@/services/invoiceStatus'
+import {
+  isCustomerCreditDoc,
+  isCustomerDebitDoc,
+  normalizePartyName as normalizePartyNameShared,
+} from '@/services/partyPaymentAllocation'
 import type { Invoice, Party, Purchase } from '@/types/models'
 
 export type PartyLedgerMode = 'customer' | 'vendor' | 'both'
@@ -70,15 +75,6 @@ function invoiceDocKind(inv: Invoice) {
   return String(inv.doc_type || 'INVOICE').toUpperCase()
 }
 
-function isCustomerDebitDoc(inv: Invoice) {
-  const kind = invoiceDocKind(inv)
-  return kind === 'INVOICE' || kind === 'BILL_OF_SUPPLY' || kind === 'DEBIT_NOTE'
-}
-
-function isCustomerCreditDoc(inv: Invoice) {
-  return invoiceDocKind(inv) === 'CREDIT_NOTE'
-}
-
 function customerDocLabel(inv: Invoice) {
   const kind = invoiceDocKind(inv)
   if (kind === 'CREDIT_NOTE') return 'Credit Note'
@@ -89,10 +85,7 @@ function customerDocLabel(inv: Invoice) {
 }
 
 export function normalizePartyName(name: string | null | undefined) {
-  return (name || '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
+  return normalizePartyNameShared(name)
 }
 
 function hasRole(party: Party, mode: PartyLedgerMode) {
@@ -127,6 +120,122 @@ function inAmountRange(amount: number, outstanding: number, filters: PartyLedger
   return true
 }
 
+function shouldComputeBalance(filters: PartyLedgerFilters) {
+  return filters.mode !== 'both' || Boolean(filters.partyId || filters.partyName)
+}
+
+function partyGroupKey(row: Omit<PartyLedgerRow, 'balance'>) {
+  const party = row.partyId || normalizePartyName(row.partyName)
+  return `${row.mode}:${party}`
+}
+
+interface FifoAllocState {
+  billOrder: string[]
+  billRemaining: Map<string, number>
+  creditPool: number
+}
+
+function createFifoState(): FifoAllocState {
+  return { billOrder: [], billRemaining: new Map(), creditPool: 0 }
+}
+
+function applyFifoCredits(state: FifoAllocState) {
+  while (state.creditPool > 0.01 && state.billOrder.length > 0) {
+    const billId = state.billOrder[0]
+    const remaining = state.billRemaining.get(billId) || 0
+    const applied = Math.min(state.creditPool, remaining)
+    const nextRemaining = round2(remaining - applied)
+    state.creditPool = round2(state.creditPool - applied)
+    if (nextRemaining <= 0.01) {
+      state.billRemaining.delete(billId)
+      state.billOrder.shift()
+    } else {
+      state.billRemaining.set(billId, nextRemaining)
+    }
+  }
+}
+
+function addBillToFifo(state: FifoAllocState, billId: string, amount: number) {
+  if (amount <= 0.01) return
+  state.billOrder.push(billId)
+  state.billRemaining.set(billId, round2(amount))
+  applyFifoCredits(state)
+}
+
+function addCreditToFifo(state: FifoAllocState, amount: number) {
+  if (amount <= 0.01) return
+  state.creditPool = round2(state.creditPool + amount)
+  applyFifoCredits(state)
+}
+
+function partyOutstandingFromFifo(state: FifoAllocState) {
+  return round2(state.billOrder.reduce((sum, billId) => sum + (state.billRemaining.get(billId) || 0), 0))
+}
+
+function billOutstandingFromFifo(state: FifoAllocState, billId: string) {
+  return round2(state.billRemaining.get(billId) || 0)
+}
+
+function payStatusFromOutstanding(docAmount: number, outstanding: number) {
+  if (outstanding <= 0.01) return 'PAID'
+  if (outstanding < docAmount - 0.01) return 'PARTIAL'
+  return 'UNPAID'
+}
+
+function enrichRowsWithBalanceAndOutstanding(
+  rows: Omit<PartyLedgerRow, 'balance'>[],
+  filters: PartyLedgerFilters,
+): PartyLedgerRow[] {
+  const computeBalance = shouldComputeBalance(filters)
+  const balanceByGroup = new Map<string, number>()
+  const fifoByGroup = new Map<string, FifoAllocState>()
+
+  return rows.map((row) => {
+    const groupKey = partyGroupKey(row)
+    let balance: number | null = null
+
+    if (computeBalance) {
+      const prev = balanceByGroup.get(groupKey) || 0
+      const next = row.mode === 'customer'
+        ? round2(prev + row.debit - row.credit)
+        : round2(prev + row.credit - row.debit)
+      balanceByGroup.set(groupKey, next)
+      balance = next
+    }
+
+    if (!fifoByGroup.has(groupKey)) fifoByGroup.set(groupKey, createFifoState())
+    const fifo = fifoByGroup.get(groupKey)!
+
+    const isBillRow = row.id.endsWith(':bill')
+    const isPaymentRow = row.id.endsWith(':paid')
+
+    if (isBillRow) {
+      if (row.mode === 'customer') {
+        if (row.debit > 0) addBillToFifo(fifo, row.id, row.debit)
+        else if (row.credit > 0) addCreditToFifo(fifo, row.credit)
+      } else if (row.credit > 0) {
+        addBillToFifo(fifo, row.id, row.credit)
+      }
+    } else if (isPaymentRow) {
+      const paymentAmount = row.mode === 'customer' ? row.credit : row.debit
+      addCreditToFifo(fifo, paymentAmount)
+    }
+
+    let outstanding = row.outstanding
+    let payStatus = row.payStatus
+
+    if (isBillRow) {
+      outstanding = billOutstandingFromFifo(fifo, row.id)
+      payStatus = payStatusFromOutstanding(row.amount, outstanding)
+    } else if (isPaymentRow) {
+      outstanding = partyOutstandingFromFifo(fifo)
+      payStatus = outstanding <= 0.01 ? 'PAID' : 'PARTIAL'
+    }
+
+    return { ...row, balance, outstanding, payStatus }
+  })
+}
+
 export function buildPartyLedger(
   invoices: Invoice[],
   purchases: Purchase[],
@@ -145,8 +254,8 @@ export function buildPartyLedger(
       const amount = round2(inv.grand_total)
       const paid = round2(inv.amt_paid)
       const isCreditNote = isCustomerCreditDoc(inv)
-      const outstanding = isCreditNote ? round2(-amount) : round2(Math.max(0, amount - paid))
-      const filterOutstanding = Math.abs(outstanding)
+      const docOutstanding = isCreditNote ? round2(-amount) : round2(Math.max(0, amount - Math.min(paid, amount)))
+      const filterOutstanding = Math.abs(docOutstanding)
       if (filters.pendingOnly && filterOutstanding <= 0.01) continue
       if (!inAmountRange(amount, filterOutstanding, filters)) continue
 
@@ -163,7 +272,7 @@ export function buildPartyLedger(
         partyName: inv.party_name || 'Unknown',
         amount,
         paid,
-        outstanding,
+        outstanding: docOutstanding,
         payStatus: inv.pay_status,
       }
 
@@ -181,7 +290,9 @@ export function buildPartyLedger(
           ...base,
           id: `${inv.id}:paid`,
           type: /write-off/i.test(inv.notes || '') ? 'Receipt / Write-off' : 'Receipt',
-          narration: `Received against ${inv.bill_no}.${writeOffNote}`,
+          narration: paid > amount
+            ? `Received ₹${paid.toLocaleString('en-IN')} against ${inv.bill_no} (lump sum).${writeOffNote}`
+            : `Received against ${inv.bill_no}.${writeOffNote}`,
           debit: 0,
           credit: paid,
         })
@@ -198,7 +309,7 @@ export function buildPartyLedger(
 
       const amount = round2(pur.grand_total)
       const paid = round2(pur.amt_paid)
-      const outstanding = round2(Math.max(0, amount - paid))
+      const outstanding = round2(Math.max(0, amount - Math.min(paid, amount)))
       if (filters.pendingOnly && outstanding <= 0.01) continue
       if (!inAmountRange(amount, outstanding, filters)) continue
 
@@ -232,7 +343,9 @@ export function buildPartyLedger(
           ...base,
           id: `${pur.id}:paid`,
           type: /write-off/i.test(pur.notes || '') ? 'Payment / Write-off' : 'Payment',
-          narration: `Paid against ${base.refNo}.${writeOffNote}`,
+          narration: paid > amount
+            ? `Paid ₹${paid.toLocaleString('en-IN')} against ${base.refNo} (lump sum).${writeOffNote}`
+            : `Paid against ${base.refNo}.${writeOffNote}`,
           debit: paid,
           credit: 0,
         })
@@ -240,30 +353,62 @@ export function buildPartyLedger(
     }
   }
 
-  let balance = 0
-  const rows = entries
-    .sort((a, b) => a.date.localeCompare(b.date) || a.refNo.localeCompare(b.refNo) || a.id.localeCompare(b.id))
-    .map((row) => {
-      if (filters.mode === 'both') return { ...row, balance: null }
-      balance = round2(row.mode === 'customer' ? balance + row.debit - row.credit : balance + row.credit - row.debit)
-      return { ...row, balance }
-    })
+  const sorted = entries.sort(
+    (a, b) => a.date.localeCompare(b.date) || a.refNo.localeCompare(b.refNo) || a.id.localeCompare(b.id),
+  )
+  const rows = enrichRowsWithBalanceAndOutstanding(sorted, filters)
 
   const totals = rows.reduce<PartyLedgerTotals>(
     (acc, row) => {
       acc.debit = round2(acc.debit + row.debit)
       acc.credit = round2(acc.credit + row.credit)
-      acc.balance = row.balance
+      if (row.balance != null) acc.balance = row.balance
       if (row.mode === 'customer' && row.id.endsWith(':bill') && row.debit > 0) acc.billed = round2(acc.billed + row.debit)
       if (row.mode === 'customer' && row.type.includes('Receipt')) acc.received = round2(acc.received + row.credit)
       if (row.mode === 'vendor' && row.type === 'Purchase') acc.payable = round2(acc.payable + row.amount)
       if (row.mode === 'vendor' && row.debit > 0) acc.paid = round2(acc.paid + row.debit)
-      acc.outstanding = round2(acc.outstanding + (row.id.endsWith(':bill') ? row.outstanding : 0))
       acc.rows += 1
       return acc
     },
-    { debit: 0, credit: 0, balance: filters.mode === 'both' ? null : 0, billed: 0, received: 0, payable: 0, paid: 0, outstanding: 0, rows: 0, documents: seenDocs.size },
+    {
+      debit: 0,
+      credit: 0,
+      balance: shouldComputeBalance(filters) ? 0 : null,
+      billed: 0,
+      received: 0,
+      payable: 0,
+      paid: 0,
+      outstanding: 0,
+      rows: 0,
+      documents: seenDocs.size,
+    },
   )
+
+  if (shouldComputeBalance(filters)) {
+    const fifoByGroup = new Map<string, FifoAllocState>()
+    for (const row of rows) {
+      const groupKey = partyGroupKey(row)
+      if (!fifoByGroup.has(groupKey)) fifoByGroup.set(groupKey, createFifoState())
+      const fifo = fifoByGroup.get(groupKey)!
+      const isBillRow = row.id.endsWith(':bill')
+      const isPaymentRow = row.id.endsWith(':paid')
+      if (isBillRow) {
+        if (row.mode === 'customer') {
+          if (row.debit > 0) addBillToFifo(fifo, row.id, row.debit)
+          else if (row.credit > 0) addCreditToFifo(fifo, row.credit)
+        } else if (row.credit > 0) {
+          addBillToFifo(fifo, row.id, row.credit)
+        }
+      } else if (isPaymentRow) {
+        addCreditToFifo(fifo, row.mode === 'customer' ? row.credit : row.debit)
+      }
+    }
+    totals.outstanding = round2(
+      [...fifoByGroup.values()].reduce((sum, state) => sum + partyOutstandingFromFifo(state), 0),
+    )
+  } else {
+    totals.outstanding = round2(rows.reduce((sum, row) => sum + (row.id.endsWith(':bill') ? row.outstanding : 0), 0))
+  }
 
   return { rows, totals }
 }
