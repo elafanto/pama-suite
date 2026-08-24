@@ -43,20 +43,20 @@ export interface ScanLineItem {
 }
 
 export interface ScanResult {
-  supplierName?: string
-  billNo?: string
+  supplierName?: string | number
+  billNo?: string | number
   date?: string
   items?: ScanLineItem[]
   sub?: number
   totalTax?: number
   grandTotal?: number
-  gstin?: string
+  gstin?: string | number
   address?: string
   city?: string
-  pin?: string
-  phone?: string
+  pin?: string | number
+  phone?: string | number
   bank?: string
-  acno?: string
+  acno?: string | number
   ifsc?: string
   acname?: string
 }
@@ -142,8 +142,8 @@ function isMeaningfulBill(bill: ScanResult) {
   return Boolean(bill.supplierName?.trim() || bill.billNo?.trim() || bill.items?.length)
 }
 
-function normScanText(value?: string) {
-  return (value || '').trim().toLowerCase()
+function normScanText(value?: string | number | null) {
+  return String(value ?? '').trim().toLowerCase()
 }
 
 function normScanBillNo(value?: string) {

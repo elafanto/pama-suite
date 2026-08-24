@@ -396,9 +396,10 @@ const enrichedScannedBills = computed(() =>
 
 const scannedBillSummary = computed(() => {
   const enriched = enrichedScannedBills.value
+  const saveableNew = enriched.filter((bill) => isSaveableScannedBill(bill))
   return {
     total: enriched.length,
-    newCount: enriched.filter((bill) => bill._matchStatus === 'new').length,
+    newCount: saveableNew.length,
     alreadySavedCount: enriched.filter((bill) => bill._matchStatus === 'already_saved').length,
     duplicateCount: enriched.filter((bill) => bill._matchStatus === 'duplicate_in_batch').length,
   }
@@ -407,6 +408,15 @@ const scannedBillSummary = computed(() => {
 const hasSelectedScannedBills = computed(() =>
   Object.values(scannedBillSelected.value).some(Boolean),
 )
+
+function isSaveableScannedBill(bill: ScannedBillWithFile & { _matchStatus?: string }) {
+  return Boolean(
+    bill._matchStatus === 'new' &&
+    String(bill.supplierName ?? '').trim() &&
+    String(bill.billNo ?? '').trim() &&
+    (bill.items?.length || 0) > 0,
+  )
+}
 
 function scannedBillMatchAt(idx: number): ScannedBillMatchFields {
   return enrichedScannedBills.value[idx] || { _matchStatus: 'new' }
@@ -470,23 +480,23 @@ function normalizePaperType(v: unknown): PaperType {
 }
 
 function scanItemToPurchaseLine(it: NonNullable<ScanResult['items']>[number]): Partial<PurchaseItemLine> {
-  const deckleSize = (it.deckleSize || it.reelSize || '').trim()
+  const deckleSize = String(it.deckleSize || it.reelSize || '').trim()
   const hasReelMetadata = Boolean(
     it.reelNo || deckleSize || it.gsm || it.bf || Number(it.reelWeight) > 0 || Number(it.reelCount) > 0,
   )
   return {
-    name: it.name,
+    name: String(it.name || ''),
     qty: Number(it.qty) || 0,
     unit: it.unit || 'KG',
     rate: Number(it.rate) || 0,
-    hsn: it.hsn || '48043100',
-    gst: it.gst ?? 18,
+    hsn: String(it.hsn || '48043100'),
+    gst: Number(it.gst) || 18,
     is_kraft_reel: Boolean(it.isKraftReel || hasReelMetadata),
     paper_type: normalizePaperType(it.paperType),
-    reel_no: it.reelNo || '',
+    reel_no: String(it.reelNo || ''),
     deckle_size: deckleSize,
-    gsm: it.gsm || '',
-    bf: it.bf || '',
+    gsm: String(it.gsm || ''),
+    bf: String(it.bf || ''),
     color: normalizeReelColor(it.color),
     reel_weight: Number(it.reelWeight || it.qty || 0),
     reel_count: normalizeReelCount(it.reelCount),
@@ -496,7 +506,7 @@ function scanItemToPurchaseLine(it: NonNullable<ScanResult['items']>[number]): P
 }
 
 async function ensurePurchaseItemLine(it: NonNullable<ScanResult['items']>[number]): Promise<PurchaseItemLine> {
-  const name = (it.name || '').trim() || 'Purchase Item'
+  const name = String(it.name || '').trim() || 'Purchase Item'
   let item = itemStore.list.find((i) => i.name.trim().toLowerCase() === name.toLowerCase())
   if (!item) {
     item = await itemStore.add({
@@ -535,29 +545,34 @@ async function ensurePurchaseItemLine(it: NonNullable<ScanResult['items']>[numbe
 }
 
 async function saveScannedBill(bill: ScannedBillWithFile, reuseStoragePath?: string): Promise<{ purchase: Purchase; storagePath?: string }> {
-  const vendor = await partyStore.ensure((bill.supplierName || '').trim(), 'vendor', {
-    gst: bill.gstin,
-    addr: bill.address,
-    city: bill.city,
-    pin: bill.pin,
-    phone: bill.phone,
-    bank: bill.bank,
-    acno: bill.acno,
-    ifsc: bill.ifsc,
-    acname: bill.acname,
+  const supplierName = String(bill.supplierName ?? '').trim()
+  const billNo = String(bill.billNo ?? '').trim()
+  if (!supplierName) throw new Error('Supplier name missing')
+  if (!billNo) throw new Error('Bill number missing')
+
+  const vendor = await partyStore.ensure(supplierName, 'vendor', {
+    gst: bill.gstin != null ? String(bill.gstin) : undefined,
+    addr: bill.address != null ? String(bill.address) : undefined,
+    city: bill.city != null ? String(bill.city) : undefined,
+    pin: bill.pin != null ? String(bill.pin) : undefined,
+    phone: bill.phone != null ? String(bill.phone) : undefined,
+    bank: bill.bank != null ? String(bill.bank) : undefined,
+    acno: bill.acno != null ? String(bill.acno) : undefined,
+    ifsc: bill.ifsc != null ? String(bill.ifsc) : undefined,
+    acname: bill.acname != null ? String(bill.acname) : undefined,
   })
   const items: PurchaseItemLine[] = []
   for (const it of bill.items || []) {
     const line = await ensurePurchaseItemLine(it)
     if (line.name.trim() && line.qty > 0 && line.rate >= 0) items.push(line)
   }
-  if (items.length === 0) throw new Error(`No valid items in bill ${bill.billNo || ''}`)
+  if (items.length === 0) throw new Error(`No valid items in bill ${billNo} (qty/rate check failed)`)
   const totals = calcPurchaseTotals(items)
   const purchase = await purchaseStore.add({
     supplier_name: vendor.name,
     supplier_id: vendor.id,
-    bill_no: (bill.billNo || '').trim(),
-    date: bill.date || new Date().toISOString().slice(0, 10),
+    bill_no: billNo,
+    date: String(bill.date || new Date().toISOString().slice(0, 10)).slice(0, 10),
     received_date: new Date().toISOString().slice(0, 10),
     payment: 'BANK',
     gst_type: firmStore.activeFirm?.state && vendor.state
@@ -1004,34 +1019,34 @@ function removeSelectedScanned() {
 }
 
 async function saveScannedBills() {
-  const enriched = enrichedScannedBills.value
-  const bills = enriched.filter((bill) =>
-    bill._matchStatus === 'new' &&
-    bill.supplierName?.trim() &&
-    bill.billNo?.trim() &&
-    bill.items?.length,
-  )
-  if (bills.length === 0) {
-    const skipped = enriched.filter((bill) => bill._matchStatus !== 'new').length
-    alert(skipped
-      ? 'Save karne ke liye koi naya bill nahi hai. Already saved / duplicate bills hatao ya edit karo.'
-      : 'Scan se koi complete bill extract nahi hua.')
-    return
-  }
-  const duplicateBill = bills.find((bill, idx) =>
-    bills.findIndex((row) =>
-      purchaseBillBatchKey(row.supplierName, row.billNo) === purchaseBillBatchKey(bill.supplierName, bill.billNo),
-    ) !== idx,
-  )
-  if (duplicateBill) {
-    alert(`Scanned bills me duplicate bill found: ${duplicateBill.supplierName} / ${duplicateBill.billNo}`)
-    return
-  }
-
-  let saved = 0
-  const fileStoragePaths = new Map<File, string>()
-  const savedKeys = new Set<string>()
   try {
+    const enriched = enrichedScannedBills.value
+    const bills = enriched.filter((bill) => isSaveableScannedBill(bill))
+    if (bills.length === 0) {
+      const skipped = enriched.filter((bill) => bill._matchStatus !== 'new').length
+      const incompleteNew = enriched.filter((bill) =>
+        bill._matchStatus === 'new' && !isSaveableScannedBill(bill),
+      ).length
+      alert(skipped
+        ? 'Save karne ke liye koi naya bill nahi hai. Already saved / duplicate bills hatao ya edit karo.'
+        : incompleteNew
+          ? 'Naye bills incomplete hain — supplier, bill no aur kam se kam 1 item chahiye.'
+          : 'Scan se koi complete bill extract nahi hua.')
+      return
+    }
+    const duplicateBill = bills.find((bill, idx) =>
+      bills.findIndex((row) =>
+        purchaseBillBatchKey(row.supplierName, row.billNo) === purchaseBillBatchKey(bill.supplierName, bill.billNo),
+      ) !== idx,
+    )
+    if (duplicateBill) {
+      alert(`Scanned bills me duplicate bill found: ${duplicateBill.supplierName} / ${duplicateBill.billNo}`)
+      return
+    }
+
+    let saved = 0
+    const fileStoragePaths = new Map<File, string>()
+    const savedKeys = new Set<string>()
     for (const bill of bills) {
       const sourceFile = bill._sourceFile || null
       const reusePath = sourceFile ? fileStoragePaths.get(sourceFile) : undefined

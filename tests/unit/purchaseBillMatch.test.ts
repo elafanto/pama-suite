@@ -38,4 +38,14 @@ describe('purchaseBillMatch helpers', () => {
     expect(annotated[2]._matchStatus).toBe('new')
     expect(purchaseBillBatchKey(' ABC ', 'INV 001')).toBe('abc|inv001')
   })
+
+  it('handles numeric bill numbers from OCR JSON', () => {
+    expect(purchaseBillBatchKey('ABC Traders', 1001)).toBe('abc traders|1001')
+
+    const bills: ScanResult[] = [
+      { supplierName: 'New Vendor', billNo: 7788, items: [{ name: 'C', qty: 1, rate: 1, gst: 18 }] },
+    ]
+    const annotated = annotateScannedBillMatches(bills, purchases)
+    expect(annotated[0]._matchStatus).toBe('new')
+  })
 })

@@ -9,14 +9,14 @@ export type ScannedBillMatchFields = {
   _existingPurchaseDate?: string
 }
 
-export function normalizePurchaseBillKey(supplierName?: string, billNo?: string) {
+export function normalizePurchaseBillKey(supplierName?: string | number | null, billNo?: string | number | null) {
   return {
-    supplier: (supplierName || '').trim().toLowerCase(),
-    billNo: (billNo || '').trim().toLowerCase().replace(/[\s\-_/]+/g, ''),
+    supplier: String(supplierName ?? '').trim().toLowerCase(),
+    billNo: String(billNo ?? '').trim().toLowerCase().replace(/[\s\-_/]+/g, ''),
   }
 }
 
-export function purchaseBillBatchKey(supplierName?: string, billNo?: string): string {
+export function purchaseBillBatchKey(supplierName?: string | number | null, billNo?: string | number | null): string {
   const key = normalizePurchaseBillKey(supplierName, billNo)
   if (!key.supplier || !key.billNo) return ''
   return `${key.supplier}|${key.billNo}`
@@ -24,8 +24,8 @@ export function purchaseBillBatchKey(supplierName?: string, billNo?: string): st
 
 export function purchaseMatchesBill(
   purchase: Purchase,
-  supplierName?: string,
-  billNo?: string,
+  supplierName?: string | number | null,
+  billNo?: string | number | null,
 ): boolean {
   if (purchase.is_deleted) return false
   const left = normalizePurchaseBillKey(supplierName, billNo)
@@ -36,8 +36,8 @@ export function purchaseMatchesBill(
 
 export function findExistingPurchase(
   purchases: Purchase[],
-  supplierName?: string,
-  billNo?: string,
+  supplierName?: string | number | null,
+  billNo?: string | number | null,
 ): Purchase | undefined {
   return purchases.find((p) => purchaseMatchesBill(p, supplierName, billNo))
 }
