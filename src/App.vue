@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/auth'
 import { runSync, startCloudRealtime, stopCloudRealtime, startAutoSync, stopAutoSync } from '@/services/sync'
 import PwaInstallPrompt from '@/components/PwaInstallPrompt.vue'
 import { useBrowserBack } from '@/composables/useBrowserBack'
+import { hardRefreshApp } from '@/services/pwaRefresh'
 
 const route = useRoute()
 const { showBackButton, goBack } = useBrowserBack()
@@ -59,42 +60,11 @@ async function cloudSync() {
   }
 }
 
-async function activateWaitingWorker(registration: ServiceWorkerRegistration) {
-  if (!registration.waiting) return
-
-  await new Promise<void>((resolve) => {
-    let resolved = false
-    const finish = () => {
-      if (resolved) return
-      resolved = true
-      window.clearTimeout(timeout)
-      navigator.serviceWorker.removeEventListener('controllerchange', finish)
-      resolve()
-    }
-    const timeout = window.setTimeout(finish, 1500)
-
-    navigator.serviceWorker.addEventListener('controllerchange', finish)
-    registration.waiting?.postMessage({ type: 'SKIP_WAITING' })
-  })
-}
-
 async function refreshApp() {
   if (refreshingApp.value) return
-
   refreshingApp.value = true
-  try {
-    if ('serviceWorker' in navigator) {
-      const registration = await navigator.serviceWorker.getRegistration()
-      if (registration) {
-        await registration.update()
-        await activateWaitingWorker(registration)
-      }
-    }
-  } catch (err) {
-    console.warn('App refresh update check failed; reloading anyway.', err)
-  } finally {
-    window.location.reload()
-  }
+  // Clears stale PWA caches then hard-navigates (avoids blank screen after Update).
+  await hardRefreshApp()
 }
 
 function onOnline() {
@@ -171,7 +141,7 @@ onUnmounted(() => {
           type="button"
           class="hidden pp-btn pp-btn-ghost !py-1 !px-2 text-[10px] !text-sky-100 !bg-white/10 hover:!bg-white/20 border border-white/20 whitespace-nowrap sm:inline-flex sm:text-xs"
           :disabled="refreshingApp"
-          title="Check for app update and reload"
+          title="Fetch latest app version and reload (fixes blank/outdated screen)"
           @click="refreshApp"
         >
           {{ refreshingApp ? 'Updating…' : 'Update' }}

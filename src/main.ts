@@ -5,7 +5,9 @@ import './style.css'
 import App from './App.vue'
 import { router } from './router'
 import { useAuthStore } from './stores/auth'
+import { stripRefreshQueryParam } from './services/pwaRefresh'
 
+stripRefreshQueryParam()
 registerSW({ immediate: true })
 
 const app = createApp(App)
