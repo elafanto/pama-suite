@@ -12,6 +12,8 @@ import AiScanPanel from '@/components/AiScanPanel.vue'
 import { scanPurchaseBillsFromFile, formatMultiBillScanWaitHint, type ScanResult } from '@/services/aiScanner'
 import {
   annotateScannedBillMatches,
+  countDuplicatePurchaseExtras,
+  findDuplicatePurchaseGroups,
   purchaseBillBatchKey,
   purchaseMatchesBill,
   type ScannedBillMatchFields,
@@ -137,6 +139,12 @@ const bulkRows = ref<BulkPurchaseRow[]>([])
 type ScannedBillWithFile = ScanResult & { _sourceFile?: File | null }
 const scannedBills = ref<ScannedBillWithFile[]>([])
 const scannedBillSelected = ref<Record<number, boolean>>({})
+const scannedSaveBusy = ref(false)
+const scannedSaveProgress = ref('')
+const showDuplicatePurchasesModal = ref(false)
+const duplicateDeleteBusy = ref(false)
+const duplicateDeleteProgress = ref('')
+const selectedDuplicateIds = ref<string[]>([])
 const pendingScanFile = ref<File | null>(null)
 const purchaseHasDoc = ref<Record<string, boolean>>({})
 const attachTargetPurchase = ref<Purchase | null>(null)
@@ -438,6 +446,96 @@ function viewExistingScannedPurchase(purchaseId?: string) {
   if (!purchaseId) return
   const purchase = purchaseStore.list.find((row) => row.id === purchaseId)
   if (purchase) editPurchase(purchase)
+}
+
+const duplicatePurchaseGroups = computed(() => findDuplicatePurchaseGroups(purchaseStore.list))
+const duplicatePurchaseExtraCount = computed(() => countDuplicatePurchaseExtras(duplicatePurchaseGroups.value))
+const duplicatePurchaseIdSet = computed(() => {
+  const ids = new Set<string>()
+  for (const group of duplicatePurchaseGroups.value) {
+    for (const extra of group.extras) ids.add(extra.id)
+  }
+  return ids
+})
+
+function openDuplicatePurchasesModal() {
+  selectedDuplicateIds.value = duplicatePurchaseGroups.value.flatMap((group) => group.extras.map((row) => row.id))
+  duplicateDeleteProgress.value = ''
+  showDuplicatePurchasesModal.value = true
+}
+
+function closeDuplicatePurchasesModal() {
+  if (duplicateDeleteBusy.value) return
+  showDuplicatePurchasesModal.value = false
+  selectedDuplicateIds.value = []
+  duplicateDeleteProgress.value = ''
+}
+
+function isDuplicateExtraSelected(id: string) {
+  return selectedDuplicateIds.value.includes(id)
+}
+
+function toggleDuplicateExtraSelected(id: string) {
+  if (isDuplicateExtraSelected(id)) {
+    selectedDuplicateIds.value = selectedDuplicateIds.value.filter((rowId) => rowId !== id)
+  } else {
+    selectedDuplicateIds.value = [...selectedDuplicateIds.value, id]
+  }
+}
+
+function selectAllDuplicateExtras() {
+  selectedDuplicateIds.value = duplicatePurchaseGroups.value.flatMap((group) => group.extras.map((row) => row.id))
+}
+
+function clearDuplicateExtraSelection() {
+  selectedDuplicateIds.value = []
+}
+
+async function deleteSelectedDuplicatePurchases() {
+  const ids = [...selectedDuplicateIds.value]
+  if (!ids.length) {
+    alert('Delete ke liye kam se kam 1 duplicate bill select karo.')
+    return
+  }
+  if (!confirm(
+    `${ids.length} duplicate purchase bill(s) delete honge.\n`
+    + `Oldest bill har group me rahega.\n`
+    + `Party ledger / stock reverse hoga. Continue?`,
+  )) return
+
+  duplicateDeleteBusy.value = true
+  let deleted = 0
+  const errors: string[] = []
+  try {
+    for (const id of ids) {
+      const pur = purchaseStore.list.find((row) => row.id === id)
+      duplicateDeleteProgress.value = `Deleting ${deleted + 1}/${ids.length}${pur ? `: ${pur.supplier_name} / ${pur.bill_no}` : ''}…`
+      try {
+        await purchaseStore.remove(id)
+        delete purchaseHasDoc.value[id]
+        deleted++
+      } catch (err: any) {
+        errors.push(`${pur?.bill_no || id}: ${err?.message || 'delete failed'}`)
+      }
+    }
+    selectedDuplicateIds.value = selectedDuplicateIds.value.filter((id) =>
+      duplicatePurchaseIdSet.value.has(id),
+    )
+    duplicateDeleteProgress.value = errors.length
+      ? `${deleted} deleted, ${errors.length} failed.`
+      : `${deleted} duplicate bill(s) deleted. Party ledger updated.`
+    if (errors.length) {
+      alert(`${duplicateDeleteProgress.value}\n\n${errors.slice(0, 5).join('\n')}`)
+    } else {
+      alert(duplicateDeleteProgress.value)
+      if (!duplicatePurchaseExtraCount.value) {
+        showDuplicatePurchasesModal.value = false
+        selectedDuplicateIds.value = []
+      }
+    }
+  } finally {
+    duplicateDeleteBusy.value = false
+  }
 }
 
 function calcBulkAmounts(row: BulkPurchaseRow) {
@@ -1019,6 +1117,9 @@ function removeSelectedScanned() {
 }
 
 async function saveScannedBills() {
+  if (scannedSaveBusy.value) return
+  scannedSaveBusy.value = true
+  scannedSaveProgress.value = ''
   try {
     const enriched = enrichedScannedBills.value
     const bills = enriched.filter((bill) => isSaveableScannedBill(bill))
@@ -1045,13 +1146,25 @@ async function saveScannedBills() {
     }
 
     let saved = 0
+    let skippedExisting = 0
     const fileStoragePaths = new Map<File, string>()
     const savedKeys = new Set<string>()
-    for (const bill of bills) {
+    for (const [idx, bill] of bills.entries()) {
+      const supplierName = String(bill.supplierName ?? '').trim()
+      const billNo = String(bill.billNo ?? '').trim()
+      scannedSaveProgress.value = `Saving ${idx + 1}/${bills.length}: ${supplierName} / ${billNo}…`
+      bulkScanStatus.value = scannedSaveProgress.value
+
+      if (purchaseStore.list.some((p) => purchaseMatchesBill(p, supplierName, billNo))) {
+        skippedExisting++
+        savedKeys.add(purchaseBillBatchKey(supplierName, billNo))
+        continue
+      }
+
       const sourceFile = bill._sourceFile || null
       const reusePath = sourceFile ? fileStoragePaths.get(sourceFile) : undefined
       const { storagePath } = await saveScannedBill(bill, reusePath)
-      savedKeys.add(purchaseBillBatchKey(bill.supplierName, bill.billNo))
+      savedKeys.add(purchaseBillBatchKey(supplierName, billNo))
       if (sourceFile && storagePath && !fileStoragePaths.has(sourceFile)) {
         fileStoragePaths.set(sourceFile, storagePath)
       }
@@ -1061,12 +1174,19 @@ async function saveScannedBills() {
       !savedKeys.has(purchaseBillBatchKey(bill.supplierName, bill.billNo)),
     )
     clearScannedBillSelection()
-    bulkScanStatus.value = `${saved} scanned purchase bill(s) saved successfully.`
-    alert(`${saved} scanned purchase bill(s) saved successfully!`)
+    const summary = skippedExisting
+      ? `${saved} saved, ${skippedExisting} already existed (skipped).`
+      : `${saved} scanned purchase bill(s) saved successfully.`
+    scannedSaveProgress.value = summary
+    bulkScanStatus.value = summary
+    alert(summary)
     activeTab.value = 'history'
   } catch (err: any) {
     bulkScanStatus.value = err?.message || 'Saving scanned bills failed'
+    scannedSaveProgress.value = bulkScanStatus.value
     alert(bulkScanStatus.value)
+  } finally {
+    scannedSaveBusy.value = false
   }
 }
 
@@ -1726,9 +1846,11 @@ onMounted(async () => {
             <button
               @click="saveScannedBills"
               class="pp-btn pp-btn-primary"
-              :disabled="scannedBillSummary.newCount === 0"
+              :disabled="scannedSaveBusy || scannedBillSummary.newCount === 0"
             >
-              Save {{ scannedBillSummary.newCount || '' }} New Bill{{ scannedBillSummary.newCount === 1 ? '' : 's' }}
+              {{ scannedSaveBusy
+                ? (scannedSaveProgress || 'Saving…')
+                : `Save ${scannedBillSummary.newCount || ''} New Bill${scannedBillSummary.newCount === 1 ? '' : 's'}` }}
             </button>
           </div>
           <div class="flex flex-wrap gap-2">
@@ -2032,6 +2154,30 @@ onMounted(async () => {
         </div>
       </div>
 
+      <div
+        v-if="duplicatePurchaseExtraCount"
+        class="rounded-xl border border-amber-300 bg-amber-50 p-4 shadow-sm"
+      >
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div class="space-y-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <h3 class="font-semibold text-amber-950">Duplicate purchase bills found</h3>
+              <span class="pp-badge bg-white text-amber-800">{{ duplicatePurchaseExtraCount }} extra</span>
+            </div>
+            <p class="text-xs text-amber-900">
+              Same supplier + bill number multiple times saved hain. Extra copies delete karo — party ledger automatically reverse / update ho jayega.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="pp-btn pp-btn-primary w-full whitespace-nowrap sm:w-auto !bg-amber-700 hover:!bg-amber-800"
+            @click="openDuplicatePurchasesModal"
+          >
+            Review &amp; Delete Duplicates
+          </button>
+        </div>
+      </div>
+
       <div class="rounded-xl border border-blue-200 bg-blue-50 p-4 shadow-sm">
         <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div class="space-y-1">
@@ -2182,7 +2328,15 @@ onMounted(async () => {
                 />
               </td>
               <td class="py-3 px-4 font-medium">{{ pur.date }}</td>
-              <td class="py-3 px-4 font-mono">{{ pur.bill_no }}</td>
+              <td class="py-3 px-4 font-mono">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span>{{ pur.bill_no }}</span>
+                  <span
+                    v-if="duplicatePurchaseIdSet.has(pur.id)"
+                    class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800"
+                  >Duplicate</span>
+                </div>
+              </td>
               <td class="py-3 px-4">{{ pur.supplier_name }}</td>
               <td class="py-3 px-4 text-right font-mono">₹{{ n2(pur.sub) }}</td>
               <td class="py-3 px-4 text-right font-mono">₹{{ n2(pur.total_tax) }}</td>
@@ -2278,6 +2432,80 @@ onMounted(async () => {
         </table>
       </div>
     </div>
+
+    <!-- Duplicate purchase cleanup -->
+    <PpModal
+      :show="showDuplicatePurchasesModal"
+      title="Delete Duplicate Purchase Bills"
+      @close="closeDuplicatePurchasesModal"
+    >
+      <div class="space-y-4">
+        <p class="text-sm text-slate-600">
+          Har group me <strong>oldest</strong> bill keep hoga. Extra copies select karke delete karo —
+          purchase ledger + payment voucher reverse honge, party outstanding update ho jayega.
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" class="pp-btn pp-btn-ghost text-xs" :disabled="duplicateDeleteBusy" @click="selectAllDuplicateExtras">
+            Select all extras
+          </button>
+          <button type="button" class="pp-btn pp-btn-ghost text-xs" :disabled="duplicateDeleteBusy" @click="clearDuplicateExtraSelection">
+            Clear selection
+          </button>
+        </div>
+        <div v-if="!duplicatePurchaseGroups.length" class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+          Ab koi duplicate nahi bacha.
+        </div>
+        <div v-else class="max-h-[50vh] space-y-3 overflow-y-auto pr-1">
+          <div
+            v-for="group in duplicatePurchaseGroups"
+            :key="group.key"
+            class="rounded-xl border border-amber-200 bg-amber-50/40 p-3 space-y-2"
+          >
+            <div class="text-sm font-semibold text-slate-800">
+              {{ group.supplierName }}
+              <span class="font-mono text-slate-600"> / {{ group.billNo }}</span>
+              <span class="ml-2 text-xs font-normal text-amber-800">{{ group.extras.length + 1 }} copies</span>
+            </div>
+            <div class="rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs text-emerald-800">
+              Keep (oldest): {{ group.keep.date }} · ₹{{ n2(group.keep.grand_total) }} · {{ group.keep.pay_status }}
+            </div>
+            <label
+              v-for="extra in group.extras"
+              :key="extra.id"
+              class="flex items-start gap-3 rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs"
+            >
+              <input
+                type="checkbox"
+                class="mt-0.5"
+                :checked="isDuplicateExtraSelected(extra.id)"
+                :disabled="duplicateDeleteBusy"
+                @change="toggleDuplicateExtraSelected(extra.id)"
+              />
+              <span>
+                Delete: {{ extra.date }} · ₹{{ n2(extra.grand_total) }} · {{ extra.pay_status }}
+                <span class="block text-slate-400">id {{ extra.id.slice(0, 8) }}…</span>
+              </span>
+            </label>
+          </div>
+        </div>
+        <p v-if="duplicateDeleteProgress" class="text-xs" :class="duplicateDeleteBusy ? 'text-slate-500' : 'text-emerald-700'">
+          {{ duplicateDeleteProgress }}
+        </p>
+        <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button type="button" class="pp-btn pp-btn-ghost" :disabled="duplicateDeleteBusy" @click="closeDuplicatePurchasesModal">
+            Close
+          </button>
+          <button
+            type="button"
+            class="pp-btn pp-btn-primary !bg-rose-600 hover:!bg-rose-700"
+            :disabled="duplicateDeleteBusy || !selectedDuplicateIds.length"
+            @click="deleteSelectedDuplicatePurchases"
+          >
+            {{ duplicateDeleteBusy ? 'Deleting…' : `Delete ${selectedDuplicateIds.length || ''} Duplicate${selectedDuplicateIds.length === 1 ? '' : 's'}` }}
+          </button>
+        </div>
+      </div>
+    </PpModal>
 
     <!-- Outstanding Payment Modal -->
     <PpModal :show="showPaymentModal" title="Record Payment to Vendor" @close="showPaymentModal = false">

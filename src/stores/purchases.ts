@@ -135,6 +135,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
     await softDeleteAttachmentsForEntity('purchase', id, existing?.firm_id)
     await repo.remove(id)
     await reversePurchaseReels(id)
+    await reversePurchaseConsumables(id)
     await reversePurchaseCapitalAssets(id)
     const accounting = useAccountingStore()
     await accounting.reverseLedgerByRef(id)

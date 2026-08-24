@@ -77,3 +77,47 @@ export function annotateScannedBillMatches<T extends ScanResult>(
     ...getScannedBillMatchFields(bill, purchases, seenBatchKeys),
   }))
 }
+
+export type DuplicatePurchaseGroup = {
+  key: string
+  supplierName: string
+  billNo: string
+  keep: Purchase
+  extras: Purchase[]
+}
+
+/** Groups saved purchases that share the same supplier + bill number. Keeps oldest as primary. */
+export function findDuplicatePurchaseGroups(purchases: Purchase[]): DuplicatePurchaseGroup[] {
+  const byKey = new Map<string, Purchase[]>()
+  for (const purchase of purchases) {
+    if (purchase.is_deleted) continue
+    const key = purchaseBillBatchKey(purchase.supplier_name, purchase.bill_no)
+    if (!key) continue
+    const rows = byKey.get(key) || []
+    rows.push(purchase)
+    byKey.set(key, rows)
+  }
+
+  const groups: DuplicatePurchaseGroup[] = []
+  for (const [key, rows] of byKey) {
+    if (rows.length < 2) continue
+    const sorted = [...rows].sort((a, b) =>
+      String(a.created_at || a.date || '').localeCompare(String(b.created_at || b.date || '')),
+    )
+    groups.push({
+      key,
+      supplierName: sorted[0].supplier_name,
+      billNo: sorted[0].bill_no,
+      keep: sorted[0],
+      extras: sorted.slice(1),
+    })
+  }
+
+  return groups.sort((a, b) =>
+    a.supplierName.localeCompare(b.supplierName) || a.billNo.localeCompare(b.billNo),
+  )
+}
+
+export function countDuplicatePurchaseExtras(groups: DuplicatePurchaseGroup[]): number {
+  return groups.reduce((sum, group) => sum + group.extras.length, 0)
+}

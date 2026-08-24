@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   annotateScannedBillMatches,
+  countDuplicatePurchaseExtras,
+  findDuplicatePurchaseGroups,
   findExistingPurchase,
   purchaseBillBatchKey,
   purchaseMatchesBill,
@@ -47,5 +49,19 @@ describe('purchaseBillMatch helpers', () => {
     ]
     const annotated = annotateScannedBillMatches(bills, purchases)
     expect(annotated[0]._matchStatus).toBe('new')
+  })
+
+  it('finds duplicate saved purchases and keeps the oldest', () => {
+    const rows = [
+      { id: 'a', supplier_name: 'ABC Traders', bill_no: 'INV-001', date: '2025-08-01', created_at: '2025-08-01T10:00:00.000Z', is_deleted: false, grand_total: 100, pay_status: 'UNPAID' },
+      { id: 'b', supplier_name: 'ABC Traders', bill_no: 'INV 001', date: '2025-08-02', created_at: '2025-08-02T10:00:00.000Z', is_deleted: false, grand_total: 100, pay_status: 'UNPAID' },
+      { id: 'c', supplier_name: 'Other', bill_no: 'X-1', date: '2025-08-01', created_at: '2025-08-01T10:00:00.000Z', is_deleted: false, grand_total: 50, pay_status: 'UNPAID' },
+    ] as Purchase[]
+
+    const groups = findDuplicatePurchaseGroups(rows)
+    expect(groups).toHaveLength(1)
+    expect(groups[0].keep.id).toBe('a')
+    expect(groups[0].extras.map((r) => r.id)).toEqual(['b'])
+    expect(countDuplicatePurchaseExtras(groups)).toBe(1)
   })
 })
