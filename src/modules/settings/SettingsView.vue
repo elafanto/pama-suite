@@ -39,6 +39,7 @@ const fyOptions = listRecentIndianFYLabels(6)
 const selectedFyLabel = ref(fyOptions[0].label)
 const auditExportBusy = ref(false)
 const auditExportMsg = ref('')
+const appBuildSha = __APP_BUILD_SHA__
 
 const MAX_SIGNATURE_BYTES = 512 * 1024
 
@@ -402,6 +403,7 @@ onMounted(async () => {
       <h2 class="font-bold text-navy mb-2">📱 Mobile App (PWA)</h2>
       <p class="text-sm text-slate-500 mb-3">
         Status: <strong>{{ statusLabel }}</strong>
+        · Build: <strong class="font-mono">{{ appBuildSha }}</strong>
       </p>
       <p class="text-xs text-slate-500 mb-4 leading-relaxed">
         PWA = ek link se phone par install, full-screen app jaisa, offline shell, auto-update jab Vercel par deploy ho.

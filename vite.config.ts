@@ -3,8 +3,13 @@ import vue from '@vitejs/plugin-vue'
 import { VitePWA } from 'vite-plugin-pwa'
 import { fileURLToPath, URL } from 'node:url'
 
+const appBuildSha = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || 'local'
+
 // https://vite.dev/config/
 export default defineConfig({
+  define: {
+    __APP_BUILD_SHA__: JSON.stringify(appBuildSha),
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
@@ -43,7 +48,8 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,woff2}'],
         cleanupOutdatedCaches: true,
         clientsClaim: true,
-        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+        skipWaiting: true,
+        maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,
