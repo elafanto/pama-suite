@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   formatMultiBillScanWaitHint,
+  mergeContinuationBills,
   PAGE_BY_PAGE_MIN_PAGES,
   PAGE_BY_PAGE_PDF_BYTES,
   resolveMultiBillScanTimeoutMs,
   shouldUsePageByPagePdfScan,
+  type ScanResult,
 } from '@/services/aiScanner'
 
 describe('resolveMultiBillScanTimeoutMs', () => {
@@ -46,5 +48,56 @@ describe('formatMultiBillScanWaitHint', () => {
 
   it('mentions wait time for small PDF', () => {
     expect(formatMultiBillScanWaitHint(500_000, 'application/pdf')).toMatch(/120s/)
+  })
+})
+
+describe('mergeContinuationBills', () => {
+  it('merges two pages of the same bill', () => {
+    const page1: ScanResult = {
+      supplierName: 'ABC Traders',
+      billNo: 'INV-001',
+      items: [{ name: 'Kraft Paper', qty: 100, rate: 50, gst: 18 }],
+      sub: 5000,
+    }
+    const page2: ScanResult = {
+      supplierName: 'ABC Traders',
+      billNo: 'INV-001',
+      items: [{ name: 'Freight', qty: 1, rate: 200, gst: 18 }],
+      grandTotal: 5200,
+    }
+
+    const merged = mergeContinuationBills([page1, page2])
+    expect(merged).toHaveLength(1)
+    expect(merged[0].items).toHaveLength(2)
+    expect(merged[0].grandTotal).toBe(5200)
+  })
+
+  it('merges continuation page without repeated header', () => {
+    const page1: ScanResult = {
+      supplierName: 'ABC Traders',
+      billNo: 'INV-001',
+      items: [{ name: 'Item A', qty: 1, rate: 100, gst: 18 }],
+    }
+    const page2: ScanResult = {
+      items: [{ name: 'Item B', qty: 2, rate: 50, gst: 18 }],
+      grandTotal: 200,
+    }
+
+    expect(mergeContinuationBills([page1, page2])).toHaveLength(1)
+  })
+
+  it('keeps separate bills when supplier and bill number differ', () => {
+    const bill1: ScanResult = {
+      supplierName: 'ABC Traders',
+      billNo: 'INV-001',
+      items: [{ name: 'Item A', qty: 1, rate: 100, gst: 18 }],
+    }
+    const bill2: ScanResult = {
+      supplierName: 'XYZ Mills',
+      billNo: 'INV-002',
+      items: [{ name: 'Item B', qty: 1, rate: 200, gst: 18 }],
+    }
+
+    expect(mergeContinuationBills([bill1, bill2])).toHaveLength(2)
   })
 })

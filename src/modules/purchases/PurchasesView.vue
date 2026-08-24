@@ -11,6 +11,12 @@ import PpModal from '@/components/PpModal.vue'
 import AiScanPanel from '@/components/AiScanPanel.vue'
 import { scanPurchaseBillsFromFile, formatMultiBillScanWaitHint, type ScanResult } from '@/services/aiScanner'
 import {
+  annotateScannedBillMatches,
+  purchaseBillBatchKey,
+  purchaseMatchesBill,
+  type ScannedBillMatchFields,
+} from '@/services/purchaseBillMatch'
+import {
   attachDocumentFromFile,
   openEntityDocument,
   downloadEntityDocument,
@@ -130,6 +136,7 @@ const lineKindOptions = PURCHASE_LINE_KIND_OPTIONS
 const bulkRows = ref<BulkPurchaseRow[]>([])
 type ScannedBillWithFile = ScanResult & { _sourceFile?: File | null }
 const scannedBills = ref<ScannedBillWithFile[]>([])
+const scannedBillSelected = ref<Record<number, boolean>>({})
 const pendingScanFile = ref<File | null>(null)
 const purchaseHasDoc = ref<Record<string, boolean>>({})
 const attachTargetPurchase = ref<Purchase | null>(null)
@@ -382,6 +389,46 @@ const totalTax = computed(() => {
 const rawTotal = computed(() => subtotal.value + totalTax.value)
 const grandTotal = computed(() => Math.round(rawTotal.value))
 const roundOff = computed(() => grandTotal.value - rawTotal.value)
+
+const enrichedScannedBills = computed(() =>
+  annotateScannedBillMatches(scannedBills.value, purchaseStore.list),
+)
+
+const scannedBillSummary = computed(() => {
+  const enriched = enrichedScannedBills.value
+  return {
+    total: enriched.length,
+    newCount: enriched.filter((bill) => bill._matchStatus === 'new').length,
+    alreadySavedCount: enriched.filter((bill) => bill._matchStatus === 'already_saved').length,
+    duplicateCount: enriched.filter((bill) => bill._matchStatus === 'duplicate_in_batch').length,
+  }
+})
+
+const hasSelectedScannedBills = computed(() =>
+  Object.values(scannedBillSelected.value).some(Boolean),
+)
+
+function scannedBillMatchAt(idx: number): ScannedBillMatchFields {
+  return enrichedScannedBills.value[idx] || { _matchStatus: 'new' }
+}
+
+function isScannedBillSelected(idx: number) {
+  return Boolean(scannedBillSelected.value[idx])
+}
+
+function toggleScannedBillSelected(idx: number) {
+  scannedBillSelected.value[idx] = !isScannedBillSelected(idx)
+}
+
+function clearScannedBillSelection() {
+  scannedBillSelected.value = {}
+}
+
+function viewExistingScannedPurchase(purchaseId?: string) {
+  if (!purchaseId) return
+  const purchase = purchaseStore.list.find((row) => row.id === purchaseId)
+  if (purchase) editPurchase(purchase)
+}
 
 function calcBulkAmounts(row: BulkPurchaseRow) {
   const sub = Math.round((Number(row.qty) || 0) * (Number(row.rate) || 0) * 100) / 100
@@ -793,11 +840,7 @@ async function saveBulkPurchases() {
     return
   }
   const existingBill = validRows.find((row) =>
-    purchaseStore.list.some((p) =>
-      !p.is_deleted &&
-      p.supplier_name.trim().toLowerCase() === row.supplier_name.trim().toLowerCase() &&
-      p.bill_no.trim().toLowerCase() === row.bill_no.trim().toLowerCase(),
-    ),
+    purchaseStore.list.some((p) => purchaseMatchesBill(p, row.supplier_name, row.bill_no)),
   )
   if (existingBill) {
     alert(`Already saved bill found: ${existingBill.supplier_name} / ${existingBill.bill_no}`)
@@ -875,6 +918,7 @@ async function scanBulkPurchaseFiles(e: Event) {
     status: 'pending',
     message: 'Waiting',
   }))
+  clearScannedBillSelection()
 
   const extractedBills: ScannedBillWithFile[] = []
   try {
@@ -921,11 +965,16 @@ async function scanBulkPurchaseFiles(e: Event) {
     }
 
     const failedCount = bulkScanFileStatuses.value.filter((file) => file.status === 'error').length
-    bulkScanStatus.value = extractedBills.length
-      ? `Done - ${extractedBills.length} bill(s) extracted from ${files.length - failedCount}/${files.length} file(s). Review and save.`
-      : failedCount
+    if (extractedBills.length) {
+      const summary = scannedBillSummary.value
+      bulkScanStatus.value = summary.alreadySavedCount || summary.duplicateCount
+        ? `Done - ${summary.total} extracted, ${summary.alreadySavedCount} already saved, ${summary.newCount} new. Review and save.`
+        : `Done - ${summary.total} bill(s) extracted from ${files.length - failedCount}/${files.length} file(s). Review and save.`
+    } else {
+      bulkScanStatus.value = failedCount
         ? `No bills extracted. ${failedCount} file(s) failed.`
         : `No purchase bills found in ${files.length === 1 ? 'this file' : 'selected files'}.`
+    }
   } finally {
     bulkScanLoading.value = false
     input.value = ''
@@ -934,49 +983,69 @@ async function scanBulkPurchaseFiles(e: Event) {
 
 function removeScannedBill(idx: number) {
   scannedBills.value.splice(idx, 1)
+  clearScannedBillSelection()
+}
+
+function removeAllAlreadySavedScanned() {
+  const enriched = enrichedScannedBills.value
+  scannedBills.value = scannedBills.value.filter((_, idx) => enriched[idx]?._matchStatus !== 'already_saved')
+  clearScannedBillSelection()
+}
+
+function removeSelectedScanned() {
+  const selected = new Set(
+    Object.entries(scannedBillSelected.value)
+      .filter(([, checked]) => checked)
+      .map(([idx]) => Number(idx)),
+  )
+  if (!selected.size) return
+  scannedBills.value = scannedBills.value.filter((_, idx) => !selected.has(idx))
+  clearScannedBillSelection()
 }
 
 async function saveScannedBills() {
-  const bills = scannedBills.value.filter((b) => b.supplierName?.trim() && b.billNo?.trim() && b.items?.length)
+  const enriched = enrichedScannedBills.value
+  const bills = enriched.filter((bill) =>
+    bill._matchStatus === 'new' &&
+    bill.supplierName?.trim() &&
+    bill.billNo?.trim() &&
+    bill.items?.length,
+  )
   if (bills.length === 0) {
-    alert('Scan se koi complete bill extract nahi hua.')
+    const skipped = enriched.filter((bill) => bill._matchStatus !== 'new').length
+    alert(skipped
+      ? 'Save karne ke liye koi naya bill nahi hai. Already saved / duplicate bills hatao ya edit karo.'
+      : 'Scan se koi complete bill extract nahi hua.')
     return
   }
   const duplicateBill = bills.find((bill, idx) =>
-    bills.findIndex((b) =>
-      (b.supplierName || '').trim().toLowerCase() === (bill.supplierName || '').trim().toLowerCase() &&
-      (b.billNo || '').trim().toLowerCase() === (bill.billNo || '').trim().toLowerCase(),
+    bills.findIndex((row) =>
+      purchaseBillBatchKey(row.supplierName, row.billNo) === purchaseBillBatchKey(bill.supplierName, bill.billNo),
     ) !== idx,
   )
   if (duplicateBill) {
     alert(`Scanned bills me duplicate bill found: ${duplicateBill.supplierName} / ${duplicateBill.billNo}`)
     return
   }
-  const existingBill = bills.find((bill) =>
-    purchaseStore.list.some((p) =>
-      !p.is_deleted &&
-      p.supplier_name.trim().toLowerCase() === (bill.supplierName || '').trim().toLowerCase() &&
-      p.bill_no.trim().toLowerCase() === (bill.billNo || '').trim().toLowerCase(),
-    ),
-  )
-  if (existingBill) {
-    alert(`Already saved bill found: ${existingBill.supplierName} / ${existingBill.billNo}`)
-    return
-  }
 
   let saved = 0
   const fileStoragePaths = new Map<File, string>()
+  const savedKeys = new Set<string>()
   try {
     for (const bill of bills) {
       const sourceFile = bill._sourceFile || null
       const reusePath = sourceFile ? fileStoragePaths.get(sourceFile) : undefined
       const { storagePath } = await saveScannedBill(bill, reusePath)
+      savedKeys.add(purchaseBillBatchKey(bill.supplierName, bill.billNo))
       if (sourceFile && storagePath && !fileStoragePaths.has(sourceFile)) {
         fileStoragePaths.set(sourceFile, storagePath)
       }
       saved++
     }
-    scannedBills.value = []
+    scannedBills.value = scannedBills.value.filter((bill) =>
+      !savedKeys.has(purchaseBillBatchKey(bill.supplierName, bill.billNo)),
+    )
+    clearScannedBillSelection()
     bulkScanStatus.value = `${saved} scanned purchase bill(s) saved successfully.`
     alert(`${saved} scanned purchase bill(s) saved successfully!`)
     activeTab.value = 'history'
@@ -1628,11 +1697,91 @@ onMounted(async () => {
       </div>
 
       <div v-if="scannedBills.length" class="space-y-4">
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <h3 class="font-semibold text-slate-800">Extracted Bills Preview</h3>
-          <button @click="saveScannedBills" class="pp-btn pp-btn-primary">Save Extracted Bills</button>
+        <div class="flex flex-col gap-3">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 class="font-semibold text-slate-800">Extracted Bills Preview</h3>
+              <p class="text-xs text-slate-500 mt-1">
+                {{ scannedBillSummary.total }} extracted
+                <span v-if="scannedBillSummary.newCount"> · {{ scannedBillSummary.newCount }} new</span>
+                <span v-if="scannedBillSummary.alreadySavedCount"> · {{ scannedBillSummary.alreadySavedCount }} already saved</span>
+                <span v-if="scannedBillSummary.duplicateCount"> · {{ scannedBillSummary.duplicateCount }} duplicate in scan</span>
+              </p>
+            </div>
+            <button
+              @click="saveScannedBills"
+              class="pp-btn pp-btn-primary"
+              :disabled="scannedBillSummary.newCount === 0"
+            >
+              Save {{ scannedBillSummary.newCount || '' }} New Bill{{ scannedBillSummary.newCount === 1 ? '' : 's' }}
+            </button>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button
+              v-if="scannedBillSummary.alreadySavedCount"
+              @click="removeAllAlreadySavedScanned"
+              class="pp-btn pp-btn-ghost text-xs text-amber-700"
+            >
+              Remove all already saved ({{ scannedBillSummary.alreadySavedCount }})
+            </button>
+            <button
+              v-if="hasSelectedScannedBills"
+              @click="removeSelectedScanned"
+              class="pp-btn pp-btn-ghost text-xs text-rose-600"
+            >
+              Remove selected
+            </button>
+          </div>
         </div>
-        <div v-for="(bill, billIdx) in scannedBills" :key="`${bill.billNo || 'bill'}-${billIdx}`" class="border rounded-xl p-4 bg-white space-y-3">
+        <div
+          v-for="(bill, billIdx) in scannedBills"
+          :key="`${bill.billNo || 'bill'}-${billIdx}`"
+          class="border rounded-xl p-4 bg-white space-y-3"
+          :class="{
+            'border-amber-300 bg-amber-50/40': scannedBillMatchAt(billIdx)._matchStatus === 'already_saved',
+            'border-violet-300 bg-violet-50/40': scannedBillMatchAt(billIdx)._matchStatus === 'duplicate_in_batch',
+          }"
+        >
+          <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+            <label class="flex items-center gap-2 text-xs font-semibold text-slate-600">
+              <input
+                type="checkbox"
+                :checked="isScannedBillSelected(billIdx)"
+                @change="toggleScannedBillSelected(billIdx)"
+              />
+              Select
+            </label>
+            <div class="flex flex-wrap items-center gap-2">
+              <span
+                v-if="scannedBillMatchAt(billIdx)._matchStatus === 'already_saved'"
+                class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800"
+              >
+                Already saved
+                <span v-if="scannedBillMatchAt(billIdx)._existingPurchaseDate">
+                  ({{ scannedBillMatchAt(billIdx)._existingPurchaseDate }})
+                </span>
+              </span>
+              <span
+                v-else-if="scannedBillMatchAt(billIdx)._matchStatus === 'duplicate_in_batch'"
+                class="inline-flex items-center rounded-full bg-violet-100 px-2.5 py-1 text-xs font-semibold text-violet-800"
+              >
+                Duplicate in scan
+              </span>
+              <span
+                v-else
+                class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800"
+              >
+                New
+              </span>
+              <button
+                v-if="scannedBillMatchAt(billIdx)._existingPurchaseId"
+                @click="viewExistingScannedPurchase(scannedBillMatchAt(billIdx)._existingPurchaseId)"
+                class="pp-btn pp-btn-ghost px-2 py-1 text-xs"
+              >
+                View saved bill
+              </button>
+            </div>
+          </div>
           <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
             <div>
               <label class="pp-label">Supplier *</label>

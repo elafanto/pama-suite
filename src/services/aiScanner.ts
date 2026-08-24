@@ -142,6 +142,85 @@ function isMeaningfulBill(bill: ScanResult) {
   return Boolean(bill.supplierName?.trim() || bill.billNo?.trim() || bill.items?.length)
 }
 
+function normScanText(value?: string) {
+  return (value || '').trim().toLowerCase()
+}
+
+function normScanBillNo(value?: string) {
+  return normScanText(value).replace(/[\s\-_/]+/g, '')
+}
+
+function scanSuppliersMatch(a: ScanResult, b: ScanResult) {
+  const nameA = normScanText(a.supplierName)
+  const nameB = normScanText(b.supplierName)
+  if (nameA && nameB && nameA === nameB) return true
+  const gstA = normScanText(a.gstin)
+  const gstB = normScanText(b.gstin)
+  return Boolean(gstA && gstB && gstA === gstB)
+}
+
+function scanBillNosMatch(a: ScanResult, b: ScanResult) {
+  const noA = normScanBillNo(a.billNo)
+  const noB = normScanBillNo(b.billNo)
+  return Boolean(noA && noB && noA === noB)
+}
+
+function isContinuationScanPage(bill: ScanResult) {
+  const hasItems = Boolean(bill.items?.length)
+  const missingHeader = !bill.supplierName?.trim() && !bill.billNo?.trim()
+  return hasItems && missingHeader
+}
+
+function shouldMergeScanBills(primary: ScanResult, continuation: ScanResult) {
+  if (isContinuationScanPage(continuation) && (primary.supplierName?.trim() || primary.billNo?.trim())) return true
+  if (scanBillNosMatch(primary, continuation) && scanSuppliersMatch(primary, continuation)) return true
+  if (scanBillNosMatch(primary, continuation) && isContinuationScanPage(continuation)) return true
+  if (scanSuppliersMatch(primary, continuation) && isContinuationScanPage(continuation)) return true
+  if (scanBillNosMatch(primary, continuation) && !continuation.supplierName?.trim()) return true
+  return false
+}
+
+function mergeTwoScanBills(primary: ScanResult, continuation: ScanResult): ScanResult {
+  return {
+    supplierName: primary.supplierName || continuation.supplierName,
+    billNo: primary.billNo || continuation.billNo,
+    date: primary.date || continuation.date,
+    gstin: primary.gstin || continuation.gstin,
+    address: primary.address || continuation.address,
+    city: primary.city || continuation.city,
+    pin: primary.pin || continuation.pin,
+    phone: primary.phone || continuation.phone,
+    bank: primary.bank || continuation.bank,
+    acno: primary.acno || continuation.acno,
+    ifsc: primary.ifsc || continuation.ifsc,
+    acname: primary.acname || continuation.acname,
+    items: [...(primary.items || []), ...(continuation.items || [])],
+    sub: continuation.sub || primary.sub,
+    totalTax: continuation.totalTax || primary.totalTax,
+    grandTotal: continuation.grandTotal || primary.grandTotal,
+  }
+}
+
+/** Merge consecutive pages that belong to the same supplier bill. */
+export function mergeContinuationBills(bills: ScanResult[]): ScanResult[] {
+  if (bills.length <= 1) return bills.map((bill) => ({ ...bill, items: [...(bill.items || [])] }))
+
+  const merged: ScanResult[] = []
+  for (const bill of bills) {
+    const previous = merged[merged.length - 1]
+    if (previous && shouldMergeScanBills(previous, bill)) {
+      merged[merged.length - 1] = mergeTwoScanBills(previous, bill)
+      continue
+    }
+    merged.push({ ...bill, items: [...(bill.items || [])] })
+  }
+  return merged
+}
+
+function finalizePurchaseBillScan(bills: ScanResult[]): PurchaseBillsScanResult {
+  return { bills: mergeContinuationBills(bills) }
+}
+
 type GenerateJsonOptions = {
   timeoutMs?: number
   maxAttempts?: number
@@ -279,9 +358,13 @@ export async function scanInvoiceImage(
   apiKey: string,
   base64: string,
   mimeType: string,
-  opts?: { timeoutMs?: number },
+  opts?: { timeoutMs?: number; pdfPage?: boolean },
 ): Promise<ScanResult> {
+  const pageHint = opts?.pdfPage
+    ? 'This image may be one page of a multi-page invoice. If it is a continuation page (items/tax/totals only, no new bill header), keep the same billNo and supplierName as the first page when visible; do not invent a new bill.'
+    : ''
   const prompt = `You are an invoice OCR assistant for Indian GST bills. Extract JSON only (no markdown):
+${pageHint}
 For paper reel stock lines, extract reel metadata when visible. Use paperType "KRAFT" for kraft paper and "DUPLEX" for duplex paper. Use color "NS" for Natural Shade/Natural Brown/Neutral Brown and "GY" for Golden Yellow. Deckle/reel size can go in deckleSize and reelSize.
 {
   "supplierName": "", "billNo": "", "date": "YYYY-MM-DD", "gstin": "",
@@ -317,7 +400,9 @@ export async function scanPurchaseBillsPdf(
 ): Promise<PurchaseBillsScanResult> {
   const timeoutMs = resolveMultiBillScanTimeoutMs(opts?.fileSizeBytes, mimeType)
   const prompt = `You are an OCR assistant for Indian purchase invoice documents.
-The uploaded file may be a PDF or image and may contain one or many supplier bills/invoices, often one invoice per page.
+The uploaded file may be a PDF or image with one or many supplier bills/invoices.
+IMPORTANT: One supplier + one bill number = ONE bill even if it spans multiple pages. Merge all pages of the same bill into a single bills[] entry.
+Only create separate bills when supplier or bill number clearly changes.
 Extract all purchase bills as JSON only, no markdown. If uncertain, still return the best structured data and leave missing fields blank.
 Classify glue, ink and stitching wire line items as consumables.
 Classify paper reel line items as reels when reel/deckle/gsm/bf details are visible.
@@ -371,14 +456,14 @@ For paper reel lines, extract paperType ("KRAFT" for kraft paper, "DUPLEX" for d
       { timeoutMs, maxAttempts: GEMINI_MULTI_BILL_MAX_ATTEMPTS },
     )
     const bills = Array.isArray(result?.bills) ? result.bills : []
-    if (bills.length) return { bills }
+    if (bills.length) return finalizePurchaseBillScan(bills)
   } catch (err) {
     if (!isTimeoutError(err)) throw err
     // Fallback: treat whole document as one invoice (faster prompt path).
     try {
       const single = await scanInvoiceImage(apiKey, base64, mimeType, { timeoutMs })
       if (single.supplierName || single.billNo || single.items?.length) {
-        return { bills: [single] }
+        return finalizePurchaseBillScan([single])
       }
     } catch {
       /* keep original timeout error */
@@ -388,7 +473,7 @@ For paper reel lines, extract paperType ("KRAFT" for kraft paper, "DUPLEX" for d
       + 'Try a smaller PDF, fewer pages, or scan one bill at a time from the New Bill tab.',
     )
   }
-  return { bills: [] }
+  return finalizePurchaseBillScan([])
 }
 
 export async function scanPurchaseBillsFromFile(
@@ -443,6 +528,7 @@ export async function scanPurchaseBillsFromFile(
     try {
       const bill = await scanInvoiceImage(apiKey, page.base64, page.mime, {
         timeoutMs: GEMINI_PAGE_SCAN_TIMEOUT_MS,
+        pdfPage: true,
       })
       if (isMeaningfulBill(bill)) bills.push(bill)
     } catch {
@@ -465,7 +551,7 @@ export async function scanPurchaseBillsFromFile(
     })
   }
 
-  return { bills }
+  return finalizePurchaseBillScan(bills)
 }
 
 export interface VoucherScanResult {
