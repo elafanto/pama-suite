@@ -63,7 +63,12 @@ async function cloudSync() {
 async function refreshApp() {
   if (refreshingApp.value) return
   refreshingApp.value = true
-  // Clears stale PWA caches then hard-navigates (avoids blank screen after Update).
+  try {
+    const updateSW = (window as Window & { __pamaUpdateSW?: (reload?: boolean) => Promise<void> }).__pamaUpdateSW
+    if (updateSW) await updateSW(false).catch(() => {})
+  } catch {
+    /* ignore */
+  }
   await hardRefreshApp()
 }
 

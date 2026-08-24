@@ -12,6 +12,34 @@
     <meta name="apple-mobile-web-app-title" content="Pama Suite" />
     <link rel="apple-touch-icon" href="/favicon.svg" />
     <title>Pama Business Suite</title>
+    <!-- Runs before Vue — clears PWA cache when Update / app_refresh=1 is used -->
+    <script>
+      (function () {
+        var u = new URL(location.href)
+        if (u.searchParams.get('app_refresh') !== '1') return
+        u.searchParams.delete('app_refresh')
+        var clean = u.pathname + (u.search || '') + u.hash
+        document.documentElement.innerHTML = '<body style="font-family:system-ui,sans-serif;padding:2rem;background:#0f2444;color:#fff">Updating Pama app…</body>'
+        try { sessionStorage.setItem('pama_app_refresh', '1') } catch (e) {}
+        function go() { location.replace(clean) }
+        function clearCaches() {
+          if ('caches' in window) {
+            return caches.keys().then(function (keys) {
+              return Promise.all(keys.map(function (k) { return caches.delete(k) }))
+            })
+          }
+          return Promise.resolve()
+        }
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations()
+            .then(function (regs) { return Promise.all(regs.map(function (r) { return r.unregister() })) })
+            .then(clearCaches)
+            .finally(go)
+        } else {
+          clearCaches().finally(go)
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>

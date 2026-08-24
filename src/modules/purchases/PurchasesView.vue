@@ -274,8 +274,8 @@ function onScanFailed() {
 
 function applyScan(result: ScanResult, file: File) {
   pendingScanFile.value = file
-  if (result.supplierName) form.supplier_name = result.supplierName
-  if (result.billNo) form.bill_no = result.billNo
+  if (result.supplierName) form.supplier_name = String(result.supplierName)
+  if (result.billNo) form.bill_no = String(result.billNo)
   if (result.date) form.date = result.date
   form.items = []
   for (const it of result.items || []) {
@@ -283,9 +283,11 @@ function applyScan(result: ScanResult, file: File) {
   }
   if (form.items.length === 0) addRow()
   if (result.supplierName) {
-    partyStore.ensure(result.supplierName, 'vendor', {
-      gst: result.gstin, addr: result.address, city: result.city, pin: result.pin,
-      phone: result.phone, bank: result.bank, acno: result.acno, ifsc: result.ifsc, acname: result.acname,
+    partyStore.ensure(String(result.supplierName), 'vendor', {
+      gst: result.gstin != null ? String(result.gstin) : undefined,
+      addr: result.address, city: result.city, pin: result.pin != null ? String(result.pin) : undefined,
+      phone: result.phone != null ? String(result.phone) : undefined,
+      bank: result.bank, acno: result.acno != null ? String(result.acno) : undefined, ifsc: result.ifsc, acname: result.acname,
     }).catch(() => {})
   }
 }

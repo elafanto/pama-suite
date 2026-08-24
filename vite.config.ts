@@ -23,7 +23,7 @@ export default defineConfig({
   plugins: [
     vue(),
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
       includeAssets: ['favicon.svg'],
       manifest: {
         name: 'Pama Business Suite',
@@ -45,12 +45,22 @@ export default defineConfig({
       workbox: {
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api/, /\.[a-z0-9]+$/i],
-        globPatterns: ['**/*.{js,css,html,svg,woff2}'],
+        // Do not precache index.html — always fetch fresh shell from network first.
+        globPatterns: ['**/*.{js,css,svg,woff2}'],
         cleanupOutdatedCaches: true,
         clientsClaim: true,
         skipWaiting: true,
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         runtimeCaching: [
+          {
+            urlPattern: ({ request }) => request.mode === 'navigate',
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'html-pages',
+              networkTimeoutSeconds: 5,
+              expiration: { maxEntries: 3, maxAgeSeconds: 60 * 60 },
+            },
+          },
           {
             urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,
             handler: 'NetworkOnly',

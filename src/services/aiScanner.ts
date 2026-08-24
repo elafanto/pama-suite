@@ -139,14 +139,14 @@ export type ScanProgressCallback = (info: {
 }) => void
 
 function isMeaningfulBill(bill: ScanResult) {
-  return Boolean(bill.supplierName?.trim() || bill.billNo?.trim() || bill.items?.length)
+  return Boolean(normScanText(bill.supplierName) || normScanText(bill.billNo) || bill.items?.length)
 }
 
 function normScanText(value?: string | number | null) {
   return String(value ?? '').trim().toLowerCase()
 }
 
-function normScanBillNo(value?: string) {
+function normScanBillNo(value?: string | number | null) {
   return normScanText(value).replace(/[\s\-_/]+/g, '')
 }
 
@@ -167,16 +167,16 @@ function scanBillNosMatch(a: ScanResult, b: ScanResult) {
 
 function isContinuationScanPage(bill: ScanResult) {
   const hasItems = Boolean(bill.items?.length)
-  const missingHeader = !bill.supplierName?.trim() && !bill.billNo?.trim()
+  const missingHeader = !normScanText(bill.supplierName) && !normScanText(bill.billNo)
   return hasItems && missingHeader
 }
 
 function shouldMergeScanBills(primary: ScanResult, continuation: ScanResult) {
-  if (isContinuationScanPage(continuation) && (primary.supplierName?.trim() || primary.billNo?.trim())) return true
+  if (isContinuationScanPage(continuation) && (normScanText(primary.supplierName) || normScanText(primary.billNo))) return true
   if (scanBillNosMatch(primary, continuation) && scanSuppliersMatch(primary, continuation)) return true
   if (scanBillNosMatch(primary, continuation) && isContinuationScanPage(continuation)) return true
   if (scanSuppliersMatch(primary, continuation) && isContinuationScanPage(continuation)) return true
-  if (scanBillNosMatch(primary, continuation) && !continuation.supplierName?.trim()) return true
+  if (scanBillNosMatch(primary, continuation) && !normScanText(continuation.supplierName)) return true
   return false
 }
 

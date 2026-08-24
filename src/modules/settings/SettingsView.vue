@@ -9,6 +9,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { exportAll, downloadBackup, importBackup, previewImport, type ImportPreview, type ImportResult } from '@/services/backup'
 import { getSyncDiagnostics, runSync, runFullPullFromCloud, runFullPushToCloud } from '@/services/sync'
 import { usePwaInstall } from '@/composables/usePwaInstall'
+import { hardRefreshApp } from '@/services/pwaRefresh'
 import type { BillNoFormat, Firm } from '@/types/models'
 import { peekBillNo, BILL_NO_FORMAT_OPTIONS } from '@/services/invoiceNumber'
 import { formatGstin } from '@/services/gst'
@@ -40,6 +41,13 @@ const selectedFyLabel = ref(fyOptions[0].label)
 const auditExportBusy = ref(false)
 const auditExportMsg = ref('')
 const appBuildSha = __APP_BUILD_SHA__
+const cacheRefreshBusy = ref(false)
+
+async function forceClearAppCache() {
+  if (cacheRefreshBusy.value) return
+  cacheRefreshBusy.value = true
+  await hardRefreshApp()
+}
 
 const MAX_SIGNATURE_BYTES = 512 * 1024
 
@@ -423,6 +431,14 @@ onMounted(async () => {
           @click="showInstallBanner()"
         >
           Show install help
+        </button>
+        <button
+          type="button"
+          class="pp-btn pp-btn-ghost text-amber-800 border border-amber-200"
+          :disabled="cacheRefreshBusy"
+          @click="forceClearAppCache"
+        >
+          {{ cacheRefreshBusy ? 'Clearing cache…' : 'Clear app cache & reload' }}
         </button>
       </div>
       <ul class="text-xs text-slate-500 mt-4 space-y-1 list-disc pl-4">

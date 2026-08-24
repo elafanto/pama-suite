@@ -5,10 +5,24 @@ import './style.css'
 import App from './App.vue'
 import { router } from './router'
 import { useAuthStore } from './stores/auth'
-import { stripRefreshQueryParam } from './services/pwaRefresh'
+import { stripRefreshQueryParam, consumeAppRefreshNotice } from './services/pwaRefresh'
 
 stripRefreshQueryParam()
-registerSW({ immediate: true })
+if (consumeAppRefreshNotice()) {
+  console.info('Pama app cache cleared — running latest shell.')
+}
+
+const updateSW = registerSW({
+  immediate: true,
+  onRegisteredSW(_swUrl, registration) {
+    if (registration) {
+      registration.update().catch(() => {})
+      window.setInterval(() => registration.update().catch(() => {}), 60 * 60 * 1000)
+    }
+  },
+})
+
+;(window as Window & { __pamaUpdateSW?: typeof updateSW }).__pamaUpdateSW = updateSW
 
 const app = createApp(App)
 const pinia = createPinia()
