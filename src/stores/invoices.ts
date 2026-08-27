@@ -36,7 +36,15 @@ async function syncReceiptVoucher(invoice: Invoice) {
     await accounting.reverseLedgerByRef(`${invoice.id}_PAY`)
     return
   }
-  await accounting.postPaymentVoucher(invoice.id, 'invoice', paid, false, 0, invoice.date, 'Recorded on invoice save')
+  await accounting.postPaymentVoucher(
+    invoice.id,
+    'invoice',
+    paid,
+    false,
+    0,
+    invoice.last_payment_date || invoice.date,
+    'Recorded on invoice save',
+  )
 }
 
 async function reverseInvoiceEffects(invoice: Invoice) {
@@ -260,6 +268,7 @@ export const useInvoiceStore = defineStore('invoices', () => {
       await repo.update(id, {
         amt_paid: existing.grand_total,
         pay_status: 'PAID',
+        last_payment_date: date || new Date().toISOString().slice(0, 10),
         notes: `${existing.notes || ''} [Write-off: ₹${writeOffAmt.toFixed(2)}]`.trim(),
       })
 
@@ -282,6 +291,7 @@ export const useInvoiceStore = defineStore('invoices', () => {
       await repo.update(inv.id, {
         amt_paid: newAmtPaid,
         pay_status: payStatusFromPaid(inv.grand_total, newAmtPaid),
+        last_payment_date: date || new Date().toISOString().slice(0, 10),
       })
     }
 

@@ -35,7 +35,7 @@ import {
   normalizePurchaseLine,
   type PurchaseLineKind,
 } from '@/services/purchaseLineKind'
-import { proposePurchaseReelSpecs, purchaseHasReelLines, proposePurchaseConsumableSpecs, purchaseHasConsumableLines, STOCK_LABELS, type PurchaseReelSpec, type PurchaseConsumableSpec } from '@/services/production'
+import { proposePurchaseReelSpecs, purchaseHasReelLines, proposePurchaseConsumableSpecs, purchaseHasConsumableLines, STOCK_LABELS, findDuplicateReelNosInList, INK_COLOR_SUGGESTIONS, normalizeInkColor, guessInkColorFromText, type PurchaseReelSpec, type PurchaseConsumableSpec } from '@/services/production'
 import { useTableSort } from '@/composables/useTableSort'
 import type { CapitalCategory, ExpenseCategory, GstType, PaperType, PayStatus, Purchase, PurchaseItemLine } from '@/types/models'
 
@@ -213,6 +213,7 @@ function addRow(data: Partial<PurchaseItemLine> = {}) {
     reel_count: normalizeReelCount(data.reel_count),
     is_consumable: data.is_consumable || false,
     consumable_type: data.consumable_type || 'glue',
+    ink_color: data.ink_color || '',
     is_capital: data.is_capital || false,
     capital_category: data.capital_category || 'plant_machinery',
     asset_tag: data.asset_tag || '',
@@ -605,6 +606,9 @@ function scanItemToPurchaseLine(it: NonNullable<ScanResult['items']>[number]): P
     reel_count: normalizeReelCount(it.reelCount),
     is_consumable: Boolean(it.isConsumable),
     consumable_type: normalizeConsumableType(it.consumableType),
+    ink_color: normalizeConsumableType(it.consumableType) === 'ink'
+      ? (guessInkColorFromText(String(it.name || '')) || '')
+      : '',
   }
 }
 
@@ -635,6 +639,7 @@ async function ensurePurchaseItemLine(it: NonNullable<ScanResult['items']>[numbe
     gst: scannedLine.gst || Number(item.gst) || 18,
     is_consumable: Boolean(it.isConsumable && consumableType),
     consumable_type: consumableType,
+    ink_color: consumableType === 'ink' ? (scannedLine.ink_color || '') : '',
     is_kraft_reel: scannedLine.is_kraft_reel,
     paper_type: scannedLine.paper_type,
     reel_no: scannedLine.reel_no,
@@ -718,6 +723,13 @@ async function savePurchase() {
   const badConsumable = validItems.find(it => getLineKind(it) === 'consumable' && !it.consumable_type)
   if (badConsumable) {
     alert('Consumable stock line me Gum, Ink, Stitching Wire ya Strapping type select karo.')
+    return
+  }
+  const badInk = validItems.find(
+    (it) => getLineKind(it) === 'consumable' && it.consumable_type === 'ink' && !normalizeInkColor(it.ink_color),
+  )
+  if (badInk) {
+    alert('Ink consumable line me ink color bharo (Black / Cyan / Red…).')
     return
   }
 
@@ -863,6 +875,10 @@ async function submitReelStockConfirm() {
   if (rows.some((r) => !(Number(r.opening_weight) > 0))) {
     return alert('Har reel ka weight 0 se zyada hona chahiye')
   }
+  const dupList = findDuplicateReelNosInList(rows.map((r) => r.reel_no))
+  if (dupList.length) {
+    return alert(`Duplicate reel number in list: ${dupList.join(', ')}`)
+  }
   reelConfirmBusy.value = true
   try {
     const result = await purchaseStore.confirmReelStock(
@@ -925,6 +941,10 @@ async function submitConsumableStockConfirm() {
   if (rows.some((r) => !(Number(r.packs ?? r.qty) > 0 || Number(r.weight) > 0))) {
     return alert('Har consumable me bags/rolls ya weight 0 se zyada hona chahiye')
   }
+  const missingInk = rows.find((r) => r.stock_type === 'ink' && !normalizeInkColor(r.ink_color))
+  if (missingInk) {
+    return alert('Ink lot me ink color required hai')
+  }
   consumableConfirmBusy.value = true
   try {
     const result = await purchaseStore.confirmConsumableStock(
@@ -939,6 +959,7 @@ async function submitConsumableStockConfirm() {
           qty: packs,
           pack_size_kg,
           weight,
+          ink_color: r.stock_type === 'ink' ? normalizeInkColor(r.ink_color) : undefined,
           remark: r.remark || '',
           note: r.note || r.remark || `${STOCK_LABELS[r.stock_type]} from purchase`,
         }
@@ -1611,8 +1632,18 @@ onMounted(async () => {
                       <option value="glue">Gum</option>
                       <option value="ink">Ink</option>
                       <option value="stitching_wire">Stitching Wire</option>
-                                          <option value="strapping_roll">Strapping Roll</option>
+                      <option value="strapping_roll">Strapping Roll</option>
                     </select>
+                    <input
+                      v-if="lineKindOf(item) === 'consumable' && item.consumable_type === 'ink'"
+                      v-model="item.ink_color"
+                      class="pp-input mt-2 text-xs"
+                      list="purchase-ink-colors"
+                      placeholder="Ink color *"
+                    />
+                    <datalist id="purchase-ink-colors">
+                      <option v-for="c in INK_COLOR_SUGGESTIONS" :key="c" :value="c" />
+                    </datalist>
                   </td>
                   <td class="py-2 px-3 text-right font-mono font-medium">
                     ₹ {{ n2(item.qty * item.rate) }}
@@ -2644,6 +2675,7 @@ onMounted(async () => {
             <thead class="text-xs uppercase text-slate-500 bg-slate-50 sticky top-0">
               <tr>
                 <th class="p-2 text-left">Consumable</th>
+                <th class="p-2 text-left">Ink color</th>
                 <th class="p-2 text-right">Pack KG</th>
                 <th class="p-2 text-right">Bags *</th>
                 <th class="p-2 text-right">Total KG</th>
@@ -2661,6 +2693,16 @@ onMounted(async () => {
                   </select>
                 </td>
                 <td class="p-2">
+                  <input
+                    v-if="row.stock_type === 'ink'"
+                    v-model="row.ink_color"
+                    class="pp-input !py-1"
+                    list="confirm-ink-colors"
+                    placeholder="Black / Cyan…"
+                  />
+                  <span v-else class="text-slate-400 text-xs">—</span>
+                </td>
+                <td class="p-2">
                   <input v-model.number="row.pack_size_kg" type="number" min="0" step="0.001" class="pp-input !py-1 text-right" />
                 </td>
                 <td class="p-2">
@@ -2676,6 +2718,9 @@ onMounted(async () => {
             </tbody>
           </table>
         </div>
+        <datalist id="confirm-ink-colors">
+          <option v-for="c in INK_COLOR_SUGGESTIONS" :key="c" :value="c" />
+        </datalist>
         <div class="flex gap-2 justify-end border-t pt-4">
           <button type="button" class="pp-btn pp-btn-ghost" :disabled="consumableConfirmBusy" @click="closeConsumableConfirmModal">
             Skip (no stock)

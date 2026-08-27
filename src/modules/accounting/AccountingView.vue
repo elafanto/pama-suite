@@ -434,7 +434,7 @@ const partyLedgerResult = computed(() => buildPartyLedger(invoiceStore.list, pur
   maxAmount: amountFilter(partyLedgerMaxAmount.value),
   minOutstanding: amountFilter(partyLedgerMinOutstanding.value),
   maxOutstanding: amountFilter(partyLedgerMaxOutstanding.value),
-}))
+}, accountingStore.vouchers))
 
 function exportPartyLedgerCsv() {
   const headers = ['Date', 'Ref No', 'Mode', 'Party', 'Type', 'Narration', 'Debit', 'Credit', 'Balance', 'Outstanding', 'Status']

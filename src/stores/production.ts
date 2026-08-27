@@ -187,6 +187,7 @@ export const useProductionStore = defineStore('production', () => {
     qty: number
     weight: number
     pack_size_kg?: number
+    ink_color?: string
     notes?: string
     remark?: string
   }) {
@@ -203,6 +204,7 @@ export const useProductionStore = defineStore('production', () => {
     mode: 'full' | 'partial'
     qty?: number
     weight?: number
+    ink_color?: string
     notes?: string
     remark?: string
   }) {

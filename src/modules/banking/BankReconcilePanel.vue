@@ -13,6 +13,7 @@ import {
 import {
   buildBankMatchSuggestions,
   loadDoneFingerprints,
+  matchKindLabel,
   saveDoneFingerprints,
   type BankMatchSuggestion,
 } from '@/services/bankStatementMatch'
@@ -118,9 +119,14 @@ async function confirmSelected() {
     for (const row of rows) {
       const amount = row.line.amount
       const date = row.line.date
-      const note = `Bank reconcile · ${row.line.narration || row.line.utr || 'statement'}`.slice(0, 180)
-      // Apply full amount starting from first selected doc (FIFO allocation handles spill)
-      const primaryId = row.selectedIds[0]
+      const note = `Bank reconcile · ${row.matchKind} · ${row.line.narration || row.line.utr || 'statement'}`.slice(0, 180)
+      // Oldest selected first so FIFO spill starts from earliest bill
+      const orderedIds = [...row.selectedIds].sort((a, b) => {
+        const ca = row.candidates.find((c) => c.id === a)
+        const cb = row.candidates.find((c) => c.id === b)
+        return (ca?.date || '').localeCompare(cb?.date || '') || a.localeCompare(b)
+      })
+      const primaryId = orderedIds[0]
       const primary = row.candidates.find((c) => c.id === primaryId)
       if (!primary) continue
       if (primary.kind === 'purchase') {
@@ -277,6 +283,7 @@ function resetAll() {
               <th class="p-3 text-right">Amount</th>
               <th class="p-3 text-left">Narration</th>
               <th class="p-3 text-left">Suggested bills</th>
+              <th class="p-3 text-center">Type</th>
               <th class="p-3 text-center">Conf.</th>
               <th class="p-3 text-right">Action</th>
             </tr>
@@ -296,6 +303,7 @@ function resetAll() {
               </td>
               <td class="p-3">
                 <div v-if="row.alreadyDone" class="text-xs text-emerald-700">Already reconciled</div>
+                <div v-else-if="row.matchKind === 'advance'" class="text-xs text-violet-700">Advance — bill pe auto-match nahi</div>
                 <div v-else-if="!row.candidates.length" class="text-xs text-slate-400">No match</div>
                 <label
                   v-for="c in row.candidates"
@@ -312,10 +320,23 @@ function resetAll() {
                   <span>
                     <span class="font-semibold">{{ c.refNo }}</span>
                     · {{ c.partyName }}
+                    · {{ c.date }}
                     · out ₹{{ n2(c.outstanding) }}
                     <span class="text-slate-400">(score {{ c.score }})</span>
                   </span>
                 </label>
+              </td>
+              <td class="p-3 text-center">
+                <span
+                  class="pp-badge text-[10px]"
+                  :class="{
+                    'bg-emerald-100 text-emerald-800': row.matchKind === 'exact',
+                    'bg-sky-100 text-sky-800': row.matchKind === 'partial',
+                    'bg-amber-100 text-amber-900': row.matchKind === 'lump',
+                    'bg-violet-100 text-violet-800': row.matchKind === 'advance',
+                    'bg-slate-100 text-slate-600': row.matchKind === 'unmatched',
+                  }"
+                >{{ matchKindLabel(row.matchKind) }}</span>
               </td>
               <td class="p-3 text-center">
                 <span
@@ -339,7 +360,7 @@ function resetAll() {
               </td>
             </tr>
             <tr v-if="!visibleRows.length">
-              <td colspan="6" class="p-8 text-center text-slate-400">Is filter me koi line nahi.</td>
+              <td colspan="7" class="p-8 text-center text-slate-400">Is filter me koi line nahi.</td>
             </tr>
           </tbody>
         </table>

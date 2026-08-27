@@ -5,7 +5,7 @@ import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useProductionStore } from '@/stores/production'
-import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveRemainingWeightUpdate, resolveDecklePair, deckleFromMm, deckleFromInch, formatDeckleDisplay, estimateReelWeightKg, REEL_CORE_DIA_MM, filterReelsForDeletion, filterReelLinkedMovements, STAGE_LABELS, STOCK_LABELS, CONSUMABLE_TYPES, consumableLotTotals, type ConsumableStockType, type ReelIntakeCondition, type ReelInventoryBreakdownRow } from '@/services/production'
+import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveRemainingWeightUpdate, resolveDecklePair, deckleFromMm, deckleFromInch, formatDeckleDisplay, estimateReelWeightKg, REEL_CORE_DIA_MM, filterReelsForDeletion, filterReelLinkedMovements, STAGE_LABELS, STOCK_LABELS, CONSUMABLE_TYPES, consumableLotTotals, findDuplicateReelNosInList, findReelNosAlreadyInStock, normalizeInkColor, INK_COLOR_SUGGESTIONS, type ConsumableStockType, type ReelIntakeCondition, type ReelInventoryBreakdownRow } from '@/services/production'
 import { downloadReelAbstractStockPdf, downloadReelLowStockPdf, downloadReelWiseStockPdf } from '@/services/reelStockPdf'
 import { useTableSort } from '@/composables/useTableSort'
 import type { ConsumableLot, PaperType, ProductionStage, ProductionStockType, ReelStock } from '@/types/models'
@@ -67,6 +67,7 @@ const manualConsumableForm = reactive({
   pack_size_kg: 25,
   qty: 0,
   weight: 0,
+  ink_color: '',
   notes: '',
 })
 
@@ -76,6 +77,7 @@ const consumableFeedForm = reactive({
   mode: 'partial' as 'full' | 'partial',
   qty: 0,
   weight: 0,
+  ink_color: '',
   notes: '',
 })
 
@@ -310,11 +312,40 @@ const consumableRows = computed(() => {
 const activeConsumableLots = computed(() =>
   production.consumableLots.filter((lot) => lot.status === 'active' && ((Number(lot.packs_remaining) || 0) > 0 || (Number(lot.weight_remaining) || 0) > 0)),
 )
+const inkColorOptions = computed(() => {
+  const fromLots = production.consumableLots
+    .filter((lot) => !lot.is_deleted && lot.stock_type === 'ink' && normalizeInkColor(lot.ink_color))
+    .map((lot) => normalizeInkColor(lot.ink_color))
+  return [...new Set([...INK_COLOR_SUGGESTIONS, ...fromLots])]
+})
+const manualReelDupInList = computed(() =>
+  findDuplicateReelNosInList(manualReelLines.value.map((l) => l.reel_no)),
+)
+const manualReelDupInStock = computed(() =>
+  findReelNosAlreadyInStock(
+    manualReelLines.value.map((l) => l.reel_no),
+    production.reels.map((r) => r.reel_no),
+  ),
+)
 const recentConsumableMoves = computed(() => {
   return production.movements
     .filter((m) => consumableTypes.includes(m.stock_type as ConsumableStockType))
     .slice(0, 12)
 })
+
+function lotTypeLabel(lot: ConsumableLot) {
+  if (lot.stock_type === 'ink' && lot.ink_color) return `${STOCK_LABELS.ink} · ${lot.ink_color}`
+  return STOCK_LABELS[lot.stock_type]
+}
+
+function reelNoInputClass(reelNo: string) {
+  const key = String(reelNo || '').trim().toLowerCase()
+  if (!key) return 'pp-input font-mono !py-1'
+  const listClash = manualReelDupInList.value.some((n) => n.trim().toLowerCase() === key)
+  const stockClash = manualReelDupInStock.value.some((n) => n.trim().toLowerCase() === key)
+  if (listClash || stockClash) return 'pp-input font-mono !py-1 border-red-400 bg-red-50'
+  return 'pp-input font-mono !py-1'
+}
 
 function lotDraft(lot: ConsumableLot) {
   if (!lotConsumeDrafts[lot.id]) {
@@ -634,6 +665,9 @@ async function saveStage() {
 async function saveManualConsumable() {
   if (!consumableTypes.includes(manualConsumableForm.stock_type)) return alert('Consumable type select karo')
   if (manualConsumableForm.qty <= 0 && manualConsumableForm.weight <= 0) return alert('Bags / rolls ya weight enter karo')
+  if (manualConsumableForm.stock_type === 'ink' && !normalizeInkColor(manualConsumableForm.ink_color)) {
+    return alert('Ink color required hai')
+  }
   try {
     await production.addManualConsumable({
       date: manualConsumableForm.date,
@@ -641,6 +675,7 @@ async function saveManualConsumable() {
       qty: manualConsumableForm.qty,
       weight: manualConsumableForm.weight,
       pack_size_kg: manualConsumableForm.pack_size_kg,
+      ink_color: manualConsumableForm.stock_type === 'ink' ? manualConsumableForm.ink_color : undefined,
       notes: manualConsumableForm.notes,
       remark: manualConsumableForm.notes,
     })
@@ -653,6 +688,7 @@ async function saveManualConsumable() {
     pack_size_kg: 25,
     qty: 0,
     weight: 0,
+    ink_color: manualConsumableForm.stock_type === 'ink' ? manualConsumableForm.ink_color : '',
     notes: '',
   })
   alert('Consumable lot stock me add ho gaya.')
@@ -662,15 +698,43 @@ function selectConsumableForFeed(stockType: ConsumableStockType) {
   const row = consumableRows.value.find((r) => r.type === stockType)
   consumableFeedForm.stock_type = stockType
   consumableFeedForm.mode = 'partial'
-  consumableFeedForm.qty = row ? Number(row.qty) || 0 : 0
-  consumableFeedForm.weight = row ? Number(row.weight) || 0 : 0
+  if (stockType === 'ink') {
+    if (!consumableFeedForm.ink_color && inkColorOptions.value.length) {
+      consumableFeedForm.ink_color = inkColorOptions.value[0]
+    }
+    const toned = consumableLotTotals(
+      production.consumableLots,
+      firmStore.activeFirmId,
+      'ink',
+      consumableFeedForm.ink_color || undefined,
+    )
+    consumableFeedForm.qty = toned.packs
+    consumableFeedForm.weight = toned.weight
+  } else {
+    consumableFeedForm.ink_color = ''
+    consumableFeedForm.qty = row ? Number(row.qty) || 0 : 0
+    consumableFeedForm.weight = row ? Number(row.weight) || 0 : 0
+  }
   activeTab.value = 'consumables'
 }
 
 async function saveConsumableFeed() {
   if (!consumableTypes.includes(consumableFeedForm.stock_type)) return alert('Consumable type select karo')
+  if (consumableFeedForm.stock_type === 'ink' && !normalizeInkColor(consumableFeedForm.ink_color)) {
+    return alert('Ink feed ke liye color select / enter karo')
+  }
+  const toned = consumableFeedForm.stock_type === 'ink'
+    ? consumableLotTotals(
+      production.consumableLots,
+      firmStore.activeFirmId,
+      'ink',
+      consumableFeedForm.ink_color,
+    )
+    : null
   const row = consumableRows.value.find((r) => r.type === consumableFeedForm.stock_type)
-  const available = { qty: Number(row?.qty) || 0, weight: Number(row?.weight) || 0 }
+  const available = toned
+    ? { qty: toned.packs, weight: toned.weight }
+    : { qty: Number(row?.qty) || 0, weight: Number(row?.weight) || 0 }
   let feed = { qty: 0, weight: 0 }
   try {
     feed = resolveConsumableFeed(consumableFeedForm.mode, available, {
@@ -680,7 +744,9 @@ async function saveConsumableFeed() {
   } catch (err: any) {
     return alert(err?.message || 'Invalid feed')
   }
-  const label = STOCK_LABELS[consumableFeedForm.stock_type]
+  const label = consumableFeedForm.stock_type === 'ink' && consumableFeedForm.ink_color
+    ? `${STOCK_LABELS.ink} (${consumableFeedForm.ink_color})`
+    : STOCK_LABELS[consumableFeedForm.stock_type]
   const ok = confirm(
     consumableFeedForm.mode === 'full'
       ? `${label} FULL consume?\n\nQty ${n2(available.qty)} → 0\nWeight ${n2(available.weight)} KG → 0`
@@ -694,6 +760,7 @@ async function saveConsumableFeed() {
       mode: consumableFeedForm.mode,
       qty: consumableFeedForm.qty,
       weight: consumableFeedForm.weight,
+      ink_color: consumableFeedForm.stock_type === 'ink' ? consumableFeedForm.ink_color : undefined,
       notes: consumableFeedForm.notes,
       remark: consumableFeedForm.notes,
     })
@@ -706,6 +773,7 @@ async function saveConsumableFeed() {
     mode: 'partial' as const,
     qty: 0,
     weight: 0,
+    ink_color: consumableFeedForm.ink_color,
     notes: '',
   })
 }
@@ -904,6 +972,17 @@ async function saveManualReel() {
   for (let i = 0; i < lines.length; i++) {
     if (!lines[i].reel_no) return alert(`Row ${i + 1}: reel number required`)
     if (lines[i].opening_weight <= 0) return alert(`Row ${i + 1}: Opening KG enter karo`)
+  }
+  const dupList = findDuplicateReelNosInList(lines.map((l) => l.reel_no))
+  if (dupList.length) {
+    return alert(`Duplicate reel number in list: ${dupList.join(', ')}`)
+  }
+  const dupStock = findReelNosAlreadyInStock(
+    lines.map((l) => l.reel_no),
+    production.reels.map((r) => r.reel_no),
+  )
+  if (dupStock.length) {
+    return alert(`Reel number already in stock: ${dupStock.join(', ')}`)
   }
 
   if (lines.length > 1) {
@@ -1702,7 +1781,7 @@ onMounted(async () => {
                 <tr v-for="(row, idx) in manualReelLines" :key="idx" class="border-t">
                   <td class="p-2 text-slate-400">{{ idx + 1 }}</td>
                   <td class="p-2">
-                    <input v-model="row.reel_no" class="pp-input font-mono !py-1" placeholder="e.g. R-101" />
+                    <input v-model="row.reel_no" :class="reelNoInputClass(row.reel_no)" placeholder="e.g. R-101" />
                   </td>
                   <td class="p-2">
                     <input
@@ -1717,8 +1796,20 @@ onMounted(async () => {
               </tbody>
             </table>
           </div>
+          <p v-if="manualReelDupInList.length" class="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
+            List me duplicate reel no: {{ manualReelDupInList.join(', ') }}
+          </p>
+          <p v-else-if="manualReelDupInStock.length" class="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
+            Pehle se stock me hai: {{ manualReelDupInStock.join(', ') }}
+          </p>
+          <p v-else class="text-[11px] text-slate-400">Har reel number firm me unique hona chahiye (case-insensitive).</p>
 
-          <button type="button" class="pp-btn pp-btn-primary w-full" @click="saveManualReel">
+          <button
+            type="button"
+            class="pp-btn pp-btn-primary w-full"
+            :disabled="manualReelDupInList.length > 0 || manualReelDupInStock.length > 0"
+            @click="saveManualReel"
+          >
             Add {{ manualReelForm.reel_count }} reel{{ manualReelForm.reel_count > 1 ? 's' : '' }} to stock
           </button>
         </div>
@@ -1758,6 +1849,18 @@ onMounted(async () => {
               <option v-for="type in consumableTypes" :key="type" :value="type">{{ STOCK_LABELS[type] }}</option>
             </select>
           </div>
+          <div v-if="manualConsumableForm.stock_type === 'ink'">
+            <label class="pp-label">Ink color *</label>
+            <input
+              v-model="manualConsumableForm.ink_color"
+              class="pp-input"
+              list="ink-color-suggestions"
+              placeholder="Black / Cyan / Red…"
+            />
+            <datalist id="ink-color-suggestions">
+              <option v-for="c in inkColorOptions" :key="c" :value="c" />
+            </datalist>
+          </div>
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label class="pp-label">Pack size (KG) *</label>
@@ -1792,6 +1895,19 @@ onMounted(async () => {
             <select v-model="consumableFeedForm.stock_type" class="pp-input">
               <option v-for="type in consumableTypes" :key="type" :value="type">{{ STOCK_LABELS[type] }}</option>
             </select>
+          </div>
+          <div v-if="consumableFeedForm.stock_type === 'ink'">
+            <label class="pp-label">Ink color *</label>
+            <input
+              v-model="consumableFeedForm.ink_color"
+              class="pp-input"
+              list="ink-color-feed-suggestions"
+              placeholder="Kaunsa color feed"
+            />
+            <datalist id="ink-color-feed-suggestions">
+              <option v-for="c in inkColorOptions" :key="c" :value="c" />
+            </datalist>
+            <p class="text-[11px] text-slate-400 mt-0.5">FIFO sirf isi color ke lots se chalega.</p>
           </div>
           <div>
             <label class="pp-label">Feed mode *</label>
@@ -1844,6 +1960,7 @@ onMounted(async () => {
                 <tr>
                   <th class="p-3 text-left">Date</th>
                   <th class="p-3 text-left">Type</th>
+                  <th class="p-3 text-left">Color</th>
                   <th class="p-3 text-right">Pack KG</th>
                   <th class="p-3 text-right">Bags</th>
                   <th class="p-3 text-right">KG left</th>
@@ -1854,7 +1971,8 @@ onMounted(async () => {
               <tbody class="divide-y">
                 <tr v-for="lot in activeConsumableLots" :key="lot.id">
                   <td class="p-3 whitespace-nowrap">{{ lot.date }}</td>
-                  <td class="p-3">{{ STOCK_LABELS[lot.stock_type] }}</td>
+                  <td class="p-3">{{ lotTypeLabel(lot) }}</td>
+                  <td class="p-3">{{ lot.stock_type === 'ink' ? (lot.ink_color || '—') : '—' }}</td>
                   <td class="p-3 text-right font-mono">{{ n2(lot.pack_size_kg) }}</td>
                   <td class="p-3 text-right font-mono">{{ n2(lot.packs_remaining) }} / {{ n2(lot.packs_total) }}</td>
                   <td class="p-3 text-right font-mono">{{ n2(lot.weight_remaining) }}</td>
@@ -1872,7 +1990,7 @@ onMounted(async () => {
                   </td>
                 </tr>
                 <tr v-if="activeConsumableLots.length === 0">
-                  <td colspan="7" class="p-8 text-center text-slate-400">No active lots — left se add karo ya purchase confirm karo.</td>
+                  <td colspan="8" class="p-8 text-center text-slate-400">No active lots — left se add karo ya purchase confirm karo.</td>
                 </tr>
               </tbody>
             </table>

@@ -87,8 +87,90 @@ function roundWeight(value: number | undefined | null) {
   return Math.round((Number(value) || 0) * 1000) / 1000
 }
 
+/** Normalize reel number for uniqueness (trim + case-insensitive). */
+export function normalizeReelNoKey(reelNo: string) {
+  return String(reelNo || '').trim().toLowerCase()
+}
+
 function reelKey(reelNo: string) {
-  return reelNo.trim().toLowerCase()
+  return normalizeReelNoKey(reelNo)
+}
+
+/** Reel nos that appear more than once in the proposed list (normalized keys → display sample). */
+export function findDuplicateReelNosInList(reelNos: Array<string | undefined | null>): string[] {
+  const counts = new Map<string, { count: number; sample: string }>()
+  for (const raw of reelNos) {
+    const sample = String(raw || '').trim()
+    const key = reelKey(sample)
+    if (!key) continue
+    const prev = counts.get(key)
+    if (prev) prev.count += 1
+    else counts.set(key, { count: 1, sample })
+  }
+  return [...counts.values()].filter((row) => row.count > 1).map((row) => row.sample)
+}
+
+/** Which proposed reel nos already exist on firm stock (non-deleted). */
+export function findReelNosAlreadyInStock(
+  proposed: Array<string | undefined | null>,
+  existingReelNos: Array<string | undefined | null>,
+  opts?: { excludePurchaseId?: string; existing?: Array<{ reel_no?: string; purchase_id?: string; is_deleted?: boolean }> },
+): string[] {
+  const taken = new Set<string>()
+  if (opts?.existing) {
+    for (const reel of opts.existing) {
+      if (reel.is_deleted) continue
+      if (opts.excludePurchaseId && reel.purchase_id === opts.excludePurchaseId) continue
+      const key = reelKey(String(reel.reel_no || ''))
+      if (key) taken.add(key)
+    }
+  } else {
+    for (const raw of existingReelNos) {
+      const key = reelKey(String(raw || ''))
+      if (key) taken.add(key)
+    }
+  }
+  const clashes: string[] = []
+  const seen = new Set<string>()
+  for (const raw of proposed) {
+    const sample = String(raw || '').trim()
+    const key = reelKey(sample)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    if (taken.has(key)) clashes.push(sample)
+  }
+  return clashes
+}
+
+export function normalizeInkColor(value: unknown): string {
+  return String(value || '').trim().replace(/\s+/g, ' ')
+}
+
+export const INK_COLOR_SUGGESTIONS = [
+  'Black',
+  'Cyan',
+  'Magenta',
+  'Yellow',
+  'Red',
+  'Blue',
+  'Green',
+  'Orange',
+  'Brown',
+  'Violet',
+  'White',
+] as const
+
+function inkColorKey(value: unknown) {
+  return normalizeInkColor(value).toLowerCase()
+}
+
+export function guessInkColorFromText(text: string): string {
+  const raw = String(text || '')
+  const lower = raw.toLowerCase()
+  for (const color of INK_COLOR_SUGGESTIONS) {
+    if (lower.includes(color.toLowerCase())) return color
+  }
+  return ''
 }
 
 /** Config fingerprint for batch feed (same deckle/GSM/BF/color/type). */
@@ -952,6 +1034,8 @@ export interface PurchaseConsumableSpec {
   pack_size_kg?: number
   /** Alias for qty when entering as packs. */
   packs?: number
+  /** Required when stock_type is ink. */
+  ink_color?: string
   note: string
   remark?: string
   rate?: number
@@ -971,14 +1055,18 @@ export function proposePurchaseConsumableSpecs(purchase: Purchase): PurchaseCons
       const pack_size_kg = unit === 'KG' ? (qty > 0 ? qty : 25) : 25
       const packs = unit === 'KG' ? 1 : Math.max(1, Math.round(qty) || 0)
       const weight = unit === 'KG' ? qty : roundWeight(packs * pack_size_kg)
+      const ink_color = stock_type === 'ink'
+        ? (normalizeInkColor(row.ink_color) || guessInkColorFromText(String(row.name || '')))
+        : undefined
       return {
         stock_type,
         qty: packs,
         packs,
         pack_size_kg,
         weight,
+        ink_color: stock_type === 'ink' ? ink_color : undefined,
         rate: Number(row.rate) || 0,
-        note: `${STOCK_LABELS[stock_type]} from purchase ${purchase.bill_no}`,
+        note: `${STOCK_LABELS[stock_type]}${stock_type === 'ink' && ink_color ? ` (${ink_color})` : ''} from purchase ${purchase.bill_no}`,
         remark: '',
       }
     })
@@ -1015,12 +1103,15 @@ export function consumableLotTotals(
   lots: ConsumableLot[],
   firmId: string,
   stockType?: ConsumableStockType,
+  inkColor?: string,
 ): { packs: number; weight: number; lots: number } {
+  const colorKey = inkColor ? inkColorKey(inkColor) : ''
   const rows = lots.filter((lot) =>
     !lot.is_deleted
     && lot.firm_id === firmId
     && lot.status === 'active'
-    && (!stockType || lot.stock_type === stockType),
+    && (!stockType || lot.stock_type === stockType)
+    && (!colorKey || (lot.stock_type === 'ink' && inkColorKey(lot.ink_color) === colorKey)),
   )
   return {
     packs: roundWeight(rows.reduce((s, lot) => s + (Number(lot.packs_remaining) || 0), 0)),
@@ -1084,6 +1175,7 @@ export async function createConsumableLot(data: {
   qty?: number
   weight?: number
   rate?: number
+  ink_color?: string
   remark?: string
   notes?: string
   supplier_name?: string
@@ -1093,9 +1185,16 @@ export async function createConsumableLot(data: {
   source?: StockMovement['source']
 }) {
   const { packs, pack_size_kg, weight } = normalizeConsumableLotInput(data)
+  const ink_color = data.stock_type === 'ink' ? normalizeInkColor(data.ink_color) : ''
+  if (data.stock_type === 'ink' && !ink_color) {
+    throw new Error('Ink lot me ink color required hai')
+  }
   const remark = String(data.remark || data.notes || '').trim()
   const now = nowISO()
   const date = data.date || now.slice(0, 10)
+  const typeLabel = data.stock_type === 'ink' && ink_color
+    ? `${STOCK_LABELS.ink} (${ink_color})`
+    : STOCK_LABELS[data.stock_type]
   const lot = plain({
     id: uid(),
     firm_id: data.firm_id,
@@ -1105,6 +1204,7 @@ export async function createConsumableLot(data: {
     supplier_name: data.supplier_name || '',
     purchase_id: data.purchase_id,
     purchase_bill_no: data.purchase_bill_no,
+    ink_color: data.stock_type === 'ink' ? ink_color : undefined,
     pack_size_kg,
     packs_total: packs,
     packs_remaining: packs,
@@ -1133,8 +1233,8 @@ export async function createConsumableLot(data: {
     waste_qty: 0,
     waste_weight: 0,
     notes: remark
-      ? `${STOCK_LABELS[data.stock_type]} lot — ${packs} × ${pack_size_kg} KG · ${remark}`
-      : `${STOCK_LABELS[data.stock_type]} lot — ${packs} × ${pack_size_kg} KG`,
+      ? `${typeLabel} lot — ${packs} × ${pack_size_kg} KG · ${remark}`
+      : `${typeLabel} lot — ${packs} × ${pack_size_kg} KG`,
   })
 
   await db.transaction('rw', db.consumable_lots, db.stock_movements, async () => {
@@ -1229,6 +1329,7 @@ export async function createManualConsumable(data: {
   qty: number
   weight: number
   pack_size_kg?: number
+  ink_color?: string
   notes?: string
   remark?: string
 }) {
@@ -1240,6 +1341,7 @@ export async function createManualConsumable(data: {
     qty: data.qty,
     weight: data.weight,
     pack_size_kg: data.pack_size_kg,
+    ink_color: data.ink_color,
     remark: data.remark || data.notes,
     notes: data.notes,
   })
@@ -1252,30 +1354,45 @@ export async function feedConsumable(data: {
   mode: 'full' | 'partial'
   qty?: number
   weight?: number
+  ink_color?: string
   notes?: string
   remark?: string
   movements: StockMovement[]
   lots?: ConsumableLot[]
 }) {
   if (!CONSUMABLE_STOCK_TYPES.has(data.stock_type)) throw new Error('Consumable type select karo')
+  const colorKey = data.stock_type === 'ink' ? inkColorKey(data.ink_color) : ''
+  if (data.stock_type === 'ink' && !colorKey) {
+    throw new Error('Ink feed ke liye ink color select / enter karo')
+  }
   const lots = (data.lots || await db.consumable_lots.where('firm_id').equals(data.firm_id).toArray())
     .filter((lot) =>
       !lot.is_deleted
       && lot.stock_type === data.stock_type
       && lot.status === 'active'
-      && ((Number(lot.packs_remaining) || 0) > 0 || (Number(lot.weight_remaining) || 0) > 0),
+      && ((Number(lot.packs_remaining) || 0) > 0 || (Number(lot.weight_remaining) || 0) > 0)
+      && (!colorKey || inkColorKey(lot.ink_color) === colorKey),
     )
     .sort((a, b) => a.date.localeCompare(b.date) || a.created_at.localeCompare(b.created_at))
 
-  const lotTotals = consumableLotTotals(lots, data.firm_id, data.stock_type)
+  const lotTotals = consumableLotTotals(
+    lots,
+    data.firm_id,
+    data.stock_type,
+    data.stock_type === 'ink' ? data.ink_color : undefined,
+  )
   const legacy = getConsumableBalance(data.movements, data.firm_id, data.stock_type)
   // Prefer lot-based remaining; if lots cover the balance, use lot totals for feed resolve.
-  const available = lotTotals.weight > 0 || lotTotals.packs > 0
+  // For ink + color, never fall back to uncolored legacy aggregate.
+  const available = (lotTotals.weight > 0 || lotTotals.packs > 0 || (data.stock_type === 'ink' && colorKey))
     ? { qty: lotTotals.packs, weight: lotTotals.weight }
     : legacy
 
   const feed = resolveConsumableFeed(data.mode, available, { qty: data.qty, weight: data.weight })
   const remark = String(data.remark || data.notes || '').trim()
+  const colorNote = data.stock_type === 'ink' && data.ink_color
+    ? ` (${normalizeInkColor(data.ink_color)})`
+    : ''
 
   if (lots.length) {
     let remainingPacks = feed.qty
@@ -1311,8 +1428,8 @@ export async function feedConsumable(data: {
     weight: feed.weight,
     notes: remark
       || (data.mode === 'full'
-        ? `Full consumable feed — ${STOCK_LABELS[data.stock_type]}`
-        : `Partial consumable feed — ${STOCK_LABELS[data.stock_type]}`),
+        ? `Full consumable feed — ${STOCK_LABELS[data.stock_type]}${colorNote}`
+        : `Partial consumable feed — ${STOCK_LABELS[data.stock_type]}${colorNote}`),
   })
 }
 
@@ -1324,12 +1441,14 @@ export async function createConsumablesFromPurchase(purchase: Purchase, confirme
     const packs = Math.max(0, Number(row.packs ?? row.qty) || 0)
     const pack_size_kg = Math.max(0, Number(row.pack_size_kg) || 0)
     const weight = Math.max(0, Number(row.weight) || 0) || roundWeight(packs * (pack_size_kg || 25))
+    const ink_color = row.stock_type === 'ink' ? normalizeInkColor(row.ink_color) : undefined
     return {
       stock_type: row.stock_type,
       packs,
       qty: packs,
       pack_size_kg: pack_size_kg || (packs > 0 ? roundWeight(weight / packs) : 25),
       weight,
+      ink_color,
       rate: Number(row.rate) || 0,
       note: row.note || `${STOCK_LABELS[row.stock_type]} from purchase ${purchase.bill_no}`,
       remark: String(row.remark || '').trim(),
@@ -1346,6 +1465,7 @@ export async function createConsumablesFromPurchase(purchase: Purchase, confirme
       pack_size_kg: row.pack_size_kg,
       weight: row.weight,
       rate: row.rate,
+      ink_color: row.ink_color,
       remark: row.remark || row.note,
       notes: row.note,
       supplier_name: purchase.supplier_name,

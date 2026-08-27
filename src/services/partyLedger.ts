@@ -4,7 +4,7 @@ import {
   isCustomerDebitDoc,
   normalizePartyName as normalizePartyNameShared,
 } from '@/services/partyPaymentAllocation'
-import type { Invoice, Party, Purchase } from '@/types/models'
+import type { Invoice, Party, Purchase, Voucher } from '@/types/models'
 
 export type PartyLedgerMode = 'customer' | 'vendor' | 'both'
 export type PartyLedgerDocType = 'invoice' | 'purchase'
@@ -110,6 +110,25 @@ function inDateRange(date: string, filters: PartyLedgerFilters) {
   if (from && date < from) return false
   if (to && date > to) return false
   return true
+}
+
+/** Prefer recorded payment date, then PAY/RECEIPT voucher date, else bill date. */
+export function resolvePaymentLedgerDate(
+  docId: string,
+  billDate: string,
+  lastPaymentDate?: string | null,
+  vouchers?: Voucher[],
+): string {
+  const stored = String(lastPaymentDate || '').trim()
+  if (stored) return stored.slice(0, 10)
+  if (vouchers?.length) {
+    const payRef = `${docId}_PAY`
+    const matches = vouchers
+      .filter((v) => !v.is_deleted && v.ref_id === payRef && (v.type === 'PAYMENT' || v.type === 'RECEIPT'))
+      .sort((a, b) => b.date.localeCompare(a.date) || (b.updated_at || '').localeCompare(a.updated_at || ''))
+    if (matches[0]?.date) return matches[0].date.slice(0, 10)
+  }
+  return billDate
 }
 
 function inAmountRange(amount: number, outstanding: number, filters: PartyLedgerFilters) {
@@ -240,6 +259,7 @@ export function buildPartyLedger(
   invoices: Invoice[],
   purchases: Purchase[],
   filters: PartyLedgerFilters,
+  vouchers?: Voucher[],
 ): PartyLedgerResult {
   const entries: Omit<PartyLedgerRow, 'balance'>[] = []
   const seenDocs = new Set<string>()
@@ -248,7 +268,6 @@ export function buildPartyLedger(
     for (const inv of invoices) {
       if (inv.firm_id !== filters.firmId || !isInvoiceActive(inv)) continue
       if (!isCustomerDebitDoc(inv) && !isCustomerCreditDoc(inv)) continue
-      if (!inDateRange(inv.date, filters)) continue
       if (!matchesParty(inv.party_id, inv.party_name, filters)) continue
 
       const amount = round2(inv.grand_total)
@@ -259,6 +278,12 @@ export function buildPartyLedger(
       if (filters.pendingOnly && filterOutstanding <= 0.01) continue
       if (!inAmountRange(amount, filterOutstanding, filters)) continue
 
+      const billDate = inv.date
+      const paymentDate = resolvePaymentLedgerDate(inv.id, billDate, inv.last_payment_date, vouchers)
+      const billInRange = inDateRange(billDate, filters)
+      const paymentInRange = paid > 0 && !isCreditNote && inDateRange(paymentDate, filters)
+      if (!billInRange && !paymentInRange) continue
+
       seenDocs.add(`invoice:${inv.id}`)
       const writeOffNote = /write-off/i.test(inv.notes || '') ? ' Includes write-off.' : ''
       const docLabel = customerDocLabel(inv)
@@ -266,7 +291,7 @@ export function buildPartyLedger(
         docId: inv.id,
         docType: 'invoice' as const,
         mode: 'customer' as const,
-        date: inv.date,
+        date: billDate,
         refNo: inv.bill_no,
         partyId: inv.party_id,
         partyName: inv.party_name || 'Unknown',
@@ -276,19 +301,22 @@ export function buildPartyLedger(
         payStatus: inv.pay_status,
       }
 
-      entries.push({
-        ...base,
-        id: `${inv.id}:bill`,
-        type: docLabel,
-        narration: isCreditNote ? `Credit note to ${base.partyName}` : `${docLabel} to ${base.partyName}`,
-        debit: isCreditNote ? 0 : amount,
-        credit: isCreditNote ? amount : 0,
-      })
+      if (billInRange) {
+        entries.push({
+          ...base,
+          id: `${inv.id}:bill`,
+          type: docLabel,
+          narration: isCreditNote ? `Credit note to ${base.partyName}` : `${docLabel} to ${base.partyName}`,
+          debit: isCreditNote ? 0 : amount,
+          credit: isCreditNote ? amount : 0,
+        })
+      }
 
-      if (!isCreditNote && paid > 0) {
+      if (paymentInRange) {
         entries.push({
           ...base,
           id: `${inv.id}:paid`,
+          date: paymentDate,
           type: /write-off/i.test(inv.notes || '') ? 'Receipt / Write-off' : 'Receipt',
           narration: paid > amount
             ? `Received ₹${paid.toLocaleString('en-IN')} against ${inv.bill_no} (lump sum).${writeOffNote}`
@@ -302,9 +330,8 @@ export function buildPartyLedger(
 
   if (filters.mode === 'vendor' || filters.mode === 'both') {
     for (const pur of purchases) {
-      const date = pur.received_date || pur.date
+      const billDate = pur.received_date || pur.date
       if (pur.firm_id !== filters.firmId || pur.is_deleted) continue
-      if (!inDateRange(date, filters)) continue
       if (!matchesParty(pur.supplier_id, pur.supplier_name, filters)) continue
 
       const amount = round2(pur.grand_total)
@@ -313,13 +340,18 @@ export function buildPartyLedger(
       if (filters.pendingOnly && outstanding <= 0.01) continue
       if (!inAmountRange(amount, outstanding, filters)) continue
 
+      const paymentDate = resolvePaymentLedgerDate(pur.id, billDate, pur.last_payment_date, vouchers)
+      const billInRange = inDateRange(billDate, filters)
+      const paymentInRange = paid > 0 && inDateRange(paymentDate, filters)
+      if (!billInRange && !paymentInRange) continue
+
       seenDocs.add(`purchase:${pur.id}`)
       const writeOffNote = /write-off/i.test(pur.notes || '') ? ' Includes write-off.' : ''
       const base = {
         docId: pur.id,
         docType: 'purchase' as const,
         mode: 'vendor' as const,
-        date,
+        date: billDate,
         refNo: pur.bill_no || pur.id.slice(0, 8),
         partyId: pur.supplier_id,
         partyName: pur.supplier_name || 'Unknown',
@@ -329,19 +361,22 @@ export function buildPartyLedger(
         payStatus: pur.pay_status,
       }
 
-      entries.push({
-        ...base,
-        id: `${pur.id}:bill`,
-        type: 'Purchase',
-        narration: `Payable to ${base.partyName}`,
-        debit: 0,
-        credit: amount,
-      })
+      if (billInRange) {
+        entries.push({
+          ...base,
+          id: `${pur.id}:bill`,
+          type: 'Purchase',
+          narration: `Payable to ${base.partyName}`,
+          debit: 0,
+          credit: amount,
+        })
+      }
 
-      if (paid > 0) {
+      if (paymentInRange) {
         entries.push({
           ...base,
           id: `${pur.id}:paid`,
+          date: paymentDate,
           type: /write-off/i.test(pur.notes || '') ? 'Payment / Write-off' : 'Payment',
           narration: paid > amount
             ? `Paid ₹${paid.toLocaleString('en-IN')} against ${base.refNo} (lump sum).${writeOffNote}`

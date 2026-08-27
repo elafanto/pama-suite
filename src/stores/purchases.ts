@@ -43,7 +43,15 @@ async function syncPaymentVoucher(purchase: Purchase) {
     await accounting.reverseLedgerByRef(`${purchase.id}_PAY`)
     return
   }
-  await accounting.postPaymentVoucher(purchase.id, 'purchase', paid, false, 0, purchase.received_date || purchase.date, 'Recorded on purchase save')
+  await accounting.postPaymentVoucher(
+    purchase.id,
+    'purchase',
+    paid,
+    false,
+    0,
+    purchase.last_payment_date || purchase.received_date || purchase.date,
+    'Recorded on purchase save',
+  )
 }
 
 export const usePurchaseStore = defineStore('purchases', () => {
@@ -173,6 +181,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
       await repo.update(id, {
         amt_paid: existing.grand_total,
         pay_status: 'PAID',
+        last_payment_date: date || new Date().toISOString().slice(0, 10),
         notes: `${existing.notes || ''} [Write-off: ₹${writeOffAmt.toFixed(2)}]`.trim(),
       })
 
@@ -195,6 +204,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
       await repo.update(pur.id, {
         amt_paid: newAmtPaid,
         pay_status: payStatusFromPaidPurchase(pur.grand_total, newAmtPaid),
+        last_payment_date: date || new Date().toISOString().slice(0, 10),
       })
     }
 

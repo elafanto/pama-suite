@@ -149,6 +149,8 @@ export interface Invoice extends BaseRecord {
   grand_total: number
   amt_paid: number
   pay_status: PayStatus
+  /** Last recorded receipt / payment date (ledger Payment/Receipt row). */
+  last_payment_date?: string
   notes: string
   /** Set when bill is Cancelled (visible in history; GSTR Table 13 cancelled). */
   cancelled_at?: string | null
@@ -189,6 +191,8 @@ export interface PurchaseItemLine {
   reel_count?: number
   is_consumable?: boolean
   consumable_type?: 'glue' | 'ink' | 'stitching_wire' | 'strapping_roll'
+  /** Ink shade when consumable_type is ink. */
+  ink_color?: string
   is_capital?: boolean
   capital_category?: CapitalCategory
   asset_tag?: string
@@ -211,6 +215,8 @@ export interface Purchase extends BaseRecord {
   grand_total: number
   amt_paid: number
   pay_status: PayStatus
+  /** Last recorded payment date (ledger Payment row). */
+  last_payment_date?: string
   notes: string
 }
 
@@ -502,6 +508,8 @@ export interface ConsumableLot extends BaseRecord {
   supplier_name?: string
   purchase_id?: string
   purchase_bill_no?: string
+  /** Required when stock_type is ink (e.g. Black, Cyan, Red). */
+  ink_color?: string
   /** KG per bag / roll. */
   pack_size_kg: number
   packs_total: number
