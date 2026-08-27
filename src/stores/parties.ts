@@ -5,6 +5,7 @@ import { createRepo } from '@/data/repo'
 import { useFirmStore } from './firm'
 import { logActivity } from '@/services/activityLog'
 import { formatGstin } from '@/services/gst'
+import { mergeParties, previewPartyMerge, type PartyMergeFieldPicks } from '@/services/partyMerge'
 import type { Party, PartyRole } from '@/types/models'
 
 const repo = createRepo<Party>(db.parties)
@@ -86,5 +87,33 @@ export const usePartyStore = defineStore('parties', () => {
     })
   }
 
-  return { list, loaded, customers, vendors, load, add, update, remove, restore, ensure }
+  async function merge(winnerId: string, loserId: string, fieldPicks?: PartyMergeFieldPicks) {
+    const result = await mergeParties(winnerId, loserId, fieldPicks)
+    const winner = await repo.get(winnerId)
+    await logActivity(
+      winner?.firm_id || useFirmStore().activeFirmId,
+      'update',
+      'party',
+      winnerId,
+      `Merged party into ${winner?.name || winnerId} (${result.rewritten} records)`,
+      { loserId, rewritten: result.rewritten },
+    )
+    await load()
+    return result
+  }
+
+  return {
+    list,
+    loaded,
+    customers,
+    vendors,
+    load,
+    add,
+    update,
+    remove,
+    restore,
+    ensure,
+    merge,
+    previewMerge: previewPartyMerge,
+  }
 })

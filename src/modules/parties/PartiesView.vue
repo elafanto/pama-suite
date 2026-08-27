@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive } from 'vue'
+import { ref, computed, onMounted, reactive, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import PpModal from '@/components/PpModal.vue'
 import SegmentedFieldInput from '@/components/SegmentedFieldInput.vue'
@@ -7,6 +7,7 @@ import { usePartyStore, type NewParty } from '@/stores/parties'
 import type { Party, PartyRole } from '@/types/models'
 import { validateGstinForForm, formatGstin } from '@/services/gst'
 import { fetchIfscDetails, findPartyBankDetails, isValidIfsc, toUpperTrim } from '@/services/partyLookup'
+import type { PartyMergeField, PartyMergePreview } from '@/services/partyMerge'
 
 const store = usePartyStore()
 const search = ref('')
@@ -15,6 +16,12 @@ const showModal = ref(false)
 const editingId = ref<string | null>(null)
 const deleteTarget = ref<Party | null>(null)
 const deleteConfirmText = ref('')
+const showMergeModal = ref(false)
+const mergeWinnerId = ref('')
+const mergeLoserId = ref('')
+const mergePreview = ref<PartyMergePreview | null>(null)
+const mergeBusy = ref(false)
+const mergeFieldPicks = reactive<Record<string, string>>({})
 const gstHint = ref('')
 const gstHintOk = ref(true)
 const ifscStatus = ref<'idle' | 'fetching' | 'success' | 'error'>('idle')
@@ -159,6 +166,65 @@ async function confirmDelete() {
   closeDelete()
 }
 
+async function openMerge(seed?: Party) {
+  mergeWinnerId.value = seed?.id || store.list[0]?.id || ''
+  mergeLoserId.value = ''
+  mergePreview.value = null
+  Object.keys(mergeFieldPicks).forEach((k) => delete mergeFieldPicks[k])
+  showMergeModal.value = true
+  if (mergeWinnerId.value) await refreshMergePreview()
+}
+
+function closeMerge() {
+  showMergeModal.value = false
+  mergePreview.value = null
+  mergeBusy.value = false
+}
+
+async function refreshMergePreview() {
+  mergePreview.value = null
+  if (!mergeWinnerId.value || !mergeLoserId.value || mergeWinnerId.value === mergeLoserId.value) return
+  try {
+    mergePreview.value = await store.previewMerge(mergeWinnerId.value, mergeLoserId.value)
+    for (const field of mergePreview.value.conflicts) {
+      if (!mergeFieldPicks[field]) mergeFieldPicks[field] = mergeWinnerId.value
+    }
+  } catch (err: any) {
+    alert(err?.message || 'Merge preview fail')
+  }
+}
+
+async function confirmMerge() {
+  if (!mergeWinnerId.value || !mergeLoserId.value) return
+  const preview = mergePreview.value
+  if (!preview) return alert('Pehle dono parties select karo')
+  if (preview.conflicts.includes('gst') && !mergeFieldPicks.gst) {
+    return alert('GST conflict — Keep ya Merge party ka GST choose karo')
+  }
+  const ok = confirm(
+    `Merge “${preview.loser.name}” → “${preview.winner.name}”?\n\n`
+    + `${preview.invoices} invoices, ${preview.purchases} purchases, ${preview.jobs} jobs rewrite honge.\n`
+    + `“${preview.loser.name}” Recycle Bin me chali jayegi.`,
+  )
+  if (!ok) return
+  mergeBusy.value = true
+  try {
+    const result = await store.merge(mergeWinnerId.value, mergeLoserId.value, { ...mergeFieldPicks })
+    closeMerge()
+    alert(`Merge done — ${result.rewritten} records updated.`)
+  } catch (err: any) {
+    alert(err?.message || 'Merge fail')
+  } finally {
+    mergeBusy.value = false
+  }
+}
+
+function conflictLabel(field: PartyMergeField) {
+  return field.replace(/_/g, ' ').toUpperCase()
+}
+
+watch([mergeWinnerId, mergeLoserId], () => { void refreshMergePreview() })
+
 onMounted(store.load)
 </script>
 
@@ -173,6 +239,7 @@ onMounted(store.load)
         <RouterLink to="/recycle-bin" class="pp-btn pp-btn-ghost flex-1 justify-center sm:flex-none">
           Recycle Bin
         </RouterLink>
+        <button class="pp-btn pp-btn-ghost flex-1 sm:flex-none" @click="openMerge()">Merge Parties</button>
         <button class="pp-btn pp-btn-primary flex-1 sm:flex-none" @click="openAdd">+ Add Party</button>
       </div>
     </header>
@@ -217,6 +284,7 @@ onMounted(store.load)
             <td class="px-4 py-2.5 hidden md:table-cell text-slate-600">{{ p.phone || '—' }}</td>
             <td class="px-4 py-2.5 hidden lg:table-cell text-slate-600">{{ p.city || '—' }}</td>
             <td class="px-4 py-2.5 text-right whitespace-nowrap">
+              <button class="pp-btn pp-btn-ghost !px-2 !py-1 mr-1" title="Merge into another party" @click="openMerge(p)">⇄</button>
               <button class="pp-btn pp-btn-ghost !px-2 !py-1 mr-1" @click="openEdit(p)">✏️</button>
               <button class="pp-btn pp-btn-danger !px-2 !py-1" @click="openDelete(p)">🗑️</button>
             </td>
@@ -360,6 +428,70 @@ onMounted(store.load)
           <button class="pp-btn pp-btn-ghost" @click="closeDelete">Cancel</button>
           <button class="pp-btn pp-btn-danger" :disabled="!deleteConfirmed" :class="{ 'opacity-50': !deleteConfirmed }" @click="confirmDelete">
             Move to Recycle Bin
+          </button>
+        </div>
+      </div>
+    </PpModal>
+
+    <PpModal
+      :show="showMergeModal"
+      title="Merge Parties"
+      @close="closeMerge"
+    >
+      <div class="space-y-4">
+        <p class="text-sm text-slate-600">
+          Merge-away party ki saari bills / jobs Keep party pe shift hongi. Merge-away soft-delete (Recycle Bin) me jayegi.
+        </p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="pp-label">Keep (Winner) *</label>
+            <select v-model="mergeWinnerId" class="pp-input">
+              <option value="">Select…</option>
+              <option v-for="p in store.list" :key="p.id" :value="p.id" :disabled="p.id === mergeLoserId">{{ p.name }}</option>
+            </select>
+          </div>
+          <div>
+            <label class="pp-label">Merge away (Loser) *</label>
+            <select v-model="mergeLoserId" class="pp-input">
+              <option value="">Select…</option>
+              <option v-for="p in store.list" :key="p.id" :value="p.id" :disabled="p.id === mergeWinnerId">{{ p.name }}</option>
+            </select>
+          </div>
+        </div>
+
+        <div v-if="mergePreview" class="rounded-lg border bg-slate-50 p-3 text-sm space-y-1">
+          <div class="font-semibold text-navy">Will rewrite</div>
+          <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-slate-600">
+            <span>Invoices</span><span class="font-mono text-right">{{ mergePreview.invoices }}</span>
+            <span>Purchases</span><span class="font-mono text-right">{{ mergePreview.purchases }}</span>
+            <span>Jobs</span><span class="font-mono text-right">{{ mergePreview.jobs }}</span>
+            <span>Reels / Lots / Assets</span>
+            <span class="font-mono text-right">{{ mergePreview.reels + mergePreview.consumableLots + mergePreview.capitalAssets }}</span>
+            <span>Recipes</span><span class="font-mono text-right">{{ mergePreview.recipes }}</span>
+          </div>
+        </div>
+
+        <div v-if="mergePreview?.conflicts.length" class="space-y-2">
+          <div class="text-sm font-semibold text-amber-800">Field conflicts — choose Keep value</div>
+          <div v-for="field in mergePreview.conflicts" :key="field" class="grid grid-cols-1 sm:grid-cols-[8rem_1fr] gap-2 items-center text-sm">
+            <span class="text-slate-500 uppercase text-xs">{{ conflictLabel(field) }}</span>
+            <select v-model="mergeFieldPicks[field]" class="pp-input !py-1">
+              <option :value="mergePreview.winner.id">Keep: {{ String((mergePreview.winner as any)[field] || '—') }}</option>
+              <option :value="mergePreview.loser.id">Merge: {{ String((mergePreview.loser as any)[field] || '—') }}</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="flex justify-end gap-2 border-t pt-3">
+          <button type="button" class="pp-btn pp-btn-ghost" :disabled="mergeBusy" @click="closeMerge">Cancel</button>
+          <button
+            type="button"
+            class="pp-btn pp-btn-primary"
+            :disabled="mergeBusy || !mergePreview"
+            :class="{ 'opacity-50': mergeBusy || !mergePreview }"
+            @click="confirmMerge"
+          >
+            {{ mergeBusy ? 'Merging…' : 'Confirm Merge' }}
           </button>
         </div>
       </div>

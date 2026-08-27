@@ -5,6 +5,7 @@ import { usePurchaseStore } from '@/stores/purchases'
 import { numberToWords } from '@/services/numberToWords'
 import { getPendingRTGS, clearPendingRTGS } from '@/services/rtgsBridge'
 import PpModal from '@/components/PpModal.vue'
+import BankReconcilePanel from '@/modules/banking/BankReconcilePanel.vue'
 import { formatGstin } from '@/services/gst'
 import { fetchIfscDetails, findPartyBankDetails, isValidIfsc } from '@/services/partyLookup'
 
@@ -32,6 +33,7 @@ const purpose = ref(localStorage.getItem('pama_rtgs_purpose') || 'procurement of
 const BANK_EMAIL_KEY = 'pama_bank_email'
 const bankEmail = ref(localStorage.getItem(BANK_EMAIL_KEY) || 'ubijaspur@unionbankofindia.co.in')
 const autoOpenGmail = ref(localStorage.getItem('pama_rtgs_auto_gmail') !== '0')
+const bankingTab = ref<'rtgs' | 'reconcile'>('rtgs')
 
 // Active beneficiaries in this transaction
 interface BankBeneficiary {
@@ -523,18 +525,23 @@ onMounted(async () => {
 <template>
   <div class="p-6 max-w-7xl mx-auto space-y-6">
     <!-- Header -->
-    <div class="flex items-center justify-between">
+    <div class="flex items-center justify-between flex-wrap gap-3">
       <div>
-        <h1 class="text-2xl font-bold tracking-tight">RTGS / NEFT Banking Portal</h1>
-        <p class="text-sm text-slate-500 font-medium">Generate bank disbursement email requests and print NEFT instructions</p>
+        <h1 class="text-2xl font-bold tracking-tight">Banking</h1>
+        <p class="text-sm text-slate-500 font-medium">RTGS / NEFT emails + bank statement reconcile (CSV/Excel)</p>
       </div>
-      <div>
+      <div class="flex items-center gap-2">
+        <button type="button" class="pp-btn" :class="bankingTab === 'rtgs' ? 'pp-btn-primary' : 'pp-btn-ghost'" @click="bankingTab = 'rtgs'">RTGS / NEFT</button>
+        <button type="button" class="pp-btn" :class="bankingTab === 'reconcile' ? 'pp-btn-primary' : 'pp-btn-ghost'" @click="bankingTab = 'reconcile'">Reconcile</button>
         <span class="text-xs font-semibold px-3 py-1 bg-blue-50 text-blue-800 rounded-full border border-blue-100">
           🏦 Union Bank of India, Jaspur
         </span>
       </div>
     </div>
 
+    <BankReconcilePanel v-if="bankingTab === 'reconcile'" />
+
+    <template v-else>
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <!-- Left Forms -->
       <div class="lg:col-span-2 space-y-6">
@@ -798,6 +805,7 @@ onMounted(async () => {
         </button>
       </div>
     </div>
+    </template>
 
     <!-- Print Modal Letter -->
     <PpModal :show="showPrintLetter" title="Official Bank Disbursement Instructions Letter" @close="showPrintLetter = false" max-width="max-w-4xl">
