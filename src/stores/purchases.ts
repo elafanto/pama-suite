@@ -128,6 +128,12 @@ export const usePurchaseStore = defineStore('purchases', () => {
     const count = await createConsumablesFromPurchase(rec, specs)
     await logActivity(rec.firm_id, 'create', 'stock_movement', rec.id, `Confirmed ${count} consumables from purchase ${rec.bill_no}`)
     await load()
+    try {
+      const { useProductionStore } = await import('./production')
+      await useProductionStore().load()
+    } catch {
+      /* production store optional */
+    }
     return { count }
   }
 

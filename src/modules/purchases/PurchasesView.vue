@@ -119,7 +119,7 @@ interface BulkPurchaseRow {
   payment: string
   pay_status: PayStatus
   is_consumable: boolean
-  consumable_type: 'glue' | 'ink' | 'stitching_wire'
+  consumable_type: 'glue' | 'ink' | 'stitching_wire' | 'strapping_roll'
   notes: string
 }
 
@@ -563,7 +563,10 @@ function calcPurchaseTotals(items: PurchaseItemLine[]) {
 
 function normalizeConsumableType(v: unknown): PurchaseItemLine['consumable_type'] {
   const key = String(v || '').toLowerCase().replace(/\s+/g, '_')
-  if (key === 'glue' || key === 'ink' || key === 'stitching_wire') return key
+  if (key === 'glue' || key === 'gum') return 'glue'
+  if (key === 'ink') return 'ink'
+  if (key === 'stitching_wire' || key === 'wire') return 'stitching_wire'
+  if (key === 'strapping_roll' || key === 'strapping' || key === 'strap') return 'strapping_roll'
   return undefined
 }
 
@@ -714,7 +717,7 @@ async function savePurchase() {
   }
   const badConsumable = validItems.find(it => getLineKind(it) === 'consumable' && !it.consumable_type)
   if (badConsumable) {
-    alert('Consumable stock line me Glue, Ink ya Stitching Wire type select karo.')
+    alert('Consumable stock line me Gum, Ink, Stitching Wire ya Strapping type select karo.')
     return
   }
 
@@ -894,12 +897,17 @@ async function openConsumableStockConfirm(purchase: Purchase) {
   const existingCount = await db.stock_movements
     .where('ref_id')
     .equals(purchase.id)
-    .filter((m) => !m.is_deleted && m.source === 'purchase' && ['glue', 'ink', 'stitching_wire'].includes(m.stock_type))
+    .filter((m) => !m.is_deleted && m.source === 'purchase' && ['glue', 'ink', 'stitching_wire', 'strapping_roll'].includes(m.stock_type))
     .count()
   replace = existingCount > 0
   consumableConfirmPurchaseId.value = purchase.id
   consumableConfirmReplace.value = replace
-  consumableConfirmRows.value = specs.map((s) => ({ ...s }))
+  consumableConfirmRows.value = specs.map((s) => ({
+    ...s,
+    packs: s.packs ?? s.qty,
+    pack_size_kg: s.pack_size_kg || 25,
+    remark: s.remark || '',
+  }))
   showConsumableConfirmModal.value = true
 }
 
@@ -914,19 +922,27 @@ function closeConsumableConfirmModal() {
 async function submitConsumableStockConfirm() {
   if (!consumableConfirmPurchaseId.value) return
   const rows = consumableConfirmRows.value
-  if (rows.some((r) => !(Number(r.qty) > 0 || Number(r.weight) > 0))) {
-    return alert('Har consumable ka qty ya weight 0 se zyada hona chahiye')
+  if (rows.some((r) => !(Number(r.packs ?? r.qty) > 0 || Number(r.weight) > 0))) {
+    return alert('Har consumable me bags/rolls ya weight 0 se zyada hona chahiye')
   }
   consumableConfirmBusy.value = true
   try {
     const result = await purchaseStore.confirmConsumableStock(
       consumableConfirmPurchaseId.value,
-      rows.map((r) => ({
-        ...r,
-        qty: Number(r.qty) || 0,
-        weight: Number(r.weight) || 0,
-        note: r.note || `${STOCK_LABELS[r.stock_type]} from purchase`,
-      })),
+      rows.map((r) => {
+        const packs = Number(r.packs ?? r.qty) || 0
+        const pack_size_kg = Number(r.pack_size_kg) || (packs > 0 ? (Number(r.weight) || 0) / packs : 25)
+        const weight = Number(r.weight) || packs * pack_size_kg
+        return {
+          ...r,
+          packs,
+          qty: packs,
+          pack_size_kg,
+          weight,
+          remark: r.remark || '',
+          note: r.note || r.remark || `${STOCK_LABELS[r.stock_type]} from purchase`,
+        }
+      }),
       { replaceExisting: consumableConfirmReplace.value },
     )
     closeConsumableConfirmModal()
@@ -1592,9 +1608,10 @@ onMounted(async () => {
                       </label>
                     </div>
                     <select v-if="lineKindOf(item) === 'consumable'" v-model="item.consumable_type" class="pp-input mt-2 text-xs">
-                      <option value="glue">Glue</option>
+                      <option value="glue">Gum</option>
                       <option value="ink">Ink</option>
                       <option value="stitching_wire">Stitching Wire</option>
+                                          <option value="strapping_roll">Strapping Roll</option>
                     </select>
                   </td>
                   <td class="py-2 px-3 text-right font-mono font-medium">
@@ -1971,10 +1988,11 @@ onMounted(async () => {
                         Consumable
                       </label>
                       <select v-if="item.isConsumable" v-model="item.consumableType" class="pp-input mt-2 text-xs">
-                        <option value="glue">Glue</option>
+                        <option value="glue">Gum</option>
                         <option value="ink">Ink</option>
                         <option value="stitching_wire">Stitching Wire</option>
-                      </select>
+                                            <option value="strapping_roll">Strapping Roll</option>
+                    </select>
                     </td>
                   </tr>
                   <tr v-if="item.isKraftReel" class="bg-amber-50/50">
@@ -2100,10 +2118,11 @@ onMounted(async () => {
                   Stock
                 </label>
                 <select v-if="row.is_consumable" v-model="row.consumable_type" class="pp-input mt-2 text-xs">
-                  <option value="glue">Glue</option>
+                  <option value="glue">Gum</option>
                   <option value="ink">Ink</option>
                   <option value="stitching_wire">Stitching Wire</option>
-                </select>
+                                      <option value="strapping_roll">Strapping Roll</option>
+                    </select>
               </td>
               <td class="py-2 px-3 text-right font-mono font-semibold">
                 ₹{{ calcBulkAmounts(row).grandTotal.toLocaleString('en-IN') }}.00
@@ -2615,34 +2634,43 @@ onMounted(async () => {
     >
       <div class="space-y-4">
         <p class="text-sm text-slate-600">
-          Purchase save ho chuki hai. Glue / ink / stitching wire stock me daalne se pehle qty / weight confirm karein.
+          Purchase save ho chuki hai. Gum / ink / wire / strapping lots me daalne se pehle pack size × bags confirm karein.
         </p>
         <p v-if="consumableConfirmReplace" class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
           Is bill ki pehli consumable stock replace hogi.
         </p>
         <div class="overflow-x-auto max-h-[50vh]">
-          <table class="w-full text-sm min-w-[520px]">
+          <table class="w-full text-sm min-w-[720px]">
             <thead class="text-xs uppercase text-slate-500 bg-slate-50 sticky top-0">
               <tr>
                 <th class="p-2 text-left">Consumable</th>
-                <th class="p-2 text-right">Qty *</th>
-                <th class="p-2 text-right">Weight KG</th>
+                <th class="p-2 text-right">Pack KG</th>
+                <th class="p-2 text-right">Bags *</th>
+                <th class="p-2 text-right">Total KG</th>
+                <th class="p-2 text-left">Remark</th>
               </tr>
             </thead>
             <tbody class="divide-y">
               <tr v-for="(row, idx) in consumableConfirmRows" :key="idx">
                 <td class="p-2">
                   <select v-model="row.stock_type" class="pp-input !py-1">
-                    <option value="glue">Glue</option>
+                    <option value="glue">Gum</option>
                     <option value="ink">Ink</option>
                     <option value="stitching_wire">Stitching Wire</option>
+                    <option value="strapping_roll">Strapping Roll</option>
                   </select>
+                </td>
+                <td class="p-2">
+                  <input v-model.number="row.pack_size_kg" type="number" min="0" step="0.001" class="pp-input !py-1 text-right" />
                 </td>
                 <td class="p-2">
                   <input v-model.number="row.qty" type="number" min="0" step="0.001" class="pp-input !py-1 text-right" />
                 </td>
                 <td class="p-2">
                   <input v-model.number="row.weight" type="number" min="0" step="0.001" class="pp-input !py-1 text-right" />
+                </td>
+                <td class="p-2">
+                  <input v-model="row.remark" class="pp-input !py-1" placeholder="Party / item" />
                 </td>
               </tr>
             </tbody>

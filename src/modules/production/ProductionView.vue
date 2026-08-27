@@ -5,10 +5,10 @@ import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useProductionStore } from '@/stores/production'
-import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveRemainingWeightUpdate, resolveDecklePair, deckleFromMm, deckleFromInch, formatDeckleDisplay, estimateReelWeightKg, REEL_CORE_DIA_MM, filterReelsForDeletion, filterReelLinkedMovements, STAGE_LABELS, STOCK_LABELS, type ConsumableStockType, type ReelIntakeCondition, type ReelInventoryBreakdownRow } from '@/services/production'
+import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveRemainingWeightUpdate, resolveDecklePair, deckleFromMm, deckleFromInch, formatDeckleDisplay, estimateReelWeightKg, REEL_CORE_DIA_MM, filterReelsForDeletion, filterReelLinkedMovements, STAGE_LABELS, STOCK_LABELS, CONSUMABLE_TYPES, consumableLotTotals, type ConsumableStockType, type ReelIntakeCondition, type ReelInventoryBreakdownRow } from '@/services/production'
 import { downloadReelAbstractStockPdf, downloadReelLowStockPdf, downloadReelWiseStockPdf } from '@/services/reelStockPdf'
 import { useTableSort } from '@/composables/useTableSort'
-import type { PaperType, ProductionStage, ProductionStockType, ReelStock } from '@/types/models'
+import type { ConsumableLot, PaperType, ProductionStage, ProductionStockType, ReelStock } from '@/types/models'
 
 const firmStore = useFirmStore()
 const partyStore = usePartyStore()
@@ -27,8 +27,11 @@ const tabItems: { id: ProductionTab; label: string }[] = [
   { id: 'consumables', label: 'Consumables' },
   { id: 'reports', label: 'Reports' },
 ]
-const consumableTypes: ConsumableStockType[] = ['glue', 'ink', 'stitching_wire']
+const consumableTypes: ConsumableStockType[] = [...CONSUMABLE_TYPES]
 const paperTypes: PaperType[] = ['KRAFT', 'DUPLEX']
+const consumeRemarkDraft = ref('')
+const lotConsumeDrafts = reactive<Record<string, { packs: number; weight: number; remark: string }>>({})
+const remainingRemarkDrafts = reactive<Record<string, string>>({})
 
 const jobForm = reactive({
   date: new Date().toISOString().slice(0, 10),
@@ -61,6 +64,7 @@ const stageForm = reactive({
 const manualConsumableForm = reactive({
   date: new Date().toISOString().slice(0, 10),
   stock_type: 'glue' as ConsumableStockType,
+  pack_size_kg: 25,
   qty: 0,
   weight: 0,
   notes: '',
@@ -74,6 +78,15 @@ const consumableFeedForm = reactive({
   weight: 0,
   notes: '',
 })
+
+watch(
+  () => [manualConsumableForm.pack_size_kg, manualConsumableForm.qty] as const,
+  ([pack, bags]) => {
+    const p = Number(pack) || 0
+    const b = Number(bags) || 0
+    if (p > 0 && b > 0) manualConsumableForm.weight = Math.round(p * b * 1000) / 1000
+  },
+)
 
 const selectedReelIds = ref<string[]>([])
 const remainingDrafts = reactive<Record<string, number>>({})
@@ -94,6 +107,7 @@ const manualReelForm = reactive({
   intake_condition: 'fresh' as ReelIntakeCondition,
   reel_count: 1,
   rate: 0,
+  remark: '',
 })
 const manualReelLines = ref<ManualReelLine[]>([{ reel_no: '', opening_weight: 0 }])
 
@@ -285,14 +299,33 @@ const balanceRows = computed(() => {
   return stockTypes.map((type) => ({ type, label: STOCK_LABELS[type], ...bal[type] }))
 })
 const consumableRows = computed(() => {
-  const bal = productionBalance(production.movements, firmStore.activeFirmId)
-  return consumableTypes.map((type) => ({ type, label: STOCK_LABELS[type], ...bal[type] }))
+  return consumableTypes.map((type) => {
+    const lot = consumableLotTotals(production.consumableLots, firmStore.activeFirmId, type)
+    const bal = productionBalance(production.movements, firmStore.activeFirmId)[type]
+    const qty = lot.packs > 0 ? lot.packs : Math.max(0, Number(bal.qty) || 0)
+    const weight = lot.weight > 0 ? lot.weight : Math.max(0, Number(bal.weight) || 0)
+    return { type, label: STOCK_LABELS[type], qty, weight, lotCount: lot.lots }
+  })
 })
+const activeConsumableLots = computed(() =>
+  production.consumableLots.filter((lot) => lot.status === 'active' && ((Number(lot.packs_remaining) || 0) > 0 || (Number(lot.weight_remaining) || 0) > 0)),
+)
 const recentConsumableMoves = computed(() => {
   return production.movements
     .filter((m) => consumableTypes.includes(m.stock_type as ConsumableStockType))
     .slice(0, 12)
 })
+
+function lotDraft(lot: ConsumableLot) {
+  if (!lotConsumeDrafts[lot.id]) {
+    lotConsumeDrafts[lot.id] = {
+      packs: Number(lot.packs_remaining) || 0,
+      weight: Number(lot.weight_remaining) || 0,
+      remark: '',
+    }
+  }
+  return lotConsumeDrafts[lot.id]
+}
 const recentReelMoves = computed(() => {
   return production.movements
     .filter((m) => m.stock_type === 'raw_reel')
@@ -600,20 +633,29 @@ async function saveStage() {
 
 async function saveManualConsumable() {
   if (!consumableTypes.includes(manualConsumableForm.stock_type)) return alert('Consumable type select karo')
-  if (manualConsumableForm.qty <= 0 && manualConsumableForm.weight <= 0) return alert('Qty ya weight enter karo')
+  if (manualConsumableForm.qty <= 0 && manualConsumableForm.weight <= 0) return alert('Bags / rolls ya weight enter karo')
   try {
-    await production.addManualConsumable({ ...manualConsumableForm })
+    await production.addManualConsumable({
+      date: manualConsumableForm.date,
+      stock_type: manualConsumableForm.stock_type,
+      qty: manualConsumableForm.qty,
+      weight: manualConsumableForm.weight,
+      pack_size_kg: manualConsumableForm.pack_size_kg,
+      notes: manualConsumableForm.notes,
+      remark: manualConsumableForm.notes,
+    })
   } catch (err: any) {
     return alert(err?.message || 'Consumable add nahi ho payi')
   }
   Object.assign(manualConsumableForm, {
     date: new Date().toISOString().slice(0, 10),
     stock_type: manualConsumableForm.stock_type,
+    pack_size_kg: 25,
     qty: 0,
     weight: 0,
     notes: '',
   })
-  alert('Consumable stock me add ho gaya.')
+  alert('Consumable lot stock me add ho gaya.')
 }
 
 function selectConsumableForFeed(stockType: ConsumableStockType) {
@@ -653,6 +695,7 @@ async function saveConsumableFeed() {
       qty: consumableFeedForm.qty,
       weight: consumableFeedForm.weight,
       notes: consumableFeedForm.notes,
+      remark: consumableFeedForm.notes,
     })
   } catch (err: any) {
     return alert(err?.message || 'Consumable feed save nahi ho payi')
@@ -785,14 +828,22 @@ async function updateReelRemainingAction(reel: ReelStock) {
   } catch (err: any) {
     return alert(err?.message || 'Invalid remaining weight')
   }
+  const remark = String(remainingRemarkDrafts[reel.id] || '').trim()
   const ok = confirm(
     remaining <= 0
-      ? `Reel ${reel.reel_no} FULL consume?\n\n${n2(current)} KG → 0 (Consumed)`
-      : `Reel ${reel.reel_no}: ${n2(current)} → ${n2(remaining)} KG?\n\nConsume ${n2(used)} KG`,
+      ? `Reel ${reel.reel_no} FULL consume?\n\n${n2(current)} KG → 0 (Consumed)${remark ? `\nRemark: ${remark}` : ''}`
+      : `Reel ${reel.reel_no}: ${n2(current)} → ${n2(remaining)} KG?\n\nConsume ${n2(used)} KG${remark ? `\nRemark: ${remark}` : ''}`,
   )
   if (!ok) return
   try {
-    await production.updateReelRemaining(reel.id, remaining)
+    const autoNote = `Remaining set to ${remaining} KG (was ${n2(current)})`
+    await production.updateReelRemaining(
+      reel.id,
+      remaining,
+      undefined,
+      remark ? `${autoNote} · ${remark}` : autoNote,
+    )
+    remainingRemarkDrafts[reel.id] = ''
     if (remaining <= 0) clearSelection([reel.id])
   } catch (err: any) {
     alert(err?.message || 'Remaining update nahi hua.')
@@ -804,16 +855,34 @@ async function fullConsumeSelectedAction() {
   if (!targets.length) return alert('Pehle active reels select karo (checkbox).')
   const total = targets.reduce((s, r) => s + (Number(r.current_weight) || 0), 0)
   const nos = targets.map((r) => r.reel_no).join(', ')
+  const remark = consumeRemarkDraft.value.trim()
   const ok = confirm(
-    `Full consume selected?\n\n${targets.length} reels: ${nos}\nTotal ${n2(total)} KG → 0 (Consumed)`,
+    `Full consume selected?\n\n${targets.length} reels: ${nos}\nTotal ${n2(total)} KG → 0 (Consumed)${remark ? `\nRemark: ${remark}` : ''}`,
   )
   if (!ok) return
   try {
-    await production.fullConsumeSelected(targets.map((r) => r.id))
+    await production.fullConsumeSelected(targets.map((r) => r.id), undefined, remark || undefined)
     clearSelection(targets.map((r) => r.id))
+    consumeRemarkDraft.value = ''
     alert(`${targets.length} reels full consumed.`)
   } catch (err: any) {
     alert(err?.message || 'Full consume fail.')
+  }
+}
+
+async function consumeLotAction(lot: ConsumableLot, mode: 'full' | 'partial') {
+  const draft = lotDraft(lot)
+  try {
+    await production.consumeLot({
+      lot_id: lot.id,
+      mode,
+      packs: mode === 'full' ? undefined : draft.packs,
+      weight: mode === 'full' ? undefined : draft.weight,
+      remark: draft.remark,
+    })
+    delete lotConsumeDrafts[lot.id]
+  } catch (err: any) {
+    alert(err?.message || 'Lot consume fail')
   }
 }
 
@@ -861,6 +930,7 @@ async function saveManualReel() {
       date: manualReelForm.date,
       rate: manualReelForm.rate,
       intake_condition: manualReelForm.intake_condition,
+      remark: manualReelForm.remark.trim() || undefined,
       lines,
     })
     alert(created.length === 1
@@ -874,6 +944,7 @@ async function saveManualReel() {
   syncManualReelLines(1)
   manualReelLines.value = [{ reel_no: '', opening_weight: 0 }]
   manualReelForm.reel_count = 1
+  manualReelForm.remark = ''
 }
 
 function closeJob(id: string) {
@@ -1228,6 +1299,12 @@ onMounted(async () => {
             >
               Full consume selected ({{ selectedActiveReels.length }})
             </button>
+            <input
+              v-model="consumeRemarkDraft"
+              class="pp-input !py-1.5 !text-xs min-w-[12rem] max-w-xs"
+              placeholder="Consume remark (party / job)"
+              title="Full consume pe ye remark lag jayega"
+            />
             <button
               type="button"
               class="pp-btn pp-btn-danger !py-1.5 !px-3 text-xs"
@@ -1324,6 +1401,7 @@ onMounted(async () => {
               <th class="p-3" :class="reelSort.thClass('gsm')" @click="reelSort.toggle('gsm')">GSM{{ reelSort.indicator('gsm') }}</th>
               <th class="p-3" :class="reelSort.thClass('bf')" @click="reelSort.toggle('bf')">BF{{ reelSort.indicator('bf') }}</th>
               <th class="p-3" :class="reelSort.thClass('color')" @click="reelSort.toggle('color')">Color{{ reelSort.indicator('color') }}</th>
+              <th class="p-3">Remark</th>
               <th class="p-3" :class="reelSort.thClass('opening', 'right')" @click="reelSort.toggle('opening', 'desc')">Opening KG{{ reelSort.indicator('opening') }}</th>
               <th class="p-3" :class="reelSort.thClass('current', 'right')" @click="reelSort.toggle('current', 'desc')">Current KG{{ reelSort.indicator('current') }}</th>
               <th class="p-3 text-right">Remaining (KG / Dia)</th>
@@ -1361,6 +1439,7 @@ onMounted(async () => {
               <td class="p-3">{{ reel.gsm }}</td>
               <td class="p-3">{{ reel.bf }}</td>
               <td class="p-3">{{ normalizeReelColor(reel.color) }}</td>
+              <td class="p-3 text-xs text-slate-600 max-w-[10rem] truncate" :title="reel.remark || ''">{{ reel.remark || '—' }}</td>
               <td class="p-3 text-right font-mono">{{ n2(reel.opening_weight) }}</td>
               <td class="p-3 text-right font-mono">{{ n2(reel.current_weight) }}</td>
               <td class="p-3 text-right">
@@ -1413,7 +1492,15 @@ onMounted(async () => {
               </td>
               <td class="p-3 text-center"><span class="pp-badge" :class="reel.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-slate-100'">{{ reel.status }}</span></td>
               <td class="p-3 text-right">
-                <div class="inline-flex flex-wrap items-center justify-end gap-1">
+                <div class="inline-flex flex-col items-end gap-1 min-w-[8rem]">
+                  <input
+                    v-if="reel.status === 'active' && reel.current_weight > 0"
+                    v-model="remainingRemarkDrafts[reel.id]"
+                    class="pp-input !py-1 !text-xs w-full"
+                    placeholder="Use remark"
+                    title="Kis party / job me use hui"
+                  />
+                  <div class="inline-flex flex-wrap items-center justify-end gap-1">
                   <button
                     v-if="reel.status === 'active' && reel.current_weight > 0"
                     type="button"
@@ -1431,11 +1518,12 @@ onMounted(async () => {
                   >
                     Delete
                   </button>
+                  </div>
                 </div>
               </td>
             </tr>
             <tr v-if="filteredReels.length === 0">
-              <td colspan="13" class="p-8 text-center text-slate-500">
+              <td colspan="14" class="p-8 text-center text-slate-500">
                 <p class="font-semibold text-navy mb-1">Abhi list khali hai</p>
                 <p class="text-sm">
                   Right side <b>Add Reel (stock)</b> se mill/GSM/BF/deckle set karke
@@ -1591,6 +1679,14 @@ onMounted(async () => {
               <label class="pp-label">Date</label>
               <input v-model="manualReelForm.date" type="date" class="pp-input" />
             </div>
+            <div class="col-span-2">
+              <label class="pp-label">Remark</label>
+              <input
+                v-model="manualReelForm.remark"
+                class="pp-input"
+                placeholder="Kis party / kis item ki reel — e.g. UK Paper · 3-ply"
+              />
+            </div>
           </div>
 
           <div class="border rounded-lg overflow-hidden">
@@ -1650,8 +1746,8 @@ onMounted(async () => {
     <div v-else-if="activeTab === 'consumables'" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div class="space-y-6">
         <div class="pp-card p-6 space-y-3">
-          <h2 class="font-semibold border-b pb-2">Add Consumable (manual)</h2>
-          <p class="text-xs text-slate-500">Naya glue / ink / stitching wire stock bina bill ke add karein.</p>
+          <h2 class="font-semibold border-b pb-2">Add Lot (manual)</h2>
+          <p class="text-xs text-slate-500">Gum / ink / stitching wire / strapping — pack size × bags. Numbering nahi chahiye.</p>
           <div>
             <label class="pp-label">Date</label>
             <input v-model="manualConsumableForm.date" type="date" class="pp-input" />
@@ -1664,24 +1760,29 @@ onMounted(async () => {
           </div>
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="pp-label">Qty</label>
-              <input v-model.number="manualConsumableForm.qty" type="number" min="0" step="0.001" class="pp-input text-right" />
+              <label class="pp-label">Pack size (KG) *</label>
+              <input v-model.number="manualConsumableForm.pack_size_kg" type="number" min="0" step="0.001" class="pp-input text-right" />
             </div>
             <div>
-              <label class="pp-label">Weight KG</label>
+              <label class="pp-label">Total bags / rolls *</label>
+              <input v-model.number="manualConsumableForm.qty" type="number" min="0" step="0.001" class="pp-input text-right" />
+            </div>
+            <div class="col-span-2">
+              <label class="pp-label">Total weight KG</label>
               <input v-model.number="manualConsumableForm.weight" type="number" min="0" step="0.001" class="pp-input text-right" />
+              <p class="text-[11px] text-slate-400 mt-0.5">Auto = pack × bags (override allowed)</p>
             </div>
           </div>
           <div>
-            <label class="pp-label">Notes</label>
-            <textarea v-model="manualConsumableForm.notes" class="pp-input min-h-[70px]" placeholder="Mill, bag no, reference..."></textarea>
+            <label class="pp-label">Remark</label>
+            <textarea v-model="manualConsumableForm.notes" class="pp-input min-h-[70px]" placeholder="Supplier / party / item note..."></textarea>
           </div>
-          <button type="button" class="pp-btn pp-btn-primary w-full" @click="saveManualConsumable">Add to Stock</button>
+          <button type="button" class="pp-btn pp-btn-primary w-full" @click="saveManualConsumable">Add lot to stock</button>
         </div>
 
         <div class="pp-card p-6 space-y-3">
-          <h2 class="font-semibold border-b pb-2">Feed Consumable</h2>
-          <p class="text-xs text-slate-500">Partial feed stock kam karega. Full consume stock zero karega.</p>
+          <h2 class="font-semibold border-b pb-2">Quick Feed (FIFO)</h2>
+          <p class="text-xs text-slate-500">Type-wise feed — pehle oldest lots se cut. Remark party/job ke liye.</p>
           <div>
             <label class="pp-label">Date</label>
             <input v-model="consumableFeedForm.date" type="date" class="pp-input" />
@@ -1695,71 +1796,86 @@ onMounted(async () => {
           <div>
             <label class="pp-label">Feed mode *</label>
             <select v-model="consumableFeedForm.mode" class="pp-input">
-              <option value="partial">Partial — stock se kam</option>
-              <option value="full">Full consume — stock zero</option>
+              <option value="partial">Partial — bags / KG kam</option>
+              <option value="full">Full consume — type zero</option>
             </select>
           </div>
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="pp-label">Qty</label>
-              <input
-                v-model.number="consumableFeedForm.qty"
-                type="number"
-                min="0"
-                step="0.001"
-                class="pp-input text-right"
-                :disabled="consumableFeedForm.mode === 'full'"
-              />
+              <label class="pp-label">Bags / rolls</label>
+              <input v-model.number="consumableFeedForm.qty" type="number" min="0" step="0.001" class="pp-input text-right" :disabled="consumableFeedForm.mode === 'full'" />
             </div>
             <div>
               <label class="pp-label">Weight KG</label>
-              <input
-                v-model.number="consumableFeedForm.weight"
-                type="number"
-                min="0"
-                step="0.001"
-                class="pp-input text-right"
-                :disabled="consumableFeedForm.mode === 'full'"
-              />
+              <input v-model.number="consumableFeedForm.weight" type="number" min="0" step="0.001" class="pp-input text-right" :disabled="consumableFeedForm.mode === 'full'" />
             </div>
           </div>
           <div>
-            <label class="pp-label">Notes</label>
-            <textarea v-model="consumableFeedForm.notes" class="pp-input min-h-[70px]" placeholder="Job, machine, reason..."></textarea>
+            <label class="pp-label">Remark (kis kaam me)</label>
+            <textarea v-model="consumableFeedForm.notes" class="pp-input min-h-[70px]" placeholder="Party / job / machine..."></textarea>
           </div>
           <button type="button" class="pp-btn pp-btn-primary w-full" @click="saveConsumableFeed">Confirm Feed</button>
         </div>
       </div>
 
       <div class="lg:col-span-2 space-y-6">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           <div v-for="row in consumableRows" :key="row.type" class="pp-card p-4">
             <div class="flex items-start justify-between gap-2">
               <div class="text-sm font-semibold">{{ row.label }}</div>
-              <button
-                v-if="row.qty > 0 || row.weight > 0"
-                type="button"
-                class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs"
-                @click="selectConsumableForFeed(row.type)"
-              >
-                Feed
-              </button>
+              <button v-if="row.qty > 0 || row.weight > 0" type="button" class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs" @click="selectConsumableForFeed(row.type)">Feed</button>
             </div>
             <div class="mt-3 grid grid-cols-2 gap-2 text-sm">
-              <span class="text-slate-500">Qty</span>
+              <span class="text-slate-500">Bags left</span>
               <span class="font-mono text-right">{{ n2(row.qty) }}</span>
               <span class="text-slate-500">Weight</span>
               <span class="font-mono text-right">{{ n2(row.weight) }} KG</span>
-              <span class="text-slate-500">Status</span>
-              <span class="text-right">
-                <span
-                  class="pp-badge text-xs"
-                  :class="(row.qty > 0 || row.weight > 0) ? 'bg-green-100 text-green-800' : 'bg-slate-100 text-slate-600'"
-                >
-                  {{ (row.qty > 0 || row.weight > 0) ? 'active' : 'consumed' }}
-                </span>
-              </span>
+              <span class="text-slate-500">Lots</span>
+              <span class="font-mono text-right">{{ row.lotCount }}</span>
             </div>
+          </div>
+        </div>
+
+        <div class="pp-card p-6">
+          <h2 class="font-semibold border-b pb-2 mb-4">Active Lots</h2>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm min-w-[720px]">
+              <thead class="text-xs uppercase text-slate-500 bg-slate-50">
+                <tr>
+                  <th class="p-3 text-left">Date</th>
+                  <th class="p-3 text-left">Type</th>
+                  <th class="p-3 text-right">Pack KG</th>
+                  <th class="p-3 text-right">Bags</th>
+                  <th class="p-3 text-right">KG left</th>
+                  <th class="p-3 text-left">Remark</th>
+                  <th class="p-3 text-right">Consume</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y">
+                <tr v-for="lot in activeConsumableLots" :key="lot.id">
+                  <td class="p-3 whitespace-nowrap">{{ lot.date }}</td>
+                  <td class="p-3">{{ STOCK_LABELS[lot.stock_type] }}</td>
+                  <td class="p-3 text-right font-mono">{{ n2(lot.pack_size_kg) }}</td>
+                  <td class="p-3 text-right font-mono">{{ n2(lot.packs_remaining) }} / {{ n2(lot.packs_total) }}</td>
+                  <td class="p-3 text-right font-mono">{{ n2(lot.weight_remaining) }}</td>
+                  <td class="p-3 text-xs text-slate-600 max-w-[12rem] truncate" :title="lot.remark || ''">{{ lot.remark || '—' }}</td>
+                  <td class="p-3 text-right">
+                    <div class="inline-flex flex-col items-end gap-1 min-w-[9rem]">
+                      <input v-model.number="lotDraft(lot).packs" type="number" min="0" step="0.001" class="pp-input !py-1 !text-xs text-right w-full" placeholder="Bags" />
+                      <input v-model.number="lotDraft(lot).weight" type="number" min="0" step="0.001" class="pp-input !py-1 !text-xs text-right w-full" placeholder="KG" />
+                      <input v-model="lotDraft(lot).remark" class="pp-input !py-1 !text-xs w-full" placeholder="Use remark" />
+                      <div class="flex gap-1">
+                        <button type="button" class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs" @click="consumeLotAction(lot, 'partial')">Cut</button>
+                        <button type="button" class="pp-btn pp-btn-primary !py-1 !px-2 text-xs" @click="consumeLotAction(lot, 'full')">Full</button>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+                <tr v-if="activeConsumableLots.length === 0">
+                  <td colspan="7" class="p-8 text-center text-slate-400">No active lots — left se add karo ya purchase confirm karo.</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
 
@@ -1774,7 +1890,7 @@ onMounted(async () => {
                   <th class="p-3 text-left">Source</th>
                   <th class="p-3 text-right">In</th>
                   <th class="p-3 text-right">Out</th>
-                  <th class="p-3 text-left">Notes</th>
+                  <th class="p-3 text-left">Notes / Remark</th>
                 </tr>
               </thead>
               <tbody class="divide-y">

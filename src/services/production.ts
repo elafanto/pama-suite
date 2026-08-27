@@ -8,6 +8,7 @@ import type {
   Purchase,
   ReelStock,
   StockMovement,
+  ConsumableLot,
 } from '@/types/models'
 
 const plain = <X>(o: X): X => JSON.parse(JSON.stringify(o))
@@ -53,9 +54,10 @@ export const STOCK_LABELS: Record<ProductionStockType, string> = {
   trimmed_sheet: 'Trimmed Sheet',
   printed_sheet: 'Printed / Slotted Sheet',
   finished_box: 'Finished Box',
-  glue: 'Glue',
+  glue: 'Gum',
   ink: 'Ink',
   stitching_wire: 'Stitching Wire',
+  strapping_roll: 'Strapping Roll',
   waste: 'Waste',
 }
 
@@ -64,7 +66,9 @@ export function newStockMovement(data: Omit<StockMovement, 'id' | 'created_at' |
   return plain({ ...data, id: uid(), created_at: now, updated_at: now, is_deleted: false, _dirty: true })
 }
 
-const CONSUMABLE_STOCK_TYPES = new Set<ProductionStockType>(['glue', 'ink', 'stitching_wire'])
+const CONSUMABLE_STOCK_TYPES = new Set<ProductionStockType>(['glue', 'ink', 'stitching_wire', 'strapping_roll'])
+
+export const CONSUMABLE_TYPES = ['glue', 'ink', 'stitching_wire', 'strapping_roll'] as const
 
 export interface PurchaseReelSpec {
   reel_no: string
@@ -76,6 +80,7 @@ export interface PurchaseReelSpec {
   opening_weight: number
   rate: number
   note: string
+  remark?: string
 }
 
 function roundWeight(value: number | undefined | null) {
@@ -355,6 +360,7 @@ function normalizeConfirmedSpecs(specs: PurchaseReelSpec[]): PurchaseReelSpec[] 
       opening_weight,
       rate: Number(spec.rate) || 0,
       note: spec.note || `${paper_type} reel ${reel_no || `#${idx + 1}`}`,
+      remark: String(spec.remark || '').trim() || undefined,
     }
   }).filter((spec) => reelKey(spec.reel_no))
 }
@@ -397,6 +403,7 @@ export async function createManualReels(data: {
   date?: string
   rate?: number
   intake_condition?: ReelIntakeCondition
+  remark?: string
   /** Legacy: base reel no + copies + shared opening_weight */
   reel_no?: string
   opening_weight?: number
@@ -442,6 +449,7 @@ export async function createManualReels(data: {
   const mill = String(data.supplier_name || '').trim()
   const date = data.date || now.slice(0, 10)
   const intake_condition: ReelIntakeCondition = data.intake_condition === 'partial' ? 'partial' : 'fresh'
+  const remark = String(data.remark || '').trim()
   const created: ReelStock[] = []
 
   await db.transaction('rw', db.reel_stocks, db.stock_movements, async () => {
@@ -465,6 +473,7 @@ export async function createManualReels(data: {
         rate: Number(data.rate) || 0,
         status: 'active' as const,
         intake_condition,
+        remark: remark || undefined,
         created_at: now,
         updated_at: now,
         is_deleted: false,
@@ -484,7 +493,9 @@ export async function createManualReels(data: {
         weight_out: 0,
         waste_qty: 0,
         waste_weight: 0,
-        notes: `Manual reel opening — ${line.reel_no} (${mill}, ${intake_condition})`,
+        notes: remark
+          ? `Manual reel opening — ${line.reel_no} (${mill}, ${intake_condition}) · ${remark}`
+          : `Manual reel opening — ${line.reel_no} (${mill}, ${intake_condition})`,
       })
 
       await db.reel_stocks.add(reel)
@@ -623,6 +634,7 @@ export async function createReelsFromPurchase(purchase: Purchase, confirmedSpecs
           current_weight: currentWeight,
           rate: spec.rate,
           status: currentWeight > 0 ? 'active' : 'consumed',
+          remark: String(spec.remark || matched.remark || '').trim() || undefined,
           updated_at: now,
           is_deleted: false,
           _dirty: true,
@@ -646,6 +658,7 @@ export async function createReelsFromPurchase(purchase: Purchase, confirmedSpecs
           current_weight: spec.opening_weight,
           rate: spec.rate,
           status: spec.opening_weight > 0 ? 'active' : 'consumed',
+          remark: String(spec.remark || '').trim() || undefined,
           created_at: now,
           updated_at: now,
           is_deleted: false,
@@ -927,13 +940,21 @@ export async function fullConsumeReels(data: {
   })
 }
 
-export type ConsumableStockType = 'glue' | 'ink' | 'stitching_wire'
+export type ConsumableStockType = 'glue' | 'ink' | 'stitching_wire' | 'strapping_roll'
 
 export interface PurchaseConsumableSpec {
   stock_type: ConsumableStockType
+  /** Bags / rolls count (stored as qty_in on movements). */
   qty: number
+  /** Total KG. */
   weight: number
+  /** KG per bag/roll. */
+  pack_size_kg?: number
+  /** Alias for qty when entering as packs. */
+  packs?: number
   note: string
+  remark?: string
+  rate?: number
 }
 
 export function purchaseHasConsumableLines(purchase: Pick<Purchase, 'items'>): boolean {
@@ -946,13 +967,19 @@ export function proposePurchaseConsumableSpecs(purchase: Purchase): PurchaseCons
     .map((row) => {
       const qty = Math.max(0, Number(row.qty) || 0)
       const unit = String(row.unit || '').trim().toUpperCase()
-      const weight = unit === 'KG' ? qty : Math.max(0, Number((row as any).weight) || 0)
       const stock_type = row.consumable_type as ConsumableStockType
+      const pack_size_kg = unit === 'KG' ? (qty > 0 ? qty : 25) : 25
+      const packs = unit === 'KG' ? 1 : Math.max(1, Math.round(qty) || 0)
+      const weight = unit === 'KG' ? qty : roundWeight(packs * pack_size_kg)
       return {
         stock_type,
-        qty,
+        qty: packs,
+        packs,
+        pack_size_kg,
         weight,
+        rate: Number(row.rate) || 0,
         note: `${STOCK_LABELS[stock_type]} from purchase ${purchase.bill_no}`,
+        remark: '',
       }
     })
     .filter((row) => row.qty > 0 || row.weight > 0)
@@ -960,10 +987,16 @@ export function proposePurchaseConsumableSpecs(purchase: Purchase): PurchaseCons
 
 export async function reversePurchaseConsumables(purchaseId: string) {
   const now = nowISO()
-  const moves = await db.stock_movements.where('ref_id').equals(purchaseId).toArray()
-  for (const m of moves.filter((x) => x.source === 'purchase' && CONSUMABLE_STOCK_TYPES.has(x.stock_type))) {
-    await db.stock_movements.put({ ...m, is_deleted: true, updated_at: now, _dirty: true })
-  }
+  await db.transaction('rw', db.stock_movements, db.consumable_lots, async () => {
+    const moves = await db.stock_movements.where('ref_id').equals(purchaseId).toArray()
+    for (const m of moves.filter((x) => x.source === 'purchase' && CONSUMABLE_STOCK_TYPES.has(x.stock_type))) {
+      await db.stock_movements.put({ ...m, is_deleted: true, updated_at: now, _dirty: true })
+    }
+    const lots = await db.consumable_lots.where('purchase_id').equals(purchaseId).toArray()
+    for (const lot of lots) {
+      await db.consumable_lots.put({ ...lot, is_deleted: true, updated_at: now, _dirty: true })
+    }
+  })
 }
 
 export function getConsumableBalance(
@@ -975,6 +1008,24 @@ export function getConsumableBalance(
   return {
     qty: Math.max(0, Math.round((Number(bal.qty) || 0) * 1000) / 1000),
     weight: Math.max(0, Math.round((Number(bal.weight) || 0) * 1000) / 1000),
+  }
+}
+
+export function consumableLotTotals(
+  lots: ConsumableLot[],
+  firmId: string,
+  stockType?: ConsumableStockType,
+): { packs: number; weight: number; lots: number } {
+  const rows = lots.filter((lot) =>
+    !lot.is_deleted
+    && lot.firm_id === firmId
+    && lot.status === 'active'
+    && (!stockType || lot.stock_type === stockType),
+  )
+  return {
+    packs: roundWeight(rows.reduce((s, lot) => s + (Number(lot.packs_remaining) || 0), 0)),
+    weight: roundWeight(rows.reduce((s, lot) => s + (Number(lot.weight_remaining) || 0), 0)),
+    lots: rows.length,
   }
 }
 
@@ -1000,26 +1051,197 @@ export function resolveConsumableFeed(
   return { qty, weight }
 }
 
+function normalizeConsumableLotInput(data: {
+  stock_type: ConsumableStockType
+  pack_size_kg?: number
+  packs?: number
+  qty?: number
+  weight?: number
+}) {
+  if (!CONSUMABLE_STOCK_TYPES.has(data.stock_type)) throw new Error('Consumable type select karo')
+  const packs = roundWeight(data.packs ?? data.qty)
+  let pack_size_kg = roundWeight(data.pack_size_kg)
+  let weight = roundWeight(data.weight)
+  if (packs <= 0 && weight <= 0) throw new Error('Bags / rolls ya weight enter karo')
+  if (pack_size_kg <= 0 && packs > 0 && weight > 0) {
+    pack_size_kg = roundWeight(weight / packs)
+  }
+  if (pack_size_kg <= 0 && weight > 0 && packs <= 0) {
+    pack_size_kg = weight
+  }
+  if (pack_size_kg <= 0) pack_size_kg = 25
+  const finalPacks = packs > 0 ? packs : 1
+  if (weight <= 0) weight = roundWeight(finalPacks * pack_size_kg)
+  return { packs: finalPacks, pack_size_kg, weight }
+}
+
+export async function createConsumableLot(data: {
+  firm_id: string
+  date: string
+  stock_type: ConsumableStockType
+  pack_size_kg?: number
+  packs?: number
+  qty?: number
+  weight?: number
+  rate?: number
+  remark?: string
+  notes?: string
+  supplier_name?: string
+  supplier_id?: string | null
+  purchase_id?: string
+  purchase_bill_no?: string
+  source?: StockMovement['source']
+}) {
+  const { packs, pack_size_kg, weight } = normalizeConsumableLotInput(data)
+  const remark = String(data.remark || data.notes || '').trim()
+  const now = nowISO()
+  const date = data.date || now.slice(0, 10)
+  const lot = plain({
+    id: uid(),
+    firm_id: data.firm_id,
+    stock_type: data.stock_type,
+    date,
+    supplier_id: data.supplier_id ?? null,
+    supplier_name: data.supplier_name || '',
+    purchase_id: data.purchase_id,
+    purchase_bill_no: data.purchase_bill_no,
+    pack_size_kg,
+    packs_total: packs,
+    packs_remaining: packs,
+    weight_total: weight,
+    weight_remaining: weight,
+    rate: Number(data.rate) || 0,
+    status: 'active' as const,
+    remark: remark || undefined,
+    created_at: now,
+    updated_at: now,
+    is_deleted: false,
+    _dirty: true,
+  }) as ConsumableLot
+
+  const movement = newStockMovement({
+    firm_id: data.firm_id,
+    date,
+    source: data.source || (data.purchase_id ? 'purchase' : 'adjustment'),
+    ref_id: data.purchase_id || lot.id,
+    stock_type: data.stock_type,
+    stock_ref_id: lot.id,
+    qty_in: packs,
+    qty_out: 0,
+    weight_in: weight,
+    weight_out: 0,
+    waste_qty: 0,
+    waste_weight: 0,
+    notes: remark
+      ? `${STOCK_LABELS[data.stock_type]} lot — ${packs} × ${pack_size_kg} KG · ${remark}`
+      : `${STOCK_LABELS[data.stock_type]} lot — ${packs} × ${pack_size_kg} KG`,
+  })
+
+  await db.transaction('rw', db.consumable_lots, db.stock_movements, async () => {
+    await db.consumable_lots.add(lot)
+    await db.stock_movements.add(movement)
+  })
+  return lot
+}
+
+export async function consumeConsumableLot(data: {
+  firm_id: string
+  lot_id: string
+  date?: string
+  mode?: 'full' | 'partial'
+  packs?: number
+  weight?: number
+  remark?: string
+  notes?: string
+}) {
+  const lot = await db.consumable_lots.get(data.lot_id)
+  if (!lot || lot.is_deleted || lot.firm_id !== data.firm_id) {
+    throw new Error('Consumable lot nahi mila')
+  }
+  if (lot.status !== 'active' || (Number(lot.packs_remaining) || 0) <= 0 && (Number(lot.weight_remaining) || 0) <= 0) {
+    throw new Error('Lot already consumed')
+  }
+
+  const availPacks = roundWeight(lot.packs_remaining)
+  const availWeight = roundWeight(lot.weight_remaining)
+  const packSize = roundWeight(lot.pack_size_kg) || (availPacks > 0 ? roundWeight(availWeight / availPacks) : 0)
+
+  let usePacks = 0
+  let useWeight = 0
+  if (data.mode === 'full') {
+    usePacks = availPacks
+    useWeight = availWeight
+  } else {
+    usePacks = roundWeight(data.packs)
+    useWeight = roundWeight(data.weight)
+    if (usePacks <= 0 && useWeight <= 0) throw new Error('Bags ya KG enter karo')
+    if (usePacks > 0 && useWeight <= 0 && packSize > 0) useWeight = roundWeight(usePacks * packSize)
+    if (useWeight > 0 && usePacks <= 0 && packSize > 0) {
+      usePacks = Math.min(availPacks, roundWeight(useWeight / packSize))
+    }
+    if (usePacks > availPacks) throw new Error(`Sirf ${availPacks} bags/rolls bache hain`)
+    if (useWeight > availWeight) throw new Error(`Sirf ${availWeight} KG available hai`)
+  }
+
+  const remainingPacks = roundWeight(availPacks - usePacks)
+  const remainingWeight = roundWeight(availWeight - useWeight)
+  const remark = String(data.remark || data.notes || '').trim()
+  const date = data.date || nowISO().slice(0, 10)
+  const now = nowISO()
+
+  const movement = newStockMovement({
+    firm_id: data.firm_id,
+    date,
+    source: 'consumption',
+    ref_id: lot.id,
+    stock_type: lot.stock_type,
+    stock_ref_id: lot.id,
+    qty_in: 0,
+    qty_out: usePacks,
+    weight_in: 0,
+    weight_out: useWeight,
+    waste_qty: 0,
+    waste_weight: 0,
+    notes: remark
+      ? `Consumed ${usePacks} pack / ${useWeight} KG — ${STOCK_LABELS[lot.stock_type]} · ${remark}`
+      : `Consumed ${usePacks} pack / ${useWeight} KG — ${STOCK_LABELS[lot.stock_type]}`,
+  })
+
+  await db.transaction('rw', db.consumable_lots, db.stock_movements, async () => {
+    await db.consumable_lots.put(plain({
+      ...lot,
+      packs_remaining: remainingPacks,
+      weight_remaining: remainingWeight,
+      status: remainingPacks <= 0.001 && remainingWeight <= 0.001 ? 'consumed' : 'active',
+      updated_at: now,
+      _dirty: true,
+    }))
+    await db.stock_movements.add(movement)
+  })
+  return movement
+}
+
+/** Legacy aggregate add — also creates a lot so register stays consistent. */
 export async function createManualConsumable(data: {
   firm_id: string
   date: string
   stock_type: ConsumableStockType
   qty: number
   weight: number
+  pack_size_kg?: number
   notes?: string
+  remark?: string
 }) {
-  if (!CONSUMABLE_STOCK_TYPES.has(data.stock_type)) throw new Error('Consumable type select karo')
-  const qty = roundWeight(data.qty)
-  const weight = roundWeight(data.weight)
-  if (qty <= 0 && weight <= 0) throw new Error('Qty ya weight enter karo')
-  return saveStockAdjustment({
+  return createConsumableLot({
     firm_id: data.firm_id,
     date: data.date,
     stock_type: data.stock_type,
-    mode: 'add',
-    qty,
-    weight,
-    notes: data.notes || `Manual consumable add — ${STOCK_LABELS[data.stock_type]}`,
+    packs: data.qty,
+    qty: data.qty,
+    weight: data.weight,
+    pack_size_kg: data.pack_size_kg,
+    remark: data.remark || data.notes,
+    notes: data.notes,
   })
 }
 
@@ -1031,11 +1253,55 @@ export async function feedConsumable(data: {
   qty?: number
   weight?: number
   notes?: string
+  remark?: string
   movements: StockMovement[]
+  lots?: ConsumableLot[]
 }) {
   if (!CONSUMABLE_STOCK_TYPES.has(data.stock_type)) throw new Error('Consumable type select karo')
-  const available = getConsumableBalance(data.movements, data.firm_id, data.stock_type)
+  const lots = (data.lots || await db.consumable_lots.where('firm_id').equals(data.firm_id).toArray())
+    .filter((lot) =>
+      !lot.is_deleted
+      && lot.stock_type === data.stock_type
+      && lot.status === 'active'
+      && ((Number(lot.packs_remaining) || 0) > 0 || (Number(lot.weight_remaining) || 0) > 0),
+    )
+    .sort((a, b) => a.date.localeCompare(b.date) || a.created_at.localeCompare(b.created_at))
+
+  const lotTotals = consumableLotTotals(lots, data.firm_id, data.stock_type)
+  const legacy = getConsumableBalance(data.movements, data.firm_id, data.stock_type)
+  // Prefer lot-based remaining; if lots cover the balance, use lot totals for feed resolve.
+  const available = lotTotals.weight > 0 || lotTotals.packs > 0
+    ? { qty: lotTotals.packs, weight: lotTotals.weight }
+    : legacy
+
   const feed = resolveConsumableFeed(data.mode, available, { qty: data.qty, weight: data.weight })
+  const remark = String(data.remark || data.notes || '').trim()
+
+  if (lots.length) {
+    let remainingPacks = feed.qty
+    let remainingWeight = feed.weight
+    let lastMove: StockMovement | null = null
+    for (const lot of lots) {
+      if (remainingPacks <= 0.001 && remainingWeight <= 0.001) break
+      const takePacks = Math.min(Number(lot.packs_remaining) || 0, remainingPacks)
+      const takeWeight = Math.min(Number(lot.weight_remaining) || 0, remainingWeight)
+      if (takePacks <= 0 && takeWeight <= 0) continue
+      lastMove = await consumeConsumableLot({
+        firm_id: data.firm_id,
+        lot_id: lot.id,
+        date: data.date,
+        mode: 'partial',
+        packs: takePacks,
+        weight: takeWeight,
+        remark,
+      })
+      remainingPacks = roundWeight(remainingPacks - takePacks)
+      remainingWeight = roundWeight(remainingWeight - takeWeight)
+    }
+    if (!lastMove) throw new Error('Consumable lot se feed nahi ho paya')
+    return lastMove
+  }
+
   return saveStockAdjustment({
     firm_id: data.firm_id,
     date: data.date,
@@ -1043,7 +1309,7 @@ export async function feedConsumable(data: {
     mode: 'consume',
     qty: feed.qty,
     weight: feed.weight,
-    notes: data.notes
+    notes: remark
       || (data.mode === 'full'
         ? `Full consumable feed — ${STOCK_LABELS[data.stock_type]}`
         : `Partial consumable feed — ${STOCK_LABELS[data.stock_type]}`),
@@ -1054,68 +1320,42 @@ export async function createConsumablesFromPurchase(purchase: Purchase, confirme
   const specs = (confirmedSpecs !== undefined
     ? confirmedSpecs
     : proposePurchaseConsumableSpecs(purchase)
-  ).map((row) => ({
-    stock_type: row.stock_type,
-    qty: Math.max(0, Number(row.qty) || 0),
-    weight: Math.max(0, Number(row.weight) || 0),
-    note: row.note || `${STOCK_LABELS[row.stock_type]} from purchase ${purchase.bill_no}`,
-  })).filter((row) => row.qty > 0 || row.weight > 0)
+  ).map((row) => {
+    const packs = Math.max(0, Number(row.packs ?? row.qty) || 0)
+    const pack_size_kg = Math.max(0, Number(row.pack_size_kg) || 0)
+    const weight = Math.max(0, Number(row.weight) || 0) || roundWeight(packs * (pack_size_kg || 25))
+    return {
+      stock_type: row.stock_type,
+      packs,
+      qty: packs,
+      pack_size_kg: pack_size_kg || (packs > 0 ? roundWeight(weight / packs) : 25),
+      weight,
+      rate: Number(row.rate) || 0,
+      note: row.note || `${STOCK_LABELS[row.stock_type]} from purchase ${purchase.bill_no}`,
+      remark: String(row.remark || '').trim(),
+    }
+  }).filter((row) => row.packs > 0 || row.weight > 0)
 
-  const rows = specs.map((row) => ({
-    firm_id: purchase.firm_id,
-    date: purchase.received_date || purchase.date,
-    source: 'purchase' as const,
-    ref_id: purchase.id,
-    stock_type: row.stock_type,
-    qty_in: row.qty,
-    qty_out: 0,
-    weight_in: row.weight,
-    weight_out: 0,
-    waste_qty: 0,
-    waste_weight: 0,
-    notes: row.note,
-  }))
-
-  const existing = await db.stock_movements
-    .where('ref_id')
-    .equals(purchase.id)
-    .filter((m) => m.source === 'purchase' && CONSUMABLE_STOCK_TYPES.has(m.stock_type))
-    .toArray()
-  const unused = [...existing]
-  const now = nowISO()
   let count = 0
-
-  await db.transaction('rw', db.stock_movements, async () => {
-    for (const row of rows) {
-      const existingIdx = unused.findIndex((movement) =>
-        !movement.is_deleted &&
-        movement.stock_type === row.stock_type &&
-        Number(movement.qty_in) === row.qty_in &&
-        Number(movement.weight_in) === row.weight_in &&
-        movement.date === row.date,
-      )
-      const movement = existingIdx >= 0 ? unused.splice(existingIdx, 1)[0] : undefined
-      if (movement) {
-        await db.stock_movements.put(plain({
-          ...movement,
-          ...row,
-          updated_at: now,
-          is_deleted: false,
-          _dirty: true,
-        }))
-      } else {
-        await db.stock_movements.add(newStockMovement(row))
-      }
-      count++
-    }
-
-    for (const movement of unused) {
-      if (!movement.is_deleted) {
-        await db.stock_movements.put({ ...movement, is_deleted: true, updated_at: now, _dirty: true })
-      }
-    }
-  })
-
+  for (const row of specs) {
+    await createConsumableLot({
+      firm_id: purchase.firm_id,
+      date: purchase.received_date || purchase.date,
+      stock_type: row.stock_type,
+      packs: row.packs,
+      pack_size_kg: row.pack_size_kg,
+      weight: row.weight,
+      rate: row.rate,
+      remark: row.remark || row.note,
+      notes: row.note,
+      supplier_name: purchase.supplier_name,
+      supplier_id: purchase.supplier_id,
+      purchase_id: purchase.id,
+      purchase_bill_no: purchase.bill_no,
+      source: 'purchase',
+    })
+    count++
+  }
   return count
 }
 
@@ -1223,6 +1463,7 @@ export function productionBalance(movements: StockMovement[], firmId: string, jo
     glue: { qty: 0, weight: 0, wasteQty: 0, wasteWeight: 0 },
     ink: { qty: 0, weight: 0, wasteQty: 0, wasteWeight: 0 },
     stitching_wire: { qty: 0, weight: 0, wasteQty: 0, wasteWeight: 0 },
+    strapping_roll: { qty: 0, weight: 0, wasteQty: 0, wasteWeight: 0 },
     waste: { qty: 0, weight: 0, wasteQty: 0, wasteWeight: 0 },
   }
   for (const m of rows) {

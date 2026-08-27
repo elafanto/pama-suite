@@ -188,7 +188,7 @@ export interface PurchaseItemLine {
   reel_weight?: number
   reel_count?: number
   is_consumable?: boolean
-  consumable_type?: 'glue' | 'ink' | 'stitching_wire'
+  consumable_type?: 'glue' | 'ink' | 'stitching_wire' | 'strapping_roll'
   is_capital?: boolean
   capital_category?: CapitalCategory
   asset_tag?: string
@@ -488,6 +488,29 @@ export interface ReelStock extends BaseRecord {
   status: ReelStatus
   /** How the reel entered stock (manual batch). */
   intake_condition?: 'fresh' | 'partial'
+  /** Free remark — e.g. party / box item this reel is for. */
+  remark?: string
+}
+
+export type ConsumableLotStatus = 'active' | 'consumed'
+
+/** Pack/bag-based consumable stock (gum, ink, wire, strapping) — no bag numbering. */
+export interface ConsumableLot extends BaseRecord {
+  stock_type: 'glue' | 'ink' | 'stitching_wire' | 'strapping_roll'
+  date: string
+  supplier_id?: string | null
+  supplier_name?: string
+  purchase_id?: string
+  purchase_bill_no?: string
+  /** KG per bag / roll. */
+  pack_size_kg: number
+  packs_total: number
+  packs_remaining: number
+  weight_total: number
+  weight_remaining: number
+  rate: number
+  status: ConsumableLotStatus
+  remark?: string
 }
 
 export type ProductionJobStatus = 'open' | 'in_progress' | 'ready' | 'dispatched' | 'closed'
@@ -524,6 +547,7 @@ export type ProductionStockType =
   | 'glue'
   | 'ink'
   | 'stitching_wire'
+  | 'strapping_roll'
   | 'waste'
 
 export interface ProductionStageEntry extends BaseRecord {

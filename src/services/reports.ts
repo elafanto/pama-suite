@@ -51,8 +51,17 @@ function isReceivableCreditDoc(invoice: Invoice) {
   return salesDocKind(invoice) === 'CREDIT_NOTE'
 }
 
+function roundMoney(n: number) {
+  return Math.round((Number(n) || 0) * 100) / 100
+}
+
 function receivableDebitOutstanding(invoice: Invoice) {
-  return Math.max(0, (invoice.grand_total || 0) - (invoice.amt_paid || 0))
+  return Math.max(0, roundMoney((invoice.grand_total || 0) - (invoice.amt_paid || 0)))
+}
+
+/** Excess payment parked on one bill — treat as party credit for FIFO allocation. */
+function receivableOverpayment(invoice: Invoice) {
+  return Math.max(0, roundMoney((invoice.amt_paid || 0) - (invoice.grand_total || 0)))
 }
 
 function receivableCreditAmount(invoice: Invoice) {
@@ -130,6 +139,8 @@ export function outstandingAging(invoices: Invoice[]): AgingRow[] {
       continue
     }
     if (!isReceivableDebitDoc(b)) continue
+    const over = receivableOverpayment(b)
+    if (over > 0.01) bucket.credit += over
     const out = receivableDebitOutstanding(b)
     if (out <= 0.01) continue
     bucket.debits.push({ date: b.date, amount: out })
@@ -172,21 +183,43 @@ export function customerReceivableSummary(invoices: Invoice[]) {
     const key = inv.party_name || 'Unknown'
     const row = map.get(key) || { customer: key, billed: 0, received: 0, credits: 0, outstanding: 0, bills: 0 }
     if (isReceivableCreditDoc(inv)) {
-      const credit = receivableCreditAmount(inv)
-      row.credits += credit
-      row.outstanding -= credit
+      row.credits += receivableCreditAmount(inv)
     } else if (isReceivableDebitDoc(inv)) {
       row.billed += inv.grand_total || 0
       row.received += inv.amt_paid || 0
-      row.outstanding += receivableDebitOutstanding(inv)
     } else {
       continue
     }
     row.bills += 1
-    row.outstanding = Math.round(row.outstanding * 100) / 100
     map.set(key, row)
   }
-  return [...map.values()].sort((a, b) => b.outstanding - a.outstanding)
+  return [...map.values()]
+    .map((row) => ({
+      ...row,
+      billed: roundMoney(row.billed),
+      received: roundMoney(row.received),
+      credits: roundMoney(row.credits),
+      outstanding: Math.max(0, roundMoney(row.billed - row.received - row.credits)),
+    }))
+    .sort((a, b) => b.outstanding - a.outstanding)
+}
+
+/** Vendor payables with lump-sum overpayment applied per supplier. */
+export function totalVendorPayable(purchases: Array<{ supplier_name?: string | null; grand_total?: number; amt_paid?: number; is_deleted?: boolean }>) {
+  const bySupplier = new Map<string, { billed: number; paid: number }>()
+  for (const pur of purchases) {
+    if (pur.is_deleted) continue
+    const key = pur.supplier_name || 'Unknown'
+    const row = bySupplier.get(key) || { billed: 0, paid: 0 }
+    row.billed += pur.grand_total || 0
+    row.paid += pur.amt_paid || 0
+    bySupplier.set(key, row)
+  }
+  let total = 0
+  for (const row of bySupplier.values()) {
+    total += Math.max(0, roundMoney(row.billed - row.paid))
+  }
+  return roundMoney(total)
 }
 
 export interface CashBookRow {

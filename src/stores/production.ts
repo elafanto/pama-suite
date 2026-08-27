@@ -6,6 +6,7 @@ import { useFirmStore } from './firm'
 import { logActivity } from '@/services/activityLog'
 import {
   consumePaperReel,
+  consumeConsumableLot,
   createManualConsumable,
   createManualReels,
   feedConsumable,
@@ -20,7 +21,7 @@ import {
   updateReelRemainingWeight,
   type ConsumableStockType,
 } from '@/services/production'
-import type { PaperType, ProductionJob, ProductionStageEntry, ProductionStockType, ReelStock, StockMovement } from '@/types/models'
+import type { ConsumableLot, PaperType, ProductionJob, ProductionStageEntry, ProductionStockType, ReelStock, StockMovement } from '@/types/models'
 
 const plain = <X>(o: X): X => JSON.parse(JSON.stringify(o))
 
@@ -28,21 +29,24 @@ export const useProductionStore = defineStore('production', () => {
   const jobs = ref<ProductionJob[]>([])
   const stages = ref<ProductionStageEntry[]>([])
   const reels = ref<ReelStock[]>([])
+  const consumableLots = ref<ConsumableLot[]>([])
   const movements = ref<StockMovement[]>([])
   const loaded = ref(false)
 
   async function load() {
     const firm = useFirmStore()
     const firmId = firm.activeFirmId
-    const [j, s, r, m] = await Promise.all([
+    const [j, s, r, lots, m] = await Promise.all([
       db.production_jobs.where('firm_id').equals(firmId).filter((x) => !x.is_deleted).toArray(),
       db.production_stages.where('firm_id').equals(firmId).filter((x) => !x.is_deleted).toArray(),
       db.reel_stocks.where('firm_id').equals(firmId).filter((x) => !x.is_deleted).toArray(),
+      db.consumable_lots.where('firm_id').equals(firmId).filter((x) => !x.is_deleted).toArray(),
       db.stock_movements.where('firm_id').equals(firmId).filter((x) => !x.is_deleted).toArray(),
     ])
     jobs.value = j.sort((a, b) => (b.date || '').localeCompare(a.date || ''))
     stages.value = s.sort((a, b) => (b.date || '').localeCompare(a.date || ''))
     reels.value = r.sort((a, b) => a.reel_no.localeCompare(b.reel_no))
+    consumableLots.value = lots.sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.created_at.localeCompare(a.created_at))
     movements.value = m.sort((a, b) => (b.date || '').localeCompare(a.date || ''))
     loaded.value = true
   }
@@ -126,6 +130,7 @@ export const useProductionStore = defineStore('production', () => {
     date?: string
     copies?: number
     intake_condition?: 'fresh' | 'partial'
+    remark?: string
     lines?: Array<{ reel_no: string; opening_weight: number }>
   }) {
     const firm = useFirmStore()
@@ -181,11 +186,13 @@ export const useProductionStore = defineStore('production', () => {
     stock_type: ConsumableStockType
     qty: number
     weight: number
+    pack_size_kg?: number
     notes?: string
+    remark?: string
   }) {
     const firm = useFirmStore()
     const rec = await createManualConsumable({ ...data, firm_id: firm.activeFirmId })
-    await logActivity(rec.firm_id, 'create', 'stock_movement', rec.id, rec.notes || 'Consumable added')
+    await logActivity(firm.activeFirmId, 'create', 'consumable_lot', rec.id, rec.remark || 'Consumable lot added')
     await load()
     return rec
   }
@@ -197,19 +204,35 @@ export const useProductionStore = defineStore('production', () => {
     qty?: number
     weight?: number
     notes?: string
+    remark?: string
   }) {
     const firm = useFirmStore()
     const rec = await feedConsumable({
       ...data,
       firm_id: firm.activeFirmId,
       movements: movements.value,
+      lots: consumableLots.value,
     })
     await logActivity(rec.firm_id, 'consume', 'stock_movement', rec.id, rec.notes || 'Consumable fed')
     await load()
     return rec
   }
 
-  /** Soft-delete one reel + its linked stock_movements (purchase bills untouched). */
+  async function consumeLot(data: {
+    lot_id: string
+    mode?: 'full' | 'partial'
+    packs?: number
+    weight?: number
+    remark?: string
+    date?: string
+  }) {
+    const firm = useFirmStore()
+    const rec = await consumeConsumableLot({ ...data, firm_id: firm.activeFirmId })
+    await logActivity(firm.activeFirmId, 'consume', 'consumable_lot', data.lot_id, rec.notes || 'Consumable lot consumed')
+    await load()
+    return rec
+  }
+
   async function deleteReel(reelId: string) {
     const firm = useFirmStore()
     const reel = reels.value.find((r) => r.id === reelId)
@@ -228,7 +251,6 @@ export const useProductionStore = defineStore('production', () => {
     return result
   }
 
-  /** Soft-delete multiple reels + linked movements. */
   async function deleteReels(reelIds: string[]) {
     const firm = useFirmStore()
     const result = await softDeleteReelsWithMovements(firm.activeFirmId, reelIds)
@@ -246,13 +268,11 @@ export const useProductionStore = defineStore('production', () => {
     return result
   }
 
-  /** Soft-delete all consumed reels (and their movements) for the active firm. */
   async function deleteConsumedReels() {
     const targets = filterReelsForDeletion(reels.value, { consumedOnly: true })
     return deleteReels(targets.map((r) => r.id))
   }
 
-  /** Soft-delete reels created on/before beforeDate (YYYY-MM-DD), optionally consumed-only. */
   async function deleteReelsBeforeDate(beforeDate: string, opts?: { consumedOnly?: boolean }) {
     const targets = filterReelsForDeletion(reels.value, {
       beforeDate,
@@ -261,7 +281,6 @@ export const useProductionStore = defineStore('production', () => {
     return deleteReels(targets.map((r) => r.id))
   }
 
-  /** Wipe all firm reel stock (active + consumed) + linked movements. */
   async function resetAllReelStock() {
     const firm = useFirmStore()
     const result = await resetAllFirmReelStock(firm.activeFirmId)
@@ -279,27 +298,27 @@ export const useProductionStore = defineStore('production', () => {
     return result
   }
 
-  /** Partial consume by setting remaining KG. */
-  async function updateReelRemaining(reelId: string, remainingKg: number, date?: string) {
+  async function updateReelRemaining(reelId: string, remainingKg: number, date?: string, notes?: string) {
     const firm = useFirmStore()
     const rec = await updateReelRemainingWeight({
       firm_id: firm.activeFirmId,
       reel_id: reelId,
       remaining_kg: remainingKg,
       date,
+      notes,
     })
     await logActivity(firm.activeFirmId, 'consume', 'reel_stock', reelId, rec.notes || 'Remaining weight updated')
     await load()
     return rec
   }
 
-  /** Full-consume selected reel ids. */
-  async function fullConsumeSelected(reelIds: string[], date?: string) {
+  async function fullConsumeSelected(reelIds: string[], date?: string, notes?: string) {
     const firm = useFirmStore()
     const recs = await fullConsumeReels({
       firm_id: firm.activeFirmId,
       reel_ids: reelIds,
       date,
+      notes,
     })
     await logActivity(
       firm.activeFirmId,
@@ -316,6 +335,7 @@ export const useProductionStore = defineStore('production', () => {
     jobs,
     stages,
     reels,
+    consumableLots,
     movements,
     loaded,
     load,
@@ -329,6 +349,7 @@ export const useProductionStore = defineStore('production', () => {
     feedReelsBatch,
     addManualConsumable,
     feedConsumableStock,
+    consumeLot,
     deleteReel,
     deleteReels,
     deleteConsumedReels,

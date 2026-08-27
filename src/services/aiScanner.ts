@@ -19,7 +19,7 @@ const MAX_PDF_BYTES = 20 * 1024 * 1024
 const SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 const SUPPORTED_PDF_MIME_TYPES = new Set(['application/pdf'])
 
-export type ConsumableScanType = 'glue' | 'ink' | 'stitching_wire'
+export type ConsumableScanType = 'glue' | 'ink' | 'stitching_wire' | 'strapping_roll'
 
 export interface ScanLineItem {
   name: string
@@ -373,7 +373,7 @@ For paper reel stock lines, extract reel metadata when visible. Use paperType "K
   "items": [{
     "name":"","qty":0,"unit":"KG","rate":0,"hsn":"","gst":18,
     "isConsumable": false,
-    "consumableType": "glue|ink|stitching_wire",
+    "consumableType": "glue|ink|stitching_wire|strapping_roll",
     "isKraftReel": false,
     "paperType": "KRAFT|DUPLEX",
     "reelNo": "",
@@ -404,7 +404,7 @@ The uploaded file may be a PDF or image with one or many supplier bills/invoices
 IMPORTANT: One supplier + one bill number = ONE bill even if it spans multiple pages. Merge all pages of the same bill into a single bills[] entry.
 Only create separate bills when supplier or bill number clearly changes.
 Extract all purchase bills as JSON only, no markdown. If uncertain, still return the best structured data and leave missing fields blank.
-Classify glue, ink and stitching wire line items as consumables.
+Classify glue/gum, ink, stitching wire and strapping roll line items as consumables.
 Classify paper reel line items as reels when reel/deckle/gsm/bf details are visible.
 For paper reel lines, extract paperType ("KRAFT" for kraft paper, "DUPLEX" for duplex paper), GSM, BF, color, deckle/reel size and reel weight. Use color "NS" for Natural Shade/Natural Brown/Neutral Brown and "GY" for Golden Yellow. If reel count or reel number is present, include it, but leave blank/0 when absent.
 {
@@ -427,7 +427,7 @@ For paper reel lines, extract paperType ("KRAFT" for kraft paper, "DUPLEX" for d
           "hsn": "",
           "gst": 18,
           "isConsumable": false,
-          "consumableType": "glue|ink|stitching_wire",
+          "consumableType": "glue|ink|stitching_wire|strapping_roll",
           "isKraftReel": false,
           "paperType": "KRAFT|DUPLEX",
           "reelNo": "",

@@ -34,6 +34,7 @@ type SyncTable =
   | 'accounts'
   | 'vouchers'
   | 'reel_stocks'
+  | 'consumable_lots'
   | 'production_jobs'
   | 'production_stages'
   | 'stock_movements'
@@ -54,6 +55,7 @@ const TABLE_MAP: Record<SyncTable, string> = {
   accounts: 'accounts',
   vouchers: 'vouchers',
   reel_stocks: 'reel_stocks',
+  consumable_lots: 'consumable_lots',
   production_jobs: 'production_jobs',
   production_stages: 'production_stages',
   stock_movements: 'stock_movements',
@@ -74,6 +76,7 @@ const PAYLOAD_TABLES: SyncTable[] = [
   'accounts',
   'vouchers',
   'reel_stocks',
+  'consumable_lots',
   'production_jobs',
   'production_stages',
   'stock_movements',
@@ -97,6 +100,7 @@ const LAST_SYNC_RESULT_KEY = 'pama_last_sync_result'
 const LAST_SYNC_ERROR_KEY = 'pama_last_sync_error'
 const OPTIONAL_TABLE_MIGRATIONS: Partial<Record<SyncTable, string>> = {
   reel_stocks: '005_production_tracking.sql',
+  consumable_lots: '017_consumable_lots.sql',
   production_jobs: '005_production_tracking.sql',
   production_stages: '005_production_tracking.sql',
   stock_movements: '005_production_tracking.sql',

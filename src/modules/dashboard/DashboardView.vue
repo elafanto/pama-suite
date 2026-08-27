@@ -9,7 +9,7 @@ import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useFirmStore } from '@/stores/firm'
 import { useProductionStore } from '@/stores/production'
-import { outstandingAging } from '@/services/reports'
+import { outstandingAging, totalVendorPayable } from '@/services/reports'
 import { listItemStockMovements } from '@/services/inventoryLedger'
 import { computeStock, stockSummary } from '@/services/stock'
 import type { Invoice, ItemStockMovement } from '@/types/models'
@@ -63,8 +63,8 @@ const stats = computed(() => {
   const purchases = purchaseStore.list.filter(p => p.firm_id === firmId && !p.is_deleted)
   const aging = outstandingAging(bills)
   const totalOut = aging.reduce((s, r) => s + r.total, 0)
-  const payable = purchases.reduce((s, p) => s + Math.max(0, (p.grand_total || 0) - (p.amt_paid || 0)), 0)
-  const unpaidCount = bills.filter(b => (b.grand_total - b.amt_paid) > 0.01).length
+  const payable = totalVendorPayable(purchases)
+  const unpaidCount = aging.reduce((s, r) => s + r.billCount, 0)
   const salesToday = bills.filter(b => b.date === today).reduce((s, b) => s + b.grand_total, 0)
   const salesMonth = bills.filter(b => b.date.startsWith(monthPrefix)).reduce((s, b) => s + b.grand_total, 0)
   const salesPrevMonth = bills.filter(b => b.date.startsWith(prevMonthPrefix)).reduce((s, b) => s + b.grand_total, 0)
@@ -119,6 +119,14 @@ const tools = [
 function n2(n: number) {
   return (n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
+
+/** Shrink long INR amounts so KPI cards don't overflow. */
+function moneyClass(n: number, base = 'text-2xl') {
+  const digits = Math.abs(Math.round(n || 0)).toString().length
+  if (digits >= 9) return 'text-base sm:text-lg'
+  if (digits >= 7) return 'text-lg sm:text-xl'
+  return base
+}
 </script>
 
 <template>
@@ -132,28 +140,28 @@ function n2(n: number) {
       <div class="flex-1 min-w-0 order-2 xl:order-1">
     <!-- Headline KPIs -->
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-      <div class="pp-card p-4 bg-gradient-to-br from-navy to-primary text-white">
+      <div class="pp-card p-4 bg-gradient-to-br from-navy to-primary text-white min-w-0 overflow-hidden">
         <div class="text-xs font-semibold text-sky-200 uppercase">Net (This Month)</div>
-        <div class="text-2xl font-extrabold mt-1" :class="stats.netMonth < 0 ? 'text-red-300' : 'text-white'">₹ {{ n2(stats.netMonth) }}</div>
+        <div class="font-extrabold mt-1 tabular-nums leading-tight break-words" :class="[moneyClass(stats.netMonth), stats.netMonth < 0 ? 'text-red-300' : 'text-white']">₹ {{ n2(stats.netMonth) }}</div>
         <div class="text-[11px] text-sky-300 mt-0.5">Sales − Purchases</div>
       </div>
-      <div class="pp-card p-4">
+      <div class="pp-card p-4 min-w-0 overflow-hidden">
         <div class="text-xs font-semibold text-slate-500 uppercase">Sales (Month)</div>
-        <div class="text-2xl font-extrabold text-teal-800 mt-1">₹ {{ n2(stats.salesMonth) }}</div>
+        <div class="font-extrabold text-teal-800 mt-1 tabular-nums leading-tight break-words" :class="moneyClass(stats.salesMonth)">₹ {{ n2(stats.salesMonth) }}</div>
         <div v-if="stats.momPct !== null" class="text-[11px] mt-0.5 font-semibold"
              :class="stats.momPct >= 0 ? 'text-emerald-600' : 'text-red-500'">
           {{ stats.momPct >= 0 ? '▲' : '▼' }} {{ Math.abs(stats.momPct) }}% vs last month
         </div>
         <div v-else class="text-[11px] text-slate-400 mt-0.5">no prior month data</div>
       </div>
-      <div class="pp-card p-4 border-l-4 border-red-400">
+      <div class="pp-card p-4 border-l-4 border-red-400 min-w-0 overflow-hidden">
         <div class="text-xs font-semibold text-slate-500 uppercase">Receivable</div>
-        <div class="text-2xl font-extrabold text-red-600 mt-1">₹ {{ n2(stats.outstanding) }}</div>
+        <div class="font-extrabold text-red-600 mt-1 tabular-nums leading-tight break-words" :class="moneyClass(stats.outstanding)">₹ {{ n2(stats.outstanding) }}</div>
         <div class="text-[11px] text-slate-400 mt-0.5">{{ stats.unpaidCount }} unpaid bills</div>
       </div>
-      <div class="pp-card p-4 border-l-4 border-orange-400">
+      <div class="pp-card p-4 border-l-4 border-orange-400 min-w-0 overflow-hidden">
         <div class="text-xs font-semibold text-slate-500 uppercase">Payable</div>
-        <div class="text-2xl font-extrabold text-orange-600 mt-1">₹ {{ n2(stats.payable) }}</div>
+        <div class="font-extrabold text-orange-600 mt-1 tabular-nums leading-tight break-words" :class="moneyClass(stats.payable)">₹ {{ n2(stats.payable) }}</div>
         <RouterLink to="/inventory" class="text-[11px] text-accent hover:underline mt-0.5 inline-block">
           {{ stats.lowStock }} items low/out of stock →
         </RouterLink>
@@ -193,34 +201,34 @@ function n2(n: number) {
       </div>
     </div>
 
-    <div class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
-      <div class="pp-card p-4 border-l-4 border-emerald-500">
+    <div class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-6">
+      <div class="pp-card p-4 border-l-4 border-emerald-500 min-w-0 overflow-hidden">
         <div class="text-xs font-bold text-slate-500 uppercase">Sales Today</div>
-        <div class="text-xl font-bold text-emerald-700 mt-1">₹ {{ n2(stats.salesToday) }}</div>
+        <div class="font-bold text-emerald-700 mt-1 tabular-nums leading-tight break-words" :class="moneyClass(stats.salesToday, 'text-xl')">₹ {{ n2(stats.salesToday) }}</div>
       </div>
-      <div class="pp-card p-4 border-l-4 border-blue-500">
+      <div class="pp-card p-4 border-l-4 border-blue-500 min-w-0 overflow-hidden">
         <div class="text-xs font-bold text-slate-500 uppercase">Purchases Today</div>
-        <div class="text-xl font-bold text-blue-700 mt-1">₹ {{ n2(stats.purchasesToday) }}</div>
+        <div class="font-bold text-blue-700 mt-1 tabular-nums leading-tight break-words" :class="moneyClass(stats.purchasesToday, 'text-xl')">₹ {{ n2(stats.purchasesToday) }}</div>
       </div>
-      <div class="pp-card p-4 border-l-4 border-indigo-500">
+      <div class="pp-card p-4 border-l-4 border-indigo-500 min-w-0 overflow-hidden">
         <div class="text-xs font-bold text-slate-500 uppercase">Purchases (Month)</div>
-        <div class="text-xl font-bold text-indigo-800 mt-1">₹ {{ n2(stats.purchasesMonth) }}</div>
+        <div class="font-bold text-indigo-800 mt-1 tabular-nums leading-tight break-words" :class="moneyClass(stats.purchasesMonth, 'text-xl')">₹ {{ n2(stats.purchasesMonth) }}</div>
       </div>
-      <div class="pp-card p-4 border-l-4 border-accent">
+      <div class="pp-card p-4 border-l-4 border-accent min-w-0">
         <div class="text-xs font-bold text-slate-500 uppercase">Total Bills</div>
         <div class="text-2xl font-bold text-navy mt-1">{{ stats.bills }}</div>
       </div>
-      <div class="pp-card p-4 border-l-4 border-emerald-500">
+      <div class="pp-card p-4 border-l-4 border-emerald-500 min-w-0">
         <div class="text-xs font-bold text-slate-500 uppercase">Parties</div>
         <div class="text-2xl font-bold text-navy mt-1">{{ stats.parties }}</div>
       </div>
-      <div class="pp-card p-4 border-l-4 border-indigo-500">
+      <div class="pp-card p-4 border-l-4 border-indigo-500 min-w-0">
         <div class="text-xs font-bold text-slate-500 uppercase">Items</div>
         <div class="text-2xl font-bold text-navy mt-1">{{ stats.items }}</div>
       </div>
-      <div class="pp-card p-4 border-l-4 border-amber-400">
+      <div class="pp-card p-4 border-l-4 border-amber-400 min-w-0 overflow-hidden col-span-2 lg:col-span-1">
         <div class="text-xs font-bold text-slate-500 uppercase">Stock Value</div>
-        <div class="text-2xl font-bold text-navy mt-1">₹ {{ n2(stats.stockValue) }}</div>
+        <div class="font-bold text-navy mt-1 tabular-nums leading-tight break-words" :class="moneyClass(stats.stockValue, 'text-xl')">₹ {{ n2(stats.stockValue) }}</div>
         <RouterLink to="/inventory" class="text-[11px] text-accent hover:underline">View inventory →</RouterLink>
       </div>
     </div>
