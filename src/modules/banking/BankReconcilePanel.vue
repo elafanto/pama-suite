@@ -283,7 +283,7 @@ function resetAll() {
       </div>
       <label class="flex items-center gap-2 text-sm text-slate-600">
         <input v-model="useGemini" type="checkbox" class="rounded" :disabled="!hasGeminiKey" />
-        <span>🤖 Gemini se match refine (payment aaye / gaye + bill link)</span>
+        <span>🤖 Gemini: party name + bill match (narration se party pehle)</span>
       </label>
       <button type="button" class="pp-btn pp-btn-primary" :disabled="busy" @click="runMatch">
         {{ busy ? 'Matching…' : 'Parse &amp; Match' }}
@@ -335,7 +335,10 @@ function resetAll() {
               <td class="p-3 text-xs text-slate-600 max-w-[16rem]">
                 <div class="truncate" :title="row.line.narration">{{ row.line.narration || '—' }}</div>
                 <div v-if="row.line.utr" class="font-mono text-[10px] text-slate-400">{{ row.line.utr }}</div>
-                <div v-if="row.geminiReason" class="text-[10px] text-teal-700 mt-1">{{ row.geminiReason }}</div>
+                <div v-if="row.geminiPartyName" class="text-[10px] font-semibold text-indigo-700 mt-1">
+                  Party: {{ row.geminiPartyName }}
+                </div>
+                <div v-if="row.geminiReason" class="text-[10px] text-teal-700 mt-0.5">{{ row.geminiReason }}</div>
               </td>
               <td class="p-3">
                 <div v-if="row.alreadyDone" class="text-xs text-emerald-700">Already reconciled</div>

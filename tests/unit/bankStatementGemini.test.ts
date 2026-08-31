@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { applyGeminiBankMatches, buildBillCatalog } from '@/services/bankStatementGemini'
+import {
+  applyGeminiBankMatches,
+  buildBillCatalog,
+  buildPartyCatalog,
+  catalogForParty,
+  suggestBillIdsForAmount,
+} from '@/services/bankStatementGemini'
 import { bankLineFingerprint } from '@/services/bankStatementParse'
 import type { BankMatchSuggestion } from '@/services/bankStatementMatch'
-import type { Invoice, Purchase } from '@/types/models'
+import type { Invoice, Party, Purchase } from '@/types/models'
 
 function suggestion(line: Partial<BankMatchSuggestion['line']> & Pick<BankMatchSuggestion['line'], 'rowIndex' | 'date' | 'amount' | 'side'>): BankMatchSuggestion {
   const fullLine = {
@@ -85,6 +91,34 @@ describe('bankStatementGemini', () => {
     }], catalog)
 
     expect(merged[0].selectedIds).toEqual([])
-    expect(merged[0].matchKind).toBe('unmatched')
+    expect(merged[0].matchKind).toBe('exact')
+  })
+
+  it('resolves party name only then suggests bill by amount', () => {
+    const parties = [{ id: 'v1', name: 'U K Paper Converters PVT LTD', roles: ['vendor'], is_deleted: false }] as Party[]
+    const partyCatalog = buildPartyCatalog(parties)
+    const cat = buildBillCatalog({ invoices: [] as Invoice[], purchases, parties })
+
+    const rows = [suggestion({
+      rowIndex: 3,
+      date: '2026-08-02',
+      amount: 10000,
+      side: 'debit',
+      narration: 'NEFT UK PAPER CONVERTERS',
+    })]
+
+    const merged = applyGeminiBankMatches(rows, [], cat, partyCatalog, [{
+      lineIndex: 3,
+      partyId: 'v1',
+      partyName: 'U K Paper Converters PVT LTD',
+      extractedName: 'UK PAPER CONVERTERS',
+      confidence: 'high',
+      reason: 'Truncated NEFT name matches master party',
+    }])
+
+    expect(merged[0].geminiPartyName).toContain('U K Paper')
+    expect(merged[0].selectedIds).toEqual(['p1'])
+    expect(catalogForParty(cat, 'v1')).toHaveLength(1)
+    expect(suggestBillIdsForAmount(rows[0].line, cat)).toEqual(['p1'])
   })
 })
