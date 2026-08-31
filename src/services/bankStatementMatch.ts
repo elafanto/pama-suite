@@ -32,6 +32,9 @@ export interface BankMatchSuggestion {
   selectedIds: string[]
   ignored: boolean
   alreadyDone: boolean
+  /** Set when Gemini overrode or filled rule-based match. */
+  geminiEnhanced?: boolean
+  geminiReason?: string
 }
 
 function round2(n: number) {

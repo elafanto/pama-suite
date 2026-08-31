@@ -4,6 +4,7 @@ import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
 import { useInvoiceStore } from '@/stores/invoices'
 import { usePurchaseStore } from '@/stores/purchases'
+import { useSettingsStore } from '@/stores/settings'
 import {
   parseBankStatementFile,
   previewBankStatementFile,
@@ -17,11 +18,13 @@ import {
   saveDoneFingerprints,
   type BankMatchSuggestion,
 } from '@/services/bankStatementMatch'
+import { geminiEnhanceBankMatches } from '@/services/bankStatementGemini'
 
 const firmStore = useFirmStore()
 const partyStore = usePartyStore()
 const invoiceStore = useInvoiceStore()
 const purchaseStore = usePurchaseStore()
+const settingsStore = useSettingsStore()
 
 const step = ref<'upload' | 'map' | 'review'>('upload')
 const file = ref<File | null>(null)
@@ -31,6 +34,7 @@ const suggestions = ref<BankMatchSuggestion[]>([])
 const busy = ref(false)
 const filter = ref<'all' | 'open' | 'matched' | 'ignored'>('open')
 const statusMsg = ref('')
+const useGemini = ref(true)
 
 onMounted(async () => {
   await Promise.all([partyStore.load(), invoiceStore.load(), purchaseStore.load()])
@@ -72,21 +76,46 @@ async function onFilePicked(e: Event) {
   }
 }
 
+const hasGeminiKey = computed(() => !!settingsStore.geminiKey?.trim())
+
 async function runMatch() {
   if (!file.value) return
   busy.value = true
   try {
     const lines = await parseBankStatementFile(file.value, mapping.value)
     const done = loadDoneFingerprints(firmStore.activeFirmId)
-    suggestions.value = buildBankMatchSuggestions({
+    const firmInvoices = invoiceStore.list.filter((i) => i.firm_id === firmStore.activeFirmId)
+    const firmPurchases = purchaseStore.list.filter((p) => p.firm_id === firmStore.activeFirmId)
+    const firmParties = partyStore.list.filter((p) => p.firm_id === firmStore.activeFirmId)
+
+    let result = buildBankMatchSuggestions({
       lines,
-      invoices: invoiceStore.list.filter((i) => i.firm_id === firmStore.activeFirmId),
-      purchases: purchaseStore.list.filter((p) => p.firm_id === firmStore.activeFirmId),
-      parties: partyStore.list.filter((p) => p.firm_id === firmStore.activeFirmId),
+      invoices: firmInvoices,
+      purchases: firmPurchases,
+      parties: firmParties,
       doneFingerprints: done,
     })
+
+    if (useGemini.value && hasGeminiKey.value) {
+      statusMsg.value = 'Rule match done — Gemini se refine ho raha hai…'
+      result = await geminiEnhanceBankMatches({
+        apiKey: settingsStore.geminiKey,
+        suggestions: result,
+        invoices: firmInvoices,
+        purchases: firmPurchases,
+        parties: firmParties,
+        onProgress: (msg) => { statusMsg.value = msg },
+      })
+    } else if (useGemini.value && !hasGeminiKey.value) {
+      statusMsg.value = 'Gemini key nahi — Settings me save karo (rule-based match only)'
+    }
+
+    suggestions.value = result
     step.value = 'review'
-    statusMsg.value = `${lines.length} bank lines loaded`
+    const aiCount = result.filter((r) => r.geminiEnhanced).length
+    statusMsg.value = useGemini.value && hasGeminiKey.value
+      ? `${lines.length} lines · Gemini refined ${aiCount}`
+      : `${lines.length} bank lines loaded`
   } catch (err: any) {
     alert(err?.message || 'Parse / match fail')
   } finally {
@@ -173,7 +202,9 @@ function resetAll() {
     <div v-if="step === 'upload'" class="pp-card p-6 space-y-3">
       <label class="pp-label">Upload bank statement (CSV / XLSX)</label>
       <input type="file" accept=".csv,.xlsx,.xls" class="pp-input" :disabled="busy" @change="onFilePicked" />
-      <p class="text-xs text-slate-500">Pehli sheet use hogi. Column mapping next step me confirm karna.</p>
+        <p class="text-xs text-slate-500">Pehli sheet use hogi. Column mapping next step me confirm karna.</p>
+        <p v-if="hasGeminiKey" class="text-xs text-teal-700">Gemini key saved — smart match available after column map.</p>
+        <p v-else class="text-xs text-amber-700">Settings → Gemini key save karo for AI-assisted bill matching.</p>
     </div>
 
     <div v-else-if="step === 'map' && preview" class="pp-card p-6 space-y-4">
@@ -250,6 +281,10 @@ function resetAll() {
           </tbody>
         </table>
       </div>
+      <label class="flex items-center gap-2 text-sm text-slate-600">
+        <input v-model="useGemini" type="checkbox" class="rounded" :disabled="!hasGeminiKey" />
+        <span>🤖 Gemini se match refine (payment aaye / gaye + bill link)</span>
+      </label>
       <button type="button" class="pp-btn pp-btn-primary" :disabled="busy" @click="runMatch">
         {{ busy ? 'Matching…' : 'Parse &amp; Match' }}
       </button>
@@ -300,6 +335,7 @@ function resetAll() {
               <td class="p-3 text-xs text-slate-600 max-w-[16rem]">
                 <div class="truncate" :title="row.line.narration">{{ row.line.narration || '—' }}</div>
                 <div v-if="row.line.utr" class="font-mono text-[10px] text-slate-400">{{ row.line.utr }}</div>
+                <div v-if="row.geminiReason" class="text-[10px] text-teal-700 mt-1">{{ row.geminiReason }}</div>
               </td>
               <td class="p-3">
                 <div v-if="row.alreadyDone" class="text-xs text-emerald-700">Already reconciled</div>
@@ -337,6 +373,7 @@ function resetAll() {
                     'bg-slate-100 text-slate-600': row.matchKind === 'unmatched',
                   }"
                 >{{ matchKindLabel(row.matchKind) }}</span>
+                <span v-if="row.geminiEnhanced" class="pp-badge text-[10px] bg-teal-100 text-teal-800 ml-1" :title="row.geminiReason">AI</span>
               </td>
               <td class="p-3 text-center">
                 <span
