@@ -131,6 +131,46 @@ export function resolvePaymentLedgerDate(
   return billDate
 }
 
+/** Receipt / payment amount from voucher when available (lump-sum safe). */
+export function resolvePaymentLedgerAmount(
+  docId: string,
+  recordedPaid: number,
+  mode: 'customer' | 'vendor',
+  vouchers?: Voucher[],
+): number {
+  const payRef = `${docId}_PAY`
+  const voucher = vouchers
+    ?.filter((v) => !v.is_deleted && v.ref_id === payRef && (v.type === 'PAYMENT' || v.type === 'RECEIPT'))
+    .sort((a, b) => b.date.localeCompare(a.date) || (b.updated_at || '').localeCompare(a.updated_at || ''))[0]
+  if (!voucher?.entries?.length) return round2(recordedPaid)
+
+  const bankDebit = round2(
+    voucher.entries
+      .filter((e) => /bank|cash/i.test(e.accountName || '') && (e.debit || 0) > 0)
+      .reduce((s, e) => s + (e.debit || 0), 0),
+  )
+  const bankCredit = round2(
+    voucher.entries
+      .filter((e) => /bank|cash/i.test(e.accountName || '') && (e.credit || 0) > 0)
+      .reduce((s, e) => s + (e.credit || 0), 0),
+  )
+  const fromVoucher = mode === 'customer' ? bankDebit : bankCredit
+  if (fromVoucher > 0) return fromVoucher
+  return round2(recordedPaid)
+}
+
+function compareLedgerRows(a: Omit<PartyLedgerRow, 'balance'>, b: Omit<PartyLedgerRow, 'balance'>) {
+  const byDate = a.date.localeCompare(b.date)
+  if (byDate !== 0) return byDate
+  const byRef = a.refNo.localeCompare(b.refNo)
+  if (byRef !== 0) return byRef
+  const aBill = a.id.endsWith(':bill')
+  const bBill = b.id.endsWith(':bill')
+  if (aBill && !bBill) return -1
+  if (!aBill && bBill) return 1
+  return a.id.localeCompare(b.id)
+}
+
 function inAmountRange(amount: number, outstanding: number, filters: PartyLedgerFilters) {
   if (filters.minAmount != null && amount < filters.minAmount) return false
   if (filters.maxAmount != null && amount > filters.maxAmount) return false
@@ -280,9 +320,8 @@ export function buildPartyLedger(
 
       const billDate = inv.date
       const paymentDate = resolvePaymentLedgerDate(inv.id, billDate, inv.last_payment_date, vouchers)
-      const billInRange = inDateRange(billDate, filters)
-      const paymentInRange = paid > 0 && !isCreditNote && inDateRange(paymentDate, filters)
-      if (!billInRange && !paymentInRange) continue
+      const voucherTotal = resolvePaymentLedgerAmount(inv.id, paid, 'customer', vouchers)
+      const paymentRowAmount = round2(paid)
 
       seenDocs.add(`invoice:${inv.id}`)
       const writeOffNote = /write-off/i.test(inv.notes || '') ? ' Includes write-off.' : ''
@@ -301,28 +340,26 @@ export function buildPartyLedger(
         payStatus: inv.pay_status,
       }
 
-      if (billInRange) {
-        entries.push({
-          ...base,
-          id: `${inv.id}:bill`,
-          type: docLabel,
-          narration: isCreditNote ? `Credit note to ${base.partyName}` : `${docLabel} to ${base.partyName}`,
-          debit: isCreditNote ? 0 : amount,
-          credit: isCreditNote ? amount : 0,
-        })
-      }
+      entries.push({
+        ...base,
+        id: `${inv.id}:bill`,
+        type: docLabel,
+        narration: isCreditNote ? `Credit note to ${base.partyName}` : `${docLabel} to ${base.partyName}`,
+        debit: isCreditNote ? 0 : amount,
+        credit: isCreditNote ? amount : 0,
+      })
 
-      if (paymentInRange) {
+      if (!isCreditNote && paid > 0) {
         entries.push({
           ...base,
           id: `${inv.id}:paid`,
           date: paymentDate,
           type: /write-off/i.test(inv.notes || '') ? 'Receipt / Write-off' : 'Receipt',
-          narration: paid > amount
-            ? `Received ₹${paid.toLocaleString('en-IN')} against ${inv.bill_no} (lump sum).${writeOffNote}`
+          narration: voucherTotal > paymentRowAmount + 0.01 || paymentRowAmount > amount + 0.01
+            ? `Received ₹${Math.max(voucherTotal, paymentRowAmount).toLocaleString('en-IN')} against ${inv.bill_no} (lump sum).${writeOffNote}`
             : `Received against ${inv.bill_no}.${writeOffNote}`,
           debit: 0,
-          credit: paid,
+          credit: paymentRowAmount,
         })
       }
     }
@@ -341,9 +378,8 @@ export function buildPartyLedger(
       if (!inAmountRange(amount, outstanding, filters)) continue
 
       const paymentDate = resolvePaymentLedgerDate(pur.id, billDate, pur.last_payment_date, vouchers)
-      const billInRange = inDateRange(billDate, filters)
-      const paymentInRange = paid > 0 && inDateRange(paymentDate, filters)
-      if (!billInRange && !paymentInRange) continue
+      const voucherTotal = resolvePaymentLedgerAmount(pur.id, paid, 'vendor', vouchers)
+      const paymentRowAmount = round2(paid)
 
       seenDocs.add(`purchase:${pur.id}`)
       const writeOffNote = /write-off/i.test(pur.notes || '') ? ' Includes write-off.' : ''
@@ -361,37 +397,34 @@ export function buildPartyLedger(
         payStatus: pur.pay_status,
       }
 
-      if (billInRange) {
-        entries.push({
-          ...base,
-          id: `${pur.id}:bill`,
-          type: 'Purchase',
-          narration: `Payable to ${base.partyName}`,
-          debit: 0,
-          credit: amount,
-        })
-      }
+      entries.push({
+        ...base,
+        id: `${pur.id}:bill`,
+        type: 'Purchase',
+        narration: `Payable to ${base.partyName}`,
+        debit: 0,
+        credit: amount,
+      })
 
-      if (paymentInRange) {
+      if (paid > 0) {
         entries.push({
           ...base,
           id: `${pur.id}:paid`,
           date: paymentDate,
           type: /write-off/i.test(pur.notes || '') ? 'Payment / Write-off' : 'Payment',
-          narration: paid > amount
-            ? `Paid ₹${paid.toLocaleString('en-IN')} against ${base.refNo} (lump sum).${writeOffNote}`
+          narration: voucherTotal > paymentRowAmount + 0.01 || paymentRowAmount > amount + 0.01
+            ? `Paid ₹${Math.max(voucherTotal, paymentRowAmount).toLocaleString('en-IN')} against ${base.refNo} (lump sum).${writeOffNote}`
             : `Paid against ${base.refNo}.${writeOffNote}`,
-          debit: paid,
+          debit: paymentRowAmount,
           credit: 0,
         })
       }
     }
   }
 
-  const sorted = entries.sort(
-    (a, b) => a.date.localeCompare(b.date) || a.refNo.localeCompare(b.refNo) || a.id.localeCompare(b.id),
-  )
-  const rows = enrichRowsWithBalanceAndOutstanding(sorted, filters)
+  const sorted = entries.sort(compareLedgerRows)
+  const enriched = enrichRowsWithBalanceAndOutstanding(sorted, filters)
+  const rows = enriched.filter((row) => inDateRange(row.date, filters))
 
   const totals = rows.reduce<PartyLedgerTotals>(
     (acc, row) => {
@@ -421,7 +454,7 @@ export function buildPartyLedger(
 
   if (shouldComputeBalance(filters)) {
     const fifoByGroup = new Map<string, FifoAllocState>()
-    for (const row of rows) {
+    for (const row of enriched) {
       const groupKey = partyGroupKey(row)
       if (!fifoByGroup.has(groupKey)) fifoByGroup.set(groupKey, createFifoState())
       const fifo = fifoByGroup.get(groupKey)!
@@ -442,7 +475,7 @@ export function buildPartyLedger(
       [...fifoByGroup.values()].reduce((sum, state) => sum + partyOutstandingFromFifo(state), 0),
     )
   } else {
-    totals.outstanding = round2(rows.reduce((sum, row) => sum + (row.id.endsWith(':bill') ? row.outstanding : 0), 0))
+    totals.outstanding = round2(enriched.reduce((sum, row) => sum + (row.id.endsWith(':bill') ? row.outstanding : 0), 0))
   }
 
   return { rows, totals }

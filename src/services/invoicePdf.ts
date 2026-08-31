@@ -128,6 +128,7 @@ interface PdfBill {
   items: Invoice['items']
   taxBuckets?: Record<string, { taxable: number; tax: number }>
   sub: number
+  discountAmount?: number
   roundOff: number
   grandTotal: number
   cancelled?: boolean
@@ -181,6 +182,7 @@ function toPdfBill(inv: Invoice, partyLookup?: PartyLookup): PdfBill {
     items: inv.items || [],
     taxBuckets: buckets,
     sub: inv.sub || 0,
+    discountAmount: inv.discount_amount || 0,
     roundOff: inv.round_off || 0,
     grandTotal: inv.grand_total || 0,
     cancelled: !!inv.cancelled_at,
@@ -481,6 +483,18 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
   pdf.line(R - cAmt, y, R - cAmt, y + 6.5)
   y += 6.5
   pdf.line(L, y, R, y)
+
+  if ((b.discountAmount || 0) > 0.001) {
+    pdf.setFillColor(245, 245, 245)
+    pdf.rect(L, y, W, 6, 'F')
+    pdf.setFont('helvetica', 'normal').setFontSize(8.5)
+    pdf.text('Discount', R - cAmt - 2, y + 4, { align: 'right' })
+    pdf.setFont('helvetica', 'bold').setFontSize(8.5)
+    pdf.text(`- ${n2(b.discountAmount)}`, R - 2, y + 4, { align: 'right' })
+    pdf.line(R - cAmt, y, R - cAmt, y + 6)
+    y += 6
+    pdf.line(L, y, R, y)
+  }
 
   const isInter = isInterGst(b.gstType)
   const tC1 = L + 20

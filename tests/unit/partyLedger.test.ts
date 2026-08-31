@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { allocateCustomerReceipt } from '@/services/partyPaymentAllocation'
-import { buildPartyLedger } from '@/services/partyLedger'
-import type { Invoice } from '@/types/models'
+import { buildPartyLedger, resolvePaymentLedgerDate, resolvePaymentLedgerAmount } from '@/services/partyLedger'
+import type { Invoice, Voucher } from '@/types/models'
 
 const firmId = 'firm-1'
 const partyId = 'party-uk'
@@ -67,5 +67,79 @@ describe('party ledger lump sum allocation', () => {
       { id: 'inv-18', amount: 37643 },
       { id: 'inv-19', amount: 62357 },
     ])
+  })
+
+  it('shows payment on payment date, not bill date', () => {
+    const vouchers = [{
+      id: 'v1',
+      firm_id: firmId,
+      ref_id: 'inv-18_PAY',
+      type: 'RECEIPT',
+      date: '2026-08-15',
+      is_deleted: false,
+      updated_at: '2026-08-15T00:00:00.000Z',
+      entries: [{ accountId: 'b', accountName: 'Bank Account', debit: 100000, credit: 0 }],
+    }] as Voucher[]
+
+    expect(resolvePaymentLedgerDate('inv-18', '2026-07-13', '', vouchers)).toBe('2026-08-15')
+    expect(resolvePaymentLedgerAmount('inv-18', 37643, 'customer', vouchers)).toBe(100000)
+
+    const result = buildPartyLedger(
+      [invoice({ id: 'inv-18', bill_no: 'INV-0018', date: '2026-07-13', grand_total: 37643, amt_paid: 100000, pay_status: 'PAID' })],
+      [],
+      { firmId, mode: 'customer', partyId, from: '2026-08-01', to: '2026-08-31' },
+      vouchers,
+    )
+
+    const paid = result.rows.find((r) => r.id === 'inv-18:paid')
+    expect(paid?.date).toBe('2026-08-15')
+    expect(paid?.credit).toBe(100000)
+    expect(result.rows.find((r) => r.id === 'inv-18:bill')).toBeUndefined()
+  })
+
+  it('keeps correct outstanding when payment month differs from bill month', () => {
+    const invoices = [
+      invoice({ id: 'inv-18', bill_no: 'INV-0018', date: '2026-07-13', grand_total: 37643, amt_paid: 100000, pay_status: 'PAID', last_payment_date: '2026-08-15' }),
+      invoice({ id: 'inv-19', bill_no: 'INV-0019', date: '2026-07-16', grand_total: 142800 }),
+      invoice({ id: 'inv-21', bill_no: 'INV-0021', date: '2026-07-22', grand_total: 50190 }),
+    ]
+
+    const aug = buildPartyLedger(invoices, [], {
+      firmId,
+      mode: 'customer',
+      partyId,
+      from: '2026-08-01',
+      to: '2026-08-31',
+    })
+
+    expect(aug.totals.outstanding).toBe(130633)
+    expect(aug.rows).toHaveLength(1)
+    expect(aug.rows[0].id).toBe('inv-18:paid')
+  })
+
+  it('does not double-count lump sum when payment is split across invoices', () => {
+    const vouchers = [{
+      id: 'v1',
+      firm_id: firmId,
+      ref_id: 'inv-18_PAY',
+      type: 'RECEIPT',
+      date: '2026-08-15',
+      is_deleted: false,
+      updated_at: '2026-08-15T00:00:00.000Z',
+      entries: [{ accountId: 'b', accountName: 'Bank Account', debit: 100000, credit: 0 }],
+    }] as Voucher[]
+
+    const split = [
+      invoice({ id: 'inv-18', bill_no: 'INV-0018', date: '2026-07-13', grand_total: 37643, amt_paid: 37643, pay_status: 'PAID', last_payment_date: '2026-08-15' }),
+      invoice({ id: 'inv-19', bill_no: 'INV-0019', date: '2026-07-16', grand_total: 142800, amt_paid: 62357, pay_status: 'PARTIAL', last_payment_date: '2026-08-15' }),
+      invoice({ id: 'inv-21', bill_no: 'INV-0021', date: '2026-07-22', grand_total: 50190 }),
+    ]
+
+    const result = buildPartyLedger(split, [], { firmId, mode: 'customer', partyId }, vouchers)
+
+    expect(result.totals.credit).toBe(100000)
+    expect(result.totals.outstanding).toBe(130633)
+    expect(result.rows.find((r) => r.id === 'inv-18:paid')?.credit).toBe(37643)
+    expect(result.rows.find((r) => r.id === 'inv-19:paid')?.credit).toBe(62357)
   })
 })

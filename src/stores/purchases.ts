@@ -38,7 +38,7 @@ const money = (n: number) => Math.round((Number(n) || 0) * 100) / 100
 
 async function syncPaymentVoucher(purchase: Purchase) {
   const accounting = useAccountingStore()
-  const paid = money(Math.min(Math.max(purchase.amt_paid || 0, 0), purchase.grand_total || 0))
+  const paid = money(Math.max(purchase.amt_paid || 0, 0))
   if (paid <= 0) {
     await accounting.reverseLedgerByRef(`${purchase.id}_PAY`)
     return

@@ -143,7 +143,12 @@ export interface Invoice extends BaseRecord {
   gst_type: GstType
   taxBuckets?: Record<number, { taxable: number; tax: number }>
   items: InvoiceItemLine[]
+  /** Gross subtotal before bill discount. */
   sub: number
+  /** Trade discount in ₹ (before tax). */
+  discount_amount?: number
+  /** When discount was entered as %. */
+  discount_pct?: number
   total_tax: number
   round_off: number
   grand_total: number

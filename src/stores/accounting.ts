@@ -7,6 +7,7 @@ import { nowISO } from '@/data/util'
 import { isInterstateGst } from '@/services/gst'
 import { isInvoiceActive } from '@/services/invoiceStatus'
 import { isDeliveryChallan } from '@/services/invoiceDoc'
+import { invoiceTaxableSales } from '@/services/invoiceTotals'
 import { softDeleteAttachmentsForEntity } from '@/services/documentAttachments'
 import type { Voucher, Account, LedgerEntry, Invoice, Purchase } from '@/types/models'
 
@@ -206,8 +207,8 @@ export const useAccountingStore = defineStore('accounting', () => {
     entries.push({
       accountId: `${firmId}_4001`,
       accountName: 'Sales Account',
-      debit: isCredit ? bill.sub : 0,
-      credit: isCredit ? 0 : bill.sub,
+      debit: isCredit ? invoiceTaxableSales(bill) : 0,
+      credit: isCredit ? 0 : invoiceTaxableSales(bill),
     })
 
     // Tax amounts per slab — from stored taxBuckets, else reconstructed from items

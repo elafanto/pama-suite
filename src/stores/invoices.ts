@@ -31,7 +31,7 @@ async function assertSalesMonthWritable(firmId: string, ...dates: Array<string |
 
 async function syncReceiptVoucher(invoice: Invoice) {
   const accounting = useAccountingStore()
-  const paid = money(Math.min(Math.max(invoice.amt_paid || 0, 0), invoice.grand_total || 0))
+  const paid = money(Math.max(invoice.amt_paid || 0, 0))
   if (paid <= 0) {
     await accounting.reverseLedgerByRef(`${invoice.id}_PAY`)
     return

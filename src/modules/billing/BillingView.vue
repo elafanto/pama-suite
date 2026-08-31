@@ -33,6 +33,7 @@ import { listItemStockMovements } from '@/services/inventoryLedger'
 import { computeStock, findStockRowForLine } from '@/services/stock'
 import { periodLabelYm, salesMonthLockMessage, salesPeriodFromDate } from '@/services/salesMonthLock'
 import { isInvoiceActive, isInvoiceCancelled } from '@/services/invoiceStatus'
+import { computeInvoiceTotals, inferInvoiceDiscountMode, type InvoiceDiscountMode } from '@/services/invoiceTotals'
 import { useTableSort } from '@/composables/useTableSort'
 import PpModal from '@/components/PpModal.vue'
 import type { Invoice, InvoiceItemLine, PayStatus, GstType, ItemStockMovement } from '@/types/models'
@@ -178,6 +179,8 @@ const initialFormState = () => ({
   gst_type: 'intra' as GstType,
   items: [] as InvoiceItemLine[],
   notes: '',
+  discount_mode: 'none' as InvoiceDiscountMode,
+  discount_value: 0,
   amt_paid: 0,
   pay_status: 'UNPAID' as PayStatus
 })
@@ -425,6 +428,8 @@ watch(() => form.doc_type, (dt) => {
   if (isDeliveryChallan(dt)) {
     form.pay_status = 'UNPAID'
     form.amt_paid = 0
+    form.discount_mode = 'none'
+    form.discount_value = 0
   }
 })
 
@@ -450,38 +455,24 @@ async function handleItemSelect(row: InvoiceItemLine) {
 }
 
 // Calculations
-const subTotal = computed(() => {
-  return form.items.reduce((sum, row) => {
-    if (!row.name.trim() || row.qty <= 0 || row.rate <= 0) return sum
-    return sum + (row.qty * row.rate)
-  }, 0)
-})
+const invoiceTotals = computed(() =>
+  computeInvoiceTotals({
+    items: form.items,
+    discount_mode: isChallanForm.value ? 'none' : form.discount_mode,
+    discount_value: form.discount_value,
+  }),
+)
+const subTotal = computed(() => invoiceTotals.value.sub)
+const discountAmount = computed(() => invoiceTotals.value.discount_amount)
+const taxableTotal = computed(() => invoiceTotals.value.taxable)
+const taxBuckets = computed(() => invoiceTotals.value.taxBuckets)
+const totalTax = computed(() => invoiceTotals.value.total_tax)
+const grandTotal = computed(() => invoiceTotals.value.grand_total)
+const roundOff = computed(() => invoiceTotals.value.round_off)
 
-const taxBuckets = computed(() => {
-  const buckets: Record<number, { taxable: number; tax: number }> = {}
-  form.items.forEach(row => {
-    if (!row.name.trim() || row.qty <= 0 || row.rate <= 0) return
-    const amt = row.qty * row.rate
-    const gstPct = row.gst || 0
-    if (!buckets[gstPct]) buckets[gstPct] = { taxable: 0, tax: 0 }
-    buckets[gstPct].taxable += amt
-  })
-
-  Object.keys(buckets).forEach(pctKey => {
-    const pct = parseFloat(pctKey)
-    const b = buckets[pct]
-    b.tax = Math.round(b.taxable * pct / 100 * 100) / 100
-  })
-  return buckets
-})
-
-const totalTax = computed(() => {
-  return Object.values(taxBuckets.value).reduce((sum, b) => sum + b.tax, 0)
-})
-
-const rawGrandTotal = computed(() => subTotal.value + totalTax.value)
-const grandTotal = computed(() => Math.round(rawGrandTotal.value))
-const roundOff = computed(() => grandTotal.value - rawGrandTotal.value)
+const showInvoiceDiscount = computed(() =>
+  !isChallanForm.value && (form.doc_type === 'INVOICE' || form.doc_type === 'invoice'),
+)
 
 const formEwayEligibility = computed(() => getEwayEligibility({
   doc_type: form.doc_type,
@@ -952,6 +943,8 @@ async function saveInvoice() {
     items: validItems,
     taxBuckets: taxBuckets.value,
     sub: subTotal.value,
+    discount_amount: discountAmount.value,
+    discount_pct: invoiceTotals.value.discount_pct,
     total_tax: totalTax.value,
     round_off: roundOff.value,
     grand_total: grandTotal.value,
@@ -1042,6 +1035,8 @@ function editInvoice(inv: Invoice) {
     gst_type: inv.gst_type,
     items: [],
     notes: inv.notes || '',
+    discount_mode: inferInvoiceDiscountMode(inv.discount_amount, inv.discount_pct).mode,
+    discount_value: inferInvoiceDiscountMode(inv.discount_amount, inv.discount_pct).value,
     amt_paid: inv.amt_paid || 0,
     pay_status: inv.pay_status || 'UNPAID'
   })
@@ -1084,6 +1079,8 @@ function copyInvoice(inv: Invoice) {
     gst_type: inv.gst_type,
     items: [],
     notes: inv.notes || '',
+    discount_mode: inferInvoiceDiscountMode(inv.discount_amount, inv.discount_pct).mode,
+    discount_value: inferInvoiceDiscountMode(inv.discount_amount, inv.discount_pct).value,
     amt_paid: 0,
     pay_status: 'UNPAID' as PayStatus
   })
@@ -1609,6 +1606,38 @@ onMounted(async () => {
             <div class="flex justify-between text-slate-500">
               <span>Sub Total:</span>
               <span class="font-semibold text-navy">₹ {{ n2(subTotal) }}</span>
+            </div>
+
+            <div v-if="showInvoiceDiscount" class="space-y-2 border-t border-slate-100/60 pt-2">
+              <div class="flex items-end gap-2">
+                <div class="flex-1">
+                  <label class="pp-label !text-[10px]">Discount</label>
+                  <select v-model="form.discount_mode" class="pp-input !py-1.5 text-xs">
+                    <option value="none">None</option>
+                    <option value="flat">Flat ₹</option>
+                    <option value="pct">%</option>
+                  </select>
+                </div>
+                <div v-if="form.discount_mode !== 'none'" class="w-28">
+                  <label class="pp-label !text-[10px]">{{ form.discount_mode === 'pct' ? '% off' : 'Amount ₹' }}</label>
+                  <input
+                    v-model.number="form.discount_value"
+                    type="number"
+                    min="0"
+                    :max="form.discount_mode === 'pct' ? 100 : undefined"
+                    step="0.01"
+                    class="pp-input !py-1.5 text-xs text-right"
+                  />
+                </div>
+              </div>
+              <div v-if="discountAmount > 0" class="flex justify-between text-rose-600 text-xs">
+                <span>Discount (−)</span>
+                <span class="font-semibold">₹ {{ n2(discountAmount) }}</span>
+              </div>
+              <div class="flex justify-between text-slate-500 text-xs">
+                <span>Taxable value</span>
+                <span class="font-semibold">₹ {{ n2(taxableTotal) }}</span>
+              </div>
             </div>
 
             <!-- Tax Breakdown -->
@@ -2291,6 +2320,10 @@ onMounted(async () => {
               </tr>
             </tbody>
             <tfoot>
+              <tr v-if="(previewInvoice.discount_amount || 0) > 0" class="border-t border-black bg-slate-50">
+                <td colspan="5" class="border-r border-black p-1 text-right font-bold text-rose-700">Discount:</td>
+                <td class="p-1 text-right font-bold text-rose-700">− ₹{{ n2(previewInvoice.discount_amount || 0) }}</td>
+              </tr>
               <tr class="border-t border-black bg-slate-50">
                 <td colspan="5" class="border-r border-black p-1 text-right font-bold">Round Off:</td>
                 <td class="p-1 text-right font-bold">₹{{ n2(previewInvoice.round_off) }}</td>
@@ -2473,6 +2506,10 @@ onMounted(async () => {
           </tr>
         </tbody>
         <tfoot>
+          <tr v-if="(previewInvoice.discount_amount || 0) > 0" class="border-t border-black bg-slate-50">
+            <td colspan="5" class="border-r border-black p-1 text-right font-bold text-rose-700">Discount:</td>
+            <td class="p-1 text-right font-bold text-rose-700">− ₹{{ n2(previewInvoice.discount_amount || 0) }}</td>
+          </tr>
           <tr class="border-t border-black bg-slate-50">
             <td colspan="5" class="border-r border-black p-1 text-right font-bold">Round Off:</td>
             <td class="p-1 text-right font-bold">₹{{ n2(previewInvoice.round_off) }}</td>
