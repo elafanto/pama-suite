@@ -490,7 +490,7 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
     pdf.setFont('helvetica', 'normal').setFontSize(8.5)
     pdf.text('Discount', R - cAmt - 2, y + 4, { align: 'right' })
     pdf.setFont('helvetica', 'bold').setFontSize(8.5)
-    pdf.text(`- ${n2(b.discountAmount)}`, R - 2, y + 4, { align: 'right' })
+    pdf.text(`- ${n2(b.discountAmount ?? 0)}`, R - 2, y + 4, { align: 'right' })
     pdf.line(R - cAmt, y, R - cAmt, y + 6)
     y += 6
     pdf.line(L, y, R, y)

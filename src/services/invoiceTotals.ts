@@ -52,8 +52,8 @@ export function inferInvoiceDiscountMode(
   discount_amount?: number,
   discount_pct?: number,
 ): { mode: InvoiceDiscountMode; value: number } {
-  const amt = round2(discount_amount)
-  const pct = round2(discount_pct)
+  const amt = round2(discount_amount ?? 0)
+  const pct = round2(discount_pct ?? 0)
   if (pct > 0) return { mode: 'pct', value: pct }
   if (amt > 0) return { mode: 'flat', value: amt }
   return { mode: 'none', value: 0 }
