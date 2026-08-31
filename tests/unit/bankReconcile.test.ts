@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { suggestBankColumnMapping, bankLineFingerprint } from '@/services/bankStatementParse'
 import { buildBankMatchSuggestions } from '@/services/bankStatementMatch'
+import { allocateCustomerReceipt } from '@/services/partyPaymentAllocation'
 import { resolvePaymentLedgerDate, buildPartyLedger } from '@/services/partyLedger'
 import type { Invoice, Party, Purchase, Voucher } from '@/types/models'
 
@@ -129,6 +130,113 @@ describe('bank statement reconcile helpers', () => {
     expect(suggestions[0].matchKind).toBe('lump')
     expect(suggestions[0].confidence).toBe('medium')
     expect(suggestions[0].selectedIds).toEqual(['p1', 'p2'])
+  })
+
+  it('classifies partial payment when amount is below top bill outstanding', () => {
+    const parties = [{ id: 'v1', name: 'ABC Traders', acno: '123456', roles: ['vendor'] }] as Party[]
+    const purchases = [{
+      id: 'p1',
+      firm_id: 'f1',
+      supplier_id: 'v1',
+      supplier_name: 'ABC Traders',
+      bill_no: 'B-10',
+      date: '2026-08-01',
+      grand_total: 10000,
+      amt_paid: 0,
+      is_deleted: false,
+    }] as Purchase[]
+
+    const suggestions = buildBankMatchSuggestions({
+      lines: [{
+        rowIndex: 1,
+        date: '2026-08-02',
+        amount: 4000,
+        side: 'debit',
+        narration: 'NEFT ABC Traders 123456',
+        utr: '',
+        partyHint: '',
+        raw: {},
+      }],
+      invoices: [] as Invoice[],
+      purchases,
+      parties,
+    })
+
+    expect(suggestions[0].matchKind).toBe('partial')
+    expect(suggestions[0].selectedIds).toContain('p1')
+  })
+
+  it('excludes credit notes from sale-side match pool', () => {
+    const parties = [{ id: 'c1', name: 'Buyer Co', acno: '998877', roles: ['customer'] }] as Party[]
+    const invoices = [{
+      id: 'cn1',
+      firm_id: 'f1',
+      party_id: 'c1',
+      party_name: 'Buyer Co',
+      doc_type: 'CREDIT_NOTE',
+      bill_no: 'CN-1',
+      date: '2026-08-01',
+      grand_total: 5000,
+      amt_paid: 0,
+      is_deleted: false,
+      cancelled_at: null,
+    }] as Invoice[]
+
+    const suggestions = buildBankMatchSuggestions({
+      lines: [{
+        rowIndex: 1,
+        date: '2026-08-02',
+        amount: 5000,
+        side: 'credit',
+        narration: 'NEFT Buyer Co 998877',
+        utr: '',
+        partyHint: '',
+        raw: {},
+      }],
+      invoices,
+      purchases: [] as Purchase[],
+      parties,
+    })
+
+    expect(suggestions[0].matchKind).toBe('unmatched')
+    expect(suggestions[0].candidates).toHaveLength(0)
+  })
+
+  it('limits FIFO spill to user-selected bill ids', () => {
+    const invoices = [
+      {
+        id: 'inv-1',
+        firm_id: 'f1',
+        party_id: 'c1',
+        party_name: 'Buyer',
+        doc_type: 'INVOICE',
+        bill_no: 'INV-1',
+        date: '2026-08-01',
+        grand_total: 4000,
+        amt_paid: 0,
+        is_deleted: false,
+        cancelled_at: null,
+      },
+      {
+        id: 'inv-2',
+        firm_id: 'f1',
+        party_id: 'c1',
+        party_name: 'Buyer',
+        doc_type: 'INVOICE',
+        bill_no: 'INV-2',
+        date: '2026-08-05',
+        grand_total: 6000,
+        amt_paid: 0,
+        is_deleted: false,
+        cancelled_at: null,
+      },
+    ] as Invoice[]
+
+    const all = allocateCustomerReceipt(invoices, 'inv-1', 10000)
+    expect(all).toEqual([{ id: 'inv-1', amount: 4000 }, { id: 'inv-2', amount: 6000 }])
+
+    const onlyFirst = allocateCustomerReceipt(invoices, 'inv-1', 10000, ['inv-1'])
+    expect(onlyFirst).toEqual([{ id: 'inv-1', amount: 4000 }])
   })
 })
 

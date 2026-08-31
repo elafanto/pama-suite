@@ -165,7 +165,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
     await load()
   }
 
-  async function recordPayment(id: string, amount: number, isWriteOff: boolean, note = '', date = '', paymentAccountName?: string) {
+  async function recordPayment(id: string, amount: number, isWriteOff: boolean, note = '', date = '', paymentAccountName?: string, onlyBillIds?: string[]) {
     const existing = await repo.get(id)
     if (!existing) return
 
@@ -192,7 +192,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
     }
 
     const firmPurchases = await db.purchases.where('firm_id').equals(existing.firm_id).toArray()
-    const allocations = allocateVendorPayment(firmPurchases, id, paymentAmount)
+    const allocations = allocateVendorPayment(firmPurchases, id, paymentAmount, onlyBillIds)
     if (allocations.length === 0) {
       throw new Error('Is supplier par koi open purchase nahi mila.')
     }

@@ -130,9 +130,9 @@ async function confirmSelected() {
       const primary = row.candidates.find((c) => c.id === primaryId)
       if (!primary) continue
       if (primary.kind === 'purchase') {
-        await purchaseStore.recordPayment(primaryId, amount, false, note, date)
+        await purchaseStore.recordPayment(primaryId, amount, false, note, date, undefined, orderedIds)
       } else {
-        await invoiceStore.recordPayment(primaryId, amount, false, note, date)
+        await invoiceStore.recordPayment(primaryId, amount, false, note, date, orderedIds)
       }
       row.alreadyDone = true
       row.selectedIds = []

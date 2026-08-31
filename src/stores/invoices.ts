@@ -249,7 +249,7 @@ export const useInvoiceStore = defineStore('invoices', () => {
     await load()
   }
 
-  async function recordPayment(id: string, amount: number, isWriteOff: boolean, note = '', date = '') {
+  async function recordPayment(id: string, amount: number, isWriteOff: boolean, note = '', date = '', onlyBillIds?: string[]) {
     const existing = await repo.get(id)
     if (!existing) return
     if (!isInvoiceActive(existing)) {
@@ -279,7 +279,7 @@ export const useInvoiceStore = defineStore('invoices', () => {
     }
 
     const firmInvoices = await db.invoices.where('firm_id').equals(existing.firm_id).toArray()
-    const allocations = allocateCustomerReceipt(firmInvoices, id, paymentAmount)
+    const allocations = allocateCustomerReceipt(firmInvoices, id, paymentAmount, onlyBillIds)
     if (allocations.length === 0) {
       throw new Error('Is party par koi open invoice nahi mila.')
     }

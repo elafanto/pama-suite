@@ -52,14 +52,17 @@ export function allocateCustomerReceipt(
   invoices: Invoice[],
   primaryId: string,
   totalAmount: number,
+  onlyBillIds?: string[],
 ): PaymentAllocation[] {
   const primary = invoices.find((inv) => inv.id === primaryId)
   if (!primary) return []
 
+  const allow = onlyBillIds?.length ? new Set(onlyBillIds) : null
   const open = invoices
     .filter((inv) => isInvoiceActive(inv) && isCustomerDebitDoc(inv))
     .filter((inv) => matchesPartyRecord(inv.party_id, inv.party_name, primary.party_id, primary.party_name))
     .filter((inv) => round2(inv.grand_total - (inv.amt_paid || 0)) > 0.01)
+    .filter((inv) => !allow || allow.has(inv.id))
     .sort((a, b) => a.date.localeCompare(b.date) || a.bill_no.localeCompare(b.bill_no))
 
   const ordered = [...open.filter((inv) => inv.id === primaryId), ...open.filter((inv) => inv.id !== primaryId)]
@@ -83,14 +86,17 @@ export function allocateVendorPayment(
   purchases: Purchase[],
   primaryId: string,
   totalAmount: number,
+  onlyBillIds?: string[],
 ): PaymentAllocation[] {
   const primary = purchases.find((pur) => pur.id === primaryId)
   if (!primary || primary.is_deleted) return []
 
+  const allow = onlyBillIds?.length ? new Set(onlyBillIds) : null
   const open = purchases
     .filter((pur) => !pur.is_deleted)
     .filter((pur) => matchesPartyRecord(pur.supplier_id, pur.supplier_name, primary.supplier_id, primary.supplier_name))
     .filter((pur) => round2(pur.grand_total - (pur.amt_paid || 0)) > 0.01)
+    .filter((pur) => !allow || allow.has(pur.id))
     .sort((a, b) => {
       const da = a.received_date || a.date
       const db = b.received_date || b.date

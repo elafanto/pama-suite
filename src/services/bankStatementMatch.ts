@@ -1,4 +1,5 @@
-import { normalizePartyName } from '@/services/partyPaymentAllocation'
+import { isCustomerDebitDoc, normalizePartyName } from '@/services/partyPaymentAllocation'
+import { isInvoiceActive } from '@/services/invoiceStatus'
 import { bankLineFingerprint, type ParsedBankLine } from '@/services/bankStatementParse'
 import type { Invoice, Party, Purchase } from '@/types/models'
 
@@ -340,7 +341,7 @@ export function buildBankMatchSuggestions(opts: {
     .filter((p) => p.outstanding > 0.01)
 
   const openInvoices: OpenBill[] = opts.invoices
-    .filter((i) => !i.is_deleted && !i.cancelled_at)
+    .filter((i) => isInvoiceActive(i) && isCustomerDebitDoc(i))
     .map((i) => ({
       id: i.id,
       kind: 'invoice' as const,
