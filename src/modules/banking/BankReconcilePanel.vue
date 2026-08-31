@@ -208,7 +208,13 @@ function resetAll() {
     </div>
 
     <div v-else-if="step === 'map' && preview" class="pp-card p-6 space-y-4">
-      <div class="text-sm text-slate-600">Sheet: <b>{{ preview.sheetName }}</b> · File: {{ file?.name }}</div>
+      <div class="text-sm text-slate-600">
+        Sheet: <b>{{ preview.sheetName }}</b> · File: {{ file?.name }}
+        <span class="block text-xs text-slate-500 mt-1">
+          Header row {{ preview.headerRowIndex + 1 }} detect hui ·
+          <b>{{ preview.totalDataRows }}</b> data rows (neeche sirf preview ke 8 rows)
+        </span>
+      </div>
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         <div>
           <label class="pp-label">Date *</label>

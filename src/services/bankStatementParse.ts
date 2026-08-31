@@ -31,6 +31,10 @@ export interface BankSheetPreview {
   sheetName: string
   headers: string[]
   rows: Record<string, string>[]
+  /** Total data rows after detected header (full sheet, not preview slice). */
+  totalDataRows: number
+  /** 0-based index of the header row in the Excel sheet. */
+  headerRowIndex: number
   suggestedMapping: BankColumnMapping
 }
 
@@ -106,6 +110,75 @@ function parseAmount(value: unknown): number {
   return Number.isFinite(n) ? Math.round(Math.abs(n) * 100) / 100 : 0
 }
 
+function rowHeaderScore(cells: string[]): number {
+  const headers = cells.map((c) => normHeader(String(c)))
+  let score = 0
+  if (headers.some((h) => DATE_KEYS.some((k) => h === k || h.includes(k)))) score += 4
+  if (headers.some((h) => DEBIT_KEYS.some((k) => h === k || h.includes(k)))) score += 3
+  if (headers.some((h) => CREDIT_KEYS.some((k) => h === k || h.includes(k)))) score += 3
+  if (headers.some((h) => AMOUNT_KEYS.some((k) => h === k || h.includes(k)))) score += 3
+  if (headers.some((h) => NARR_KEYS.some((k) => h === k || h.includes(k)))) score += 1
+  if (headers.some((h) => UTR_KEYS.some((k) => h === k || h.includes(k)))) score += 1
+  return score
+}
+
+export interface BankSheetLayout {
+  headerRowIndex: number
+  headers: string[]
+  dataRows: Record<string, unknown>[]
+}
+
+/** Find header row (banks often put account info in first 5–15 rows) and read all data below. */
+export function layoutBankSheetRows(matrix: unknown[][]): BankSheetLayout {
+  if (!matrix.length) {
+    return { headerRowIndex: 0, headers: [], dataRows: [] }
+  }
+
+  let headerRowIndex = 0
+  let bestScore = 0
+  const scanLimit = Math.min(matrix.length, 50)
+  for (let i = 0; i < scanLimit; i += 1) {
+    const cells = (matrix[i] || []).map((c) => String(c ?? '').trim())
+    const score = rowHeaderScore(cells)
+    if (score > bestScore) {
+      bestScore = score
+      headerRowIndex = i
+    }
+  }
+
+  const headerCells = (matrix[headerRowIndex] || []).map((c, i) => {
+    const name = String(c ?? '').trim()
+    return name || `Column ${i + 1}`
+  })
+
+  const dataRows: Record<string, unknown>[] = []
+  for (let r = headerRowIndex + 1; r < matrix.length; r += 1) {
+    const row = matrix[r] || []
+    const hasValue = row.some((c) => c != null && String(c).trim() !== '')
+    if (!hasValue) continue
+    const obj: Record<string, unknown> = {}
+    headerCells.forEach((h, i) => {
+      obj[h] = row[i] ?? ''
+    })
+    dataRows.push(obj)
+  }
+
+  return { headerRowIndex, headers: headerCells, dataRows }
+}
+
+function readSheetLayout(sheet: XLSX.WorkSheet): BankSheetLayout {
+  const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '', raw: true }) as unknown[][]
+  return layoutBankSheetRows(matrix)
+}
+
+function rowsToStringRecords(rows: Record<string, unknown>[], headers: string[]) {
+  return rows.map((row) => {
+    const out: Record<string, string> = {}
+    for (const h of headers) out[h] = String(row[h] ?? '')
+    return out
+  })
+}
+
 function detectSide(
   row: Record<string, string>,
   mapping: BankColumnMapping,
@@ -123,39 +196,7 @@ function detectSide(
   return 'unknown'
 }
 
-export async function previewBankStatementFile(file: File): Promise<BankSheetPreview> {
-  const buf = await file.arrayBuffer()
-  const wb = XLSX.read(buf, { type: 'array', cellDates: true })
-  const sheetName = wb.SheetNames[0]
-  if (!sheetName) throw new Error('Excel/CSV me koi sheet nahi mili')
-  const sheet = wb.Sheets[sheetName]
-  const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '', raw: true })
-  if (!json.length) throw new Error('File empty hai')
-  const headers = Object.keys(json[0] || {})
-  const rows = json.slice(0, 8).map((row) => {
-    const out: Record<string, string> = {}
-    for (const h of headers) out[h] = String(row[h] ?? '')
-    return out
-  })
-  return {
-    sheetName,
-    headers,
-    rows,
-    suggestedMapping: suggestBankColumnMapping(headers),
-  }
-}
-
-export async function parseBankStatementFile(file: File, mapping: BankColumnMapping): Promise<ParsedBankLine[]> {
-  if (!mapping.date) throw new Error('Date column map karo')
-  if (!mapping.amount && !mapping.debitAmount && !mapping.creditAmount) {
-    throw new Error('Amount / Debit / Credit column map karo')
-  }
-
-  const buf = await file.arrayBuffer()
-  const wb = XLSX.read(buf, { type: 'array', cellDates: true })
-  const sheetName = wb.SheetNames[0]
-  const sheet = wb.Sheets[sheetName]
-  const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '', raw: true })
+function parseRowsToLines(json: Record<string, unknown>[], mapping: BankColumnMapping): ParsedBankLine[] {
   const lines: ParsedBankLine[] = []
 
   json.forEach((row, idx) => {
@@ -195,6 +236,42 @@ export async function parseBankStatementFile(file: File, mapping: BankColumnMapp
       raw,
     })
   })
+
+  return lines
+}
+
+export async function previewBankStatementFile(file: File): Promise<BankSheetPreview> {
+  const buf = await file.arrayBuffer()
+  const wb = XLSX.read(buf, { type: 'array', cellDates: true })
+  const sheetName = wb.SheetNames[0]
+  if (!sheetName) throw new Error('Excel/CSV me koi sheet nahi mili')
+  const sheet = wb.Sheets[sheetName]
+  const layout = readSheetLayout(sheet)
+  if (!layout.headers.length || !layout.dataRows.length) throw new Error('File empty hai ya header row detect nahi hui')
+
+  const stringRows = rowsToStringRecords(layout.dataRows, layout.headers)
+  return {
+    sheetName,
+    headers: layout.headers,
+    rows: stringRows.slice(0, 8),
+    totalDataRows: layout.dataRows.length,
+    headerRowIndex: layout.headerRowIndex,
+    suggestedMapping: suggestBankColumnMapping(layout.headers),
+  }
+}
+
+export async function parseBankStatementFile(file: File, mapping: BankColumnMapping): Promise<ParsedBankLine[]> {
+  if (!mapping.date) throw new Error('Date column map karo')
+  if (!mapping.amount && !mapping.debitAmount && !mapping.creditAmount) {
+    throw new Error('Amount / Debit / Credit column map karo')
+  }
+
+  const buf = await file.arrayBuffer()
+  const wb = XLSX.read(buf, { type: 'array', cellDates: true })
+  const sheetName = wb.SheetNames[0]
+  const sheet = wb.Sheets[sheetName]
+  const layout = readSheetLayout(sheet)
+  const lines = parseRowsToLines(layout.dataRows, mapping)
 
   if (!lines.length) throw new Error('Koi valid bank line nahi mili — mapping check karo')
   return lines

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { suggestBankColumnMapping, bankLineFingerprint } from '@/services/bankStatementParse'
+import { suggestBankColumnMapping, bankLineFingerprint, layoutBankSheetRows } from '@/services/bankStatementParse'
 import { buildBankMatchSuggestions } from '@/services/bankStatementMatch'
 import { allocateCustomerReceipt } from '@/services/partyPaymentAllocation'
 import { resolvePaymentLedgerDate, buildPartyLedger } from '@/services/partyLedger'
@@ -12,6 +12,24 @@ describe('bank statement reconcile helpers', () => {
     expect(map.debitAmount).toBe('Withdrawal')
     expect(map.creditAmount).toBe('Deposit')
     expect(map.narration).toBe('Narration')
+  })
+
+  it('skips bank preamble rows and reads all transactions below header', () => {
+    const matrix = [
+      ['HDFC Bank', '', '', ''],
+      ['Account Statement', '', '', ''],
+      ['', '', '', ''],
+      ['Txn Date', 'Withdrawal', 'Deposit', 'Narration'],
+      ['2026-08-01', 1000, '', 'NEFT ABC'],
+      ['2026-08-02', '', 5000, 'IMPS Buyer'],
+      ['2026-08-03', 250, '', 'Charges'],
+      ['2026-08-04', '', 1200, 'RTGS'],
+      ['2026-08-05', 800, '', 'NEFT XYZ'],
+    ]
+    const layout = layoutBankSheetRows(matrix)
+    expect(layout.headerRowIndex).toBe(3)
+    expect(layout.dataRows).toHaveLength(5)
+    expect(layout.headers).toContain('Txn Date')
   })
 
   it('classifies exact debit match to purchase (payment after bill)', () => {
