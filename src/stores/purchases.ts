@@ -10,6 +10,7 @@ import {
   allocateVendorPayment,
   payStatusFromPaidPurchase,
 } from '@/services/partyPaymentAllocation'
+import { relatedPurchasePaymentIds } from '@/services/paymentReversal'
 import { movePurchaseBillsToFirm, type MovePurchaseBillsResult } from '@/services/purchaseCorrection'
 import {
   assertPurchaseReelsHaveNoConsumptionHistory,
@@ -219,6 +220,48 @@ export const usePurchaseStore = defineStore('purchases', () => {
     await load()
   }
 
+  async function clearPayment(id: string) {
+    const existing = await repo.get(id)
+    if (!existing || existing.is_deleted) return
+    if (money(existing.amt_paid || 0) <= 0) {
+      throw new Error(`Purchase ${existing.bill_no} par koi payment nahi hai.`)
+    }
+
+    const payRef = `${id}_PAY`
+    const hasVoucher = !!(await db.vouchers
+      .where('firm_id')
+      .equals(existing.firm_id)
+      .filter((v) => v.ref_id === payRef && !v.is_deleted)
+      .first())
+
+    const firmPurchases = await db.purchases.where('firm_id').equals(existing.firm_id).toArray()
+    const targetIds = relatedPurchasePaymentIds(existing, firmPurchases, hasVoucher)
+    const stamp = new Date().toISOString().slice(0, 10)
+
+    const accounting = useAccountingStore()
+    if (hasVoucher) await accounting.reverseLedgerByRef(payRef)
+
+    for (const billId of targetIds) {
+      const pur = firmPurchases.find((row) => row.id === billId)
+      if (!pur || pur.is_deleted || money(pur.amt_paid || 0) <= 0) continue
+      await repo.update(billId, {
+        amt_paid: 0,
+        pay_status: payStatusFromPaidPurchase(pur.grand_total, 0),
+        last_payment_date: undefined,
+        notes: `${pur.notes || ''} [Payment reversed ${stamp}]`.trim(),
+      })
+    }
+
+    await logActivity(
+      existing.firm_id,
+      'update',
+      'purchase',
+      id,
+      `Payment reversed on ${existing.bill_no}${targetIds.length > 1 ? ` (+${targetIds.length - 1} linked bills)` : ''}`,
+    )
+    await load()
+  }
+
   async function restore(id: string) {
     const rec = await repo.restore(id)
     if (rec) {
@@ -254,6 +297,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
     remove,
     restore,
     recordPayment,
+    clearPayment,
     moveToFirm,
     confirmReelStock,
     confirmConsumableStock,

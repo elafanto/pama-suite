@@ -12,6 +12,7 @@ import { isDeliveryChallan } from '@/services/invoiceDoc'
 import { notifyLocalDirty } from '@/services/localDirty'
 import { isInvoiceCancelled, isInvoiceActive } from '@/services/invoiceStatus'
 import { allocateCustomerReceipt, payStatusFromPaid } from '@/services/partyPaymentAllocation'
+import { relatedInvoicePaymentIds } from '@/services/paymentReversal'
 import { isSalesMonthLocked, salesMonthLockMessage, salesPeriodFromDate } from '@/services/salesMonthLock'
 import type { Invoice } from '@/types/models'
 
@@ -306,6 +307,51 @@ export const useInvoiceStore = defineStore('invoices', () => {
     await load()
   }
 
+  async function clearPayment(id: string) {
+    const existing = await repo.get(id)
+    if (!existing) return
+    if (!isInvoiceActive(existing)) {
+      throw new Error(`Invoice ${existing.bill_no} cancelled/deleted — payment clear nahi ho sakta`)
+    }
+    if (money(existing.amt_paid || 0) <= 0) {
+      throw new Error(`Invoice ${existing.bill_no} par koi payment nahi hai.`)
+    }
+
+    const payRef = `${id}_PAY`
+    const hasVoucher = !!(await db.vouchers
+      .where('firm_id')
+      .equals(existing.firm_id)
+      .filter((v) => v.ref_id === payRef && !v.is_deleted)
+      .first())
+
+    const firmInvoices = await db.invoices.where('firm_id').equals(existing.firm_id).toArray()
+    const targetIds = relatedInvoicePaymentIds(existing, firmInvoices, hasVoucher)
+    const stamp = new Date().toISOString().slice(0, 10)
+
+    const accounting = useAccountingStore()
+    if (hasVoucher) await accounting.reverseLedgerByRef(payRef)
+
+    for (const billId of targetIds) {
+      const inv = firmInvoices.find((row) => row.id === billId)
+      if (!inv || money(inv.amt_paid || 0) <= 0) continue
+      await repo.update(billId, {
+        amt_paid: 0,
+        pay_status: payStatusFromPaid(inv.grand_total, 0),
+        last_payment_date: undefined,
+        notes: `${inv.notes || ''} [Payment reversed ${stamp}]`.trim(),
+      })
+    }
+
+    await logActivity(
+      existing.firm_id,
+      'update',
+      'invoice',
+      id,
+      `Payment reversed on ${existing.bill_no}${targetIds.length > 1 ? ` (+${targetIds.length - 1} linked bills)` : ''}`,
+    )
+    await load()
+  }
+
   return {
     list,
     loaded,
@@ -318,5 +364,6 @@ export const useInvoiceStore = defineStore('invoices', () => {
     remove,
     restore,
     recordPayment,
+    clearPayment,
   }
 })

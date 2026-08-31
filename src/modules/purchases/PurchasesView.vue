@@ -1302,6 +1302,21 @@ function openPaymentModal(pur: Purchase) {
   showPaymentModal.value = true
 }
 
+async function clearPurchasePayment(pur: Purchase) {
+  if ((pur.amt_paid || 0) <= 0) return
+  const ok = confirm(
+    `Purchase ${pur.bill_no} se ₹${n2(pur.amt_paid)} payment hata den?\n\n`
+    + 'Lump/bank payment thi to same supplier + same payment date wali linked bills bhi clear ho sakti hain.',
+  )
+  if (!ok) return
+  try {
+    await purchaseStore.clearPayment(pur.id)
+    alert('Payment removed.')
+  } catch (err: any) {
+    alert(err?.message || 'Payment remove fail')
+  }
+}
+
 async function submitPayment() {
   if (!payPurchaseId.value) return
   if (payAmount.value < 0) {
@@ -2458,6 +2473,13 @@ onMounted(async () => {
                   >
                     💳 Pay
                   </button>
+                  <button
+                    v-if="(pur.amt_paid || 0) > 0"
+                    type="button"
+                    class="pp-btn pp-btn-ghost px-2 py-1 text-xs text-rose-700"
+                    title="Remove recorded payment"
+                    @click="clearPurchasePayment(pur)"
+                  >↩️</button>
                   <button 
                     @click="editPurchase(pur)" 
                     class="pp-btn pp-btn-ghost px-2 py-1 text-xs"

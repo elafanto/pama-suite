@@ -1137,6 +1137,21 @@ function openPaymentModal(inv: Invoice) {
   showPaymentModal.value = true
 }
 
+async function clearInvoicePayment(inv: Invoice) {
+  if ((inv.amt_paid || 0) <= 0) return
+  const ok = confirm(
+    `Invoice ${inv.bill_no} se ₹${n2(inv.amt_paid)} payment hata den?\n\n`
+    + 'Agar ye lump/bank reconcile payment thi (voucher is bill par), same party + same payment date wali linked bills bhi clear ho jayengi.',
+  )
+  if (!ok) return
+  try {
+    await invoiceStore.clearPayment(inv.id)
+    alert('Payment removed.')
+  } catch (err: any) {
+    alert(err?.message || 'Payment remove fail')
+  }
+}
+
 // Automatic write-off check
 const isWriteOffSuggested = computed(() => {
   const inv = invoiceStore.list.find(i => i.id === payInvoiceId.value)
@@ -1858,6 +1873,13 @@ onMounted(async () => {
                     class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs"
                     title="Record Payment"
                   >💳</button>
+                  <button
+                    v-if="isInvoiceActive(inv) && !isDeliveryChallan(inv) && (inv.amt_paid || 0) > 0"
+                    type="button"
+                    class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs text-rose-700"
+                    title="Remove recorded payment"
+                    @click="clearInvoicePayment(inv)"
+                  >↩️</button>
                   <button @click="openPrintPreview(inv)" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="Preview">👁️</button>
                   <button @click="downloadPDF(inv)" class="pp-btn pp-btn-primary !px-2 !py-1 text-xs font-semibold" title="Download PDF">PDF</button>
                   <button
