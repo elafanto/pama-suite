@@ -35,6 +35,8 @@ export interface BankMatchSuggestion {
   /** Set when Gemini overrode or filled rule-based match. */
   geminiEnhanced?: boolean
   geminiReason?: string
+  geminiPartyId?: string | null
+  geminiPartyName?: string
 }
 
 function round2(n: number) {
