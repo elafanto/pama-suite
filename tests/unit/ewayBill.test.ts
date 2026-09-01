@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildEwayJson, getEwayEligibility } from '@/services/ewayBill'
+import { buildEwayJson, getEwayEligibility, resolvePlace, validateEwayInvoice } from '@/services/ewayBill'
 import type { Firm, Invoice } from '@/types/models'
 
 const firm = {
@@ -57,5 +57,31 @@ describe('buildEwayJson job work challan', () => {
     expect(json.billLists[0].subSupplyType).toBe(4)
     expect(json.billLists[0].subSupplyDesc).toBe('Job Work')
     expect(json.billLists[0].docNo).toBe('DC-0001')
+  })
+})
+
+describe('resolvePlace', () => {
+  it('prefers explicit city', () => {
+    expect(resolvePlace('Kashipur', 'Plot 5, Jaspur', '244713')).toBe('Kashipur')
+  })
+
+  it('extracts city from address when city blank', () => {
+    expect(resolvePlace('', 'Plot 5, Industrial Area, Kashipur, Uttarakhand - 244713', '244713')).toBe('Kashipur')
+    expect(resolvePlace('', 'Sector 2, Kashipur 244713', '244713')).toBe('Kashipur')
+    expect(resolvePlace('', 'Main Road, Jaspur')).toBe('Jaspur')
+  })
+})
+
+describe('validateEwayInvoice firm place', () => {
+  it('passes when city empty but address has place', () => {
+    const noCityFirm = { ...firm, city: '', addr: 'Plot 5, Kashipur, Uttarakhand - 244713' } as Firm
+    const errors = validateEwayInvoice(makeInv(), noCityFirm)
+    expect(errors.some((e) => e.includes('Firm city/place'))).toBe(false)
+  })
+
+  it('uses resolved place in JSON fromPlace', () => {
+    const noCityFirm = { ...firm, city: '', addr: 'Plot 5, Kashipur, Uttarakhand - 244713' } as Firm
+    const json = buildEwayJson([makeInv()], noCityFirm)
+    expect(json.billLists[0].fromPlace).toBe('Kashipur')
   })
 })

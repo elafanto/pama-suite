@@ -90,6 +90,43 @@ function validPin(pin: unknown) {
   return /^\d{6}$/.test(String(pin || '').trim())
 }
 
+/** NIC `Place` — explicit city, else infer from address (common when Settings city blank). */
+export function resolvePlace(city?: string, addr?: string, pin?: string): string {
+  const trimmed = String(city || '').trim()
+  if (trimmed) return trimmed
+
+  const a = String(addr || '').trim()
+  if (!a) return ''
+
+  const pinStr = String(pin || '').trim()
+  if (/^\d{6}$/.test(pinStr) && a.includes(pinStr)) {
+    const beforePin = a.split(pinStr)[0].replace(/[-,\s]+$/, '')
+    const parts = beforePin.split(',').map((p) => p.trim()).filter(Boolean)
+    if (parts.length) {
+      const idx = parts.length >= 3 ? parts.length - 2 : parts.length - 1
+      const seg = parts[idx]
+      if (seg && seg.length >= 2 && seg.length <= 40) return seg
+    }
+  }
+
+  const parts = a
+    .split(',')
+    .map((p) => p.trim().replace(/\d{6}/g, '').replace(/[-–]\s*$/, '').trim())
+    .filter(Boolean)
+  if (!parts.length) return ''
+
+  const last = parts[parts.length - 1]
+  if (parts.length >= 3) return parts[parts.length - 2]
+  if (parts.length >= 2 && (/^\d{2}$/.test(last) || last.length > 20)) {
+    return parts[parts.length - 2]
+  }
+  return last
+}
+
+function firmPlace(firm: Firm) {
+  return resolvePlace(firm.city, firm.addr, firm.pin)
+}
+
 function partyDetails(inv: Invoice, partyLookup?: PartyLookup): Partial<Party> {
   const live = resolvePartyById(partyLookup, inv.party_id)
   return resolveLivePartyDetails(inv, live)
@@ -120,14 +157,15 @@ function ewayToParties(inv: Invoice, partyLookup?: PartyLookup) {
 
   if (!hasShip) {
     const pin = parseInt(String(cust.pin || '0'), 10) || 0
+    const custPlace = resolvePlace(cust.city, cust.addr, cust.pin)
     return {
       hasShip: false,
       transType: 1 as const,
       toGstin: buyerGst,
       toTrdName: inv.party_name || '',
       toAddr1: cust.addr || '',
-      toAddr2: cust.city || '',
-      toPlace: cust.city || '',
+      toAddr2: custPlace,
+      toPlace: custPlace,
       toPincode: pin,
       toStateCode: billToState,
       actualToStateCode: billToState,
@@ -137,6 +175,7 @@ function ewayToParties(inv: Invoice, partyLookup?: PartyLookup) {
   const shipGst = cleanGstin(ship.gstin || cust.gst || '')
   const shipState = parseStateCode(ship.state) || parseStateCode(shipGst) || billToState
   const shipPin = parseInt(String(ship.pin || '0'), 10) || 0
+  const shipPlace = resolvePlace(ship.city, ship.addr, ship.pin)
 
   return {
     hasShip: true,
@@ -144,8 +183,8 @@ function ewayToParties(inv: Invoice, partyLookup?: PartyLookup) {
     toGstin: buyerGst,
     toTrdName: inv.party_name || '',
     toAddr1: ship.addr || '',
-    toAddr2: ship.city || '',
-    toPlace: ship.city || '',
+    toAddr2: shipPlace,
+    toPlace: shipPlace,
     toPincode: shipPin,
     toStateCode: billToState,
     actualToStateCode: shipState,
@@ -156,7 +195,7 @@ export function validateEwayInvoice(inv: Invoice, firm: Firm, partyLookup?: Part
   const errors: string[] = []
   if (!isGstinValid(firm.gst)) errors.push('Firm GSTIN valid nahi hai')
   if (!firm.addr?.trim()) errors.push('Firm address missing hai')
-  if (!firm.city?.trim()) errors.push('Firm city/place missing hai')
+  if (!firmPlace(firm)) errors.push('Firm city/place missing hai (Settings → City ya address me city likhein)')
   if (!validPin(firm.pin)) errors.push('Firm PIN 6 digit hona chahiye')
   const firmState = parseInt(firm.state || getStateCode(firm.gst) || '', 10)
   if (!firmState) errors.push('Firm state code missing hai')
@@ -201,6 +240,7 @@ export function validateEwayInvoice(inv: Invoice, firm: Firm, partyLookup?: Part
 export function buildEwayJson(invoices: Invoice[], firm: Firm, partyLookup?: PartyLookup) {
   const fromSC = parseInt(firm.state, 10) || parseInt(getStateCode(firm.gst) || '0', 10) || 0
   const fromGstn = cleanGstin(firm.gst)
+  const fromPlace = firmPlace(firm)
 
   const billLists = invoices.map((b) => {
     const isInter = b.gst_type === 'inter' || b.gst_type === 'IGST'
@@ -231,8 +271,8 @@ export function buildEwayJson(invoices: Invoice[], firm: Firm, partyLookup?: Par
       fromGstin: fromGstn,
       fromTrdName: firm.name || '',
       fromAddr1: firm.addr || '',
-      fromAddr2: firm.city || '',
-      fromPlace: firm.city || (firm.addr || '').split(',').pop()?.trim() || '',
+      fromAddr2: fromPlace,
+      fromPlace,
       fromPincode: parseInt(firm.pin, 10) || 0,
       fromStateCode: fromSC,
       actualFromStateCode: fromSC,
