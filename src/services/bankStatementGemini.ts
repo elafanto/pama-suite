@@ -358,7 +358,16 @@ export function applyGeminiBankMatches(
       }
     }
 
-    if (!selectedIds.length) return { ...row, ...basePartyFields, geminiReason: gem.reason || partyReason }
+    if (!selectedIds.length) {
+      return {
+        ...row,
+        ...basePartyFields,
+        matchKind: VALID_KINDS.has(gem.matchKind) ? gem.matchKind : row.matchKind,
+        selectedIds: [],
+        geminiReason: gem.reason || partyReason,
+        confidence: 'low',
+      }
+    }
 
     const mergedCandidates = [
       ...catalogCandidates(selectedIds, catalog),

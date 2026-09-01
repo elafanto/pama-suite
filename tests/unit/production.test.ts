@@ -171,7 +171,10 @@ describe('proposePurchaseConsumableSpecs', () => {
     const specs = proposePurchaseConsumableSpecs(purchase)
     expect(specs).toHaveLength(1)
     expect(specs[0].stock_type).toBe('glue')
-    expect(specs[0].qty).toBe(50)
+    // KG purchase line → 1 bulk pack, total weight = line qty
+    expect(specs[0].qty).toBe(1)
+    expect(specs[0].packs).toBe(1)
+    expect(specs[0].pack_size_kg).toBe(50)
     expect(specs[0].weight).toBe(50)
   })
 })
