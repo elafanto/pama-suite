@@ -3,6 +3,7 @@ import { uid, nowISO } from '@/data/util'
 import { logActivity } from '@/services/activityLog'
 import type { Invoice, ItemStockMovement, Purchase } from '@/types/models'
 import { isGenericInventoryLine } from '@/services/purchaseLineKind'
+import { billUpdatesStock } from '@/services/billStock'
 
 export interface ManualAdjustmentInput {
   firmId: string
@@ -131,7 +132,7 @@ async function replaceMovementsForRef(
 }
 
 export async function recordPurchaseMovements(purchase: Purchase): Promise<ItemStockMovement[]> {
-  if (purchase.is_deleted) {
+  if (purchase.is_deleted || !billUpdatesStock(purchase)) {
     return replaceMovementsForRef(purchase.firm_id, 'purchase', 'purchase', purchase.id, [])
   }
 
@@ -153,7 +154,12 @@ export async function recordPurchaseMovements(purchase: Purchase): Promise<ItemS
 }
 
 export async function recordInvoiceMovements(invoice: Invoice): Promise<ItemStockMovement[]> {
-  if (invoice.is_deleted || invoice.cancelled_at || (invoice.doc_type !== 'INVOICE' && invoice.doc_type !== 'invoice')) {
+  if (
+    invoice.is_deleted
+    || invoice.cancelled_at
+    || !billUpdatesStock(invoice)
+    || (invoice.doc_type !== 'INVOICE' && invoice.doc_type !== 'invoice')
+  ) {
     return replaceMovementsForRef(invoice.firm_id, 'invoice', 'invoice', invoice.id, [])
   }
 

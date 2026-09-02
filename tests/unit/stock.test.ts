@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { Item, Invoice, Purchase, ItemStockMovement } from '@/types/models'
 import { computeStock, stockSummary, findStockRowForLine } from '@/services/stock'
+import { billUpdatesStock } from '@/services/billStock'
 import { manualAdjustmentTotals } from '@/services/inventoryLedger'
 
 const FIRM = 'F1'
@@ -28,8 +29,8 @@ const adj = (over: Partial<ItemStockMovement> = {}): ItemStockMovement =>
 describe('computeStock', () => {
   it('on-hand = opening + purchased − sold + adjustments', () => {
     const items = [item({ opening_stock: 100 })]
-    const purchases = [purchase([{ item_id: 'I1', name: 'Kraft 120', qty: 50 }])]
-    const invoices = [invoice([{ item_id: 'I1', name: 'Kraft 120', qty: 30 }])]
+    const purchases = [purchase([{ item_id: 'I1', name: 'Kraft 120', qty: 50 }], { update_stock: true })]
+    const invoices = [invoice([{ item_id: 'I1', name: 'Kraft 120', qty: 30 }], { update_stock: true })]
     const movements = [adj({ qty_delta: -5 })]
 
     const rows = computeStock(items, purchases, invoices, FIRM, movements)
@@ -78,10 +79,28 @@ describe('computeStock', () => {
 
   it('ignores cancelled invoices so stock is restored', () => {
     const items = [item({ opening_stock: 100 })]
-    const cancelled = invoice([{ item_id: 'I1', name: 'Kraft 120', qty: 40 }], { cancelled_at: '2026-08-01T00:00:00.000Z' })
+    const cancelled = invoice([{ item_id: 'I1', name: 'Kraft 120', qty: 40 }], { cancelled_at: '2026-08-01T00:00:00.000Z', update_stock: true })
     const rows = computeStock(items, [], [cancelled], FIRM)
     expect(rows[0].sold).toBe(0)
     expect(rows[0].onHand).toBe(100)
+  })
+
+  it('skips purchases and invoices when update_stock is false', () => {
+    const items = [item({ opening_stock: 100 })]
+    const purchases = [purchase([{ item_id: 'I1', name: 'Kraft 120', qty: 50 }], { update_stock: false })]
+    const invoices = [invoice([{ item_id: 'I1', name: 'Kraft 120', qty: 30 }], { update_stock: false })]
+    const rows = computeStock(items, purchases, invoices, FIRM)
+    expect(rows[0].purchased).toBe(0)
+    expect(rows[0].sold).toBe(0)
+    expect(rows[0].onHand).toBe(100)
+  })
+
+  it('legacy bills without update_stock still count toward stock', () => {
+    const items = [item({ opening_stock: 0 })]
+    const purchases = [purchase([{ item_id: 'I1', name: 'Kraft 120', qty: 25 }])]
+    const rows = computeStock(items, purchases, [], FIRM)
+    expect(rows[0].purchased).toBe(25)
+    expect(rows[0].onHand).toBe(25)
   })
 })
 
@@ -107,6 +126,14 @@ describe('findStockRowForLine', () => {
     expect(findStockRowForLine(rows, { item_id: 'I1', name: 'x' })?.itemId).toBe('I1')
     expect(findStockRowForLine(rows, { item_id: '', name: 'Kraft 120' })?.itemId).toBe('I1')
     expect(findStockRowForLine(rows, { item_id: '', name: 'nope' })).toBeNull()
+  })
+})
+
+describe('billUpdatesStock', () => {
+  it('treats explicit false as off and legacy undefined as on', () => {
+    expect(billUpdatesStock({ update_stock: false })).toBe(false)
+    expect(billUpdatesStock({ update_stock: true })).toBe(true)
+    expect(billUpdatesStock({})).toBe(true)
   })
 })
 

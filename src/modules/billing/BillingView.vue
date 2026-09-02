@@ -31,6 +31,7 @@ import {
 } from '@/services/hsnGst'
 import { listItemStockMovements } from '@/services/inventoryLedger'
 import { computeStock, findStockRowForLine } from '@/services/stock'
+import { billUpdatesStock } from '@/services/billStock'
 import { periodLabelYm, salesMonthLockMessage, salesPeriodFromDate } from '@/services/salesMonthLock'
 import { isInvoiceActive, isInvoiceCancelled } from '@/services/invoiceStatus'
 import { computeInvoiceTotals, inferInvoiceDiscountMode, type InvoiceDiscountMode } from '@/services/invoiceTotals'
@@ -182,7 +183,8 @@ const initialFormState = () => ({
   discount_mode: 'none' as InvoiceDiscountMode,
   discount_value: 0,
   amt_paid: 0,
-  pay_status: 'UNPAID' as PayStatus
+  pay_status: 'UNPAID' as PayStatus,
+  update_stock: false,
 })
 
 const form = reactive(initialFormState())
@@ -494,7 +496,7 @@ const editedInvoice = computed(() => invoiceStore.list.find((inv) => inv.id === 
 const originalEditQtyByItem = computed(() => {
   const qty = new Map<string, number>()
   const inv = editedInvoice.value
-  if (!inv || inv.doc_type !== 'INVOICE') return qty
+  if (!inv || inv.doc_type !== 'INVOICE' || !billUpdatesStock(inv)) return qty
   for (const line of inv.items || []) {
     const stockRow = findStockRowForLine(stockRows.value, line)
     if (!stockRow) continue
@@ -504,7 +506,7 @@ const originalEditQtyByItem = computed(() => {
 })
 
 const stockGuardWarnings = computed(() => {
-  if (form.doc_type !== 'INVOICE') return []
+  if (form.doc_type !== 'INVOICE' || !form.update_stock) return []
 
   const requested = new Map<string, { row: ReturnType<typeof findStockRowForLine>; qty: number }>()
   for (const line of form.items) {
@@ -950,7 +952,8 @@ async function saveInvoice() {
     grand_total: grandTotal.value,
     amt_paid: amtPaid,
     pay_status: finalPayStatus,
-    notes: form.notes.trim()
+    notes: form.notes.trim(),
+    update_stock: !!form.update_stock,
   }
 
   try {
@@ -1038,7 +1041,8 @@ function editInvoice(inv: Invoice) {
     discount_mode: inferInvoiceDiscountMode(inv.discount_amount, inv.discount_pct).mode,
     discount_value: inferInvoiceDiscountMode(inv.discount_amount, inv.discount_pct).value,
     amt_paid: inv.amt_paid || 0,
-    pay_status: inv.pay_status || 'UNPAID'
+    pay_status: inv.pay_status || 'UNPAID',
+    update_stock: inv.update_stock !== false,
   })
 
   form.items = inv.items.map(row => ({ ...row }))
@@ -1082,7 +1086,8 @@ function copyInvoice(inv: Invoice) {
     discount_mode: inferInvoiceDiscountMode(inv.discount_amount, inv.discount_pct).mode,
     discount_value: inferInvoiceDiscountMode(inv.discount_amount, inv.discount_pct).value,
     amt_paid: 0,
-    pay_status: 'UNPAID' as PayStatus
+    pay_status: 'UNPAID' as PayStatus,
+    update_stock: false,
   })
 
   form.items = inv.items.map(row => ({ ...row }))
@@ -1519,6 +1524,18 @@ onMounted(async () => {
               <button @click="addRow()" class="pp-btn pp-btn-ghost !px-2.5 !py-1 text-xs">+ Add Row</button>
             </div>
           </div>
+          <label
+            v-if="form.doc_type === 'INVOICE'"
+            class="mx-3 mt-3 flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 cursor-pointer"
+          >
+            <input v-model="form.update_stock" type="checkbox" class="mt-0.5 rounded" />
+            <span class="text-sm text-slate-700">
+              <strong>Stock / inventory se minus karo</strong>
+              <span class="block text-xs text-slate-500 mt-0.5">
+                Sirf tick karne par tracked items ki qty kam hogi. Bina tick ke sirf sales bill / accounting save hogi.
+              </span>
+            </span>
+          </label>
           <div v-if="stockGuardWarnings.length" class="m-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
             <strong>Stock guard:</strong> Cannot save because tracked item quantity exceeds on-hand stock.
             <ul class="mt-1 list-disc pl-5 text-xs space-y-0.5">

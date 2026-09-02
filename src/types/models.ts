@@ -157,6 +157,8 @@ export interface Invoice extends BaseRecord {
   /** Last recorded receipt / payment date (ledger Payment/Receipt row). */
   last_payment_date?: string
   notes: string
+  /** When true, invoice lines reduce tracked inventory qty. Default off for new bills. */
+  update_stock?: boolean
   /** Set when bill is Cancelled (visible in history; GSTR Table 13 cancelled). */
   cancelled_at?: string | null
   editReason?: string
@@ -223,6 +225,8 @@ export interface Purchase extends BaseRecord {
   /** Last recorded payment date (ledger Payment row). */
   last_payment_date?: string
   notes: string
+  /** When true, purchase lines update inventory / reel / consumable stock. Default off for new bills. */
+  update_stock?: boolean
 }
 
 export interface LedgerEntry {

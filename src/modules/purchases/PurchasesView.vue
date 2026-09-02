@@ -100,7 +100,8 @@ const initialFormState = () => ({
   items: [] as PurchaseItemLine[],
   notes: '',
   amt_paid: 0,
-  pay_status: 'UNPAID' as PayStatus
+  pay_status: 'UNPAID' as PayStatus,
+  update_stock: false,
 })
 
 const form = reactive(initialFormState())
@@ -694,6 +695,7 @@ async function saveScannedBill(bill: ScannedBillWithFile, reuseStoragePath?: str
     amt_paid: 0,
     pay_status: 'UNPAID',
     notes: bill.grandTotal ? `AI scan total: ₹${bill.grandTotal}` : 'AI multi-bill import',
+    update_stock: false,
   })
   const storagePath = await tryAttachPurchaseFile(purchase, bill._sourceFile, reuseStoragePath)
   return { purchase, storagePath }
@@ -781,7 +783,8 @@ async function savePurchase() {
     grand_total: grandTotal.value,
     amt_paid: form.amt_paid,
     pay_status: form.pay_status,
-    notes: form.notes
+    notes: form.notes,
+    update_stock: !!form.update_stock,
   }
 
   try {
@@ -800,8 +803,8 @@ async function savePurchase() {
     } else {
       const purchase = await purchaseStore.add(purchaseData)
       savedPurchase = purchase
-      openReelConfirm = purchaseHasReelLines(purchase)
-      openConsumableConfirm = purchaseHasConsumableLines(purchase)
+      openReelConfirm = purchaseHasReelLines(purchase) && !!purchase.update_stock
+      openConsumableConfirm = purchaseHasConsumableLines(purchase) && !!purchase.update_stock
       replaceExisting = false
       const attached = await tryAttachPurchaseFile(purchase, pendingScanFile.value)
       pendingScanFile.value = null
@@ -1045,6 +1048,7 @@ async function saveBulkPurchases() {
       amt_paid: row.pay_status === 'PAID' ? totals.grandTotal : 0,
       pay_status: row.pay_status,
       notes: row.notes,
+      update_stock: false,
     })
     saved++
   }
@@ -1242,6 +1246,7 @@ function editPurchase(pur: Purchase) {
   form.notes = pur.notes
   form.amt_paid = pur.amt_paid
   form.pay_status = pur.pay_status
+  form.update_stock = pur.update_stock !== false
   
   form.items = pur.items.map(it => normalizePurchaseLine({
     ...it,
@@ -1835,6 +1840,16 @@ onMounted(async () => {
             <label class="pp-label">Administrative Notes</label>
             <textarea v-model="form.notes" class="pp-input min-h-[80px]" placeholder="Add remarks or notes..."></textarea>
           </div>
+
+          <label class="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 cursor-pointer">
+            <input v-model="form.update_stock" type="checkbox" class="mt-0.5 rounded" />
+            <span class="text-sm text-slate-700">
+              <strong>Stock / inventory update karo</strong>
+              <span class="block text-xs text-slate-500 mt-0.5">
+                Tick karo tab hi item qty, paper reels aur consumables stock me jayega. Bina tick ke sirf accounting bill save hogi.
+              </span>
+            </span>
+          </label>
 
           <div class="flex gap-2">
             <button @click="resetForm()" class="pp-btn pp-btn-ghost flex-1">

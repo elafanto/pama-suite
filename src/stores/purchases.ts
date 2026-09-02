@@ -6,6 +6,7 @@ import { useFirmStore } from './firm'
 import { useAccountingStore } from './accounting'
 import { logActivity } from '@/services/activityLog'
 import { recordPurchaseMovements } from '@/services/inventoryLedger'
+import { billUpdatesStock } from '@/services/billStock'
 import {
   allocateVendorPayment,
   payStatusFromPaidPurchase,
@@ -95,6 +96,11 @@ export const usePurchaseStore = defineStore('purchases', () => {
     const rec = await repo.update(id, patch)
     if (rec) {
       const accounting = useAccountingStore()
+      if (existing && billUpdatesStock(existing) && !billUpdatesStock(rec)) {
+        await assertPurchaseReelsHaveNoConsumptionHistory(id, 'update')
+        await reversePurchaseReels(id)
+        await reversePurchaseConsumables(id)
+      }
       await accounting.postPurchaseToLedger(rec)
       await syncPaymentVoucher(rec)
       await recordPurchaseMovements(rec)
@@ -104,14 +110,15 @@ export const usePurchaseStore = defineStore('purchases', () => {
     await load()
     return {
       reelStockChanged,
-      needsReelConfirm: !!rec && purchaseHasReelLines(rec),
-      needsConsumableConfirm: !!rec && purchaseHasConsumableLines(rec),
+      needsReelConfirm: !!rec && billUpdatesStock(rec) && purchaseHasReelLines(rec),
+      needsConsumableConfirm: !!rec && billUpdatesStock(rec) && purchaseHasConsumableLines(rec),
     }
   }
 
   async function confirmReelStock(purchaseId: string, specs: PurchaseReelSpec[], opts?: { replaceExisting?: boolean }) {
     const rec = await repo.get(purchaseId)
     if (!rec || rec.is_deleted) throw new Error('Purchase not found')
+    if (!billUpdatesStock(rec)) throw new Error('Is bill par stock update band hai — pehle "Update stock" enable karo')
     if (!purchaseHasReelLines(rec) && !(specs || []).length) {
       throw new Error('Is purchase me paper reel lines nahi hain')
     }
@@ -128,6 +135,7 @@ export const usePurchaseStore = defineStore('purchases', () => {
   async function confirmConsumableStock(purchaseId: string, specs: PurchaseConsumableSpec[], opts?: { replaceExisting?: boolean }) {
     const rec = await repo.get(purchaseId)
     if (!rec || rec.is_deleted) throw new Error('Purchase not found')
+    if (!billUpdatesStock(rec)) throw new Error('Is bill par stock update band hai — pehle "Update stock" enable karo')
     if (!purchaseHasConsumableLines(rec) && !(specs || []).length) {
       throw new Error('Is purchase me consumable lines nahi hain')
     }
