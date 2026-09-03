@@ -13,6 +13,7 @@ import { notifyLocalDirty } from '@/services/localDirty'
 import { isInvoiceCancelled, isInvoiceActive } from '@/services/invoiceStatus'
 import { allocateCustomerReceipt, payStatusFromPaid } from '@/services/partyPaymentAllocation'
 import { relatedInvoicePaymentIds } from '@/services/paymentReversal'
+import { resolvePaymentClearAction } from '@/services/paymentClear'
 import { isSalesMonthLocked, salesMonthLockMessage, salesPeriodFromDate } from '@/services/salesMonthLock'
 import type { Invoice } from '@/types/models'
 
@@ -309,12 +310,11 @@ export const useInvoiceStore = defineStore('invoices', () => {
 
   async function clearPayment(id: string) {
     const existing = await repo.get(id)
-    if (!existing) return
+    if (!existing) {
+      throw new Error('Invoice nahi mili — payment clear fail')
+    }
     if (!isInvoiceActive(existing)) {
       throw new Error(`Invoice ${existing.bill_no} cancelled/deleted — payment clear nahi ho sakta`)
-    }
-    if (money(existing.amt_paid || 0) <= 0) {
-      throw new Error(`Invoice ${existing.bill_no} par koi payment nahi hai.`)
     }
 
     const payRef = `${id}_PAY`
@@ -323,13 +323,24 @@ export const useInvoiceStore = defineStore('invoices', () => {
       .equals(existing.firm_id)
       .filter((v) => v.ref_id === payRef && !v.is_deleted)
       .first())
+    const action = resolvePaymentClearAction(existing.amt_paid || 0, hasVoucher)
+
+    if (action === 'none') {
+      throw new Error(`Invoice ${existing.bill_no} par koi payment nahi hai.`)
+    }
+
+    const accounting = useAccountingStore()
+    if (hasVoucher) await accounting.reverseLedgerByRef(payRef)
+
+    if (action === 'voucher_only') {
+      await logActivity(existing.firm_id, 'update', 'invoice', id, `Orphan payment voucher removed for ${existing.bill_no}`)
+      await load()
+      return
+    }
 
     const firmInvoices = await db.invoices.where('firm_id').equals(existing.firm_id).toArray()
     const targetIds = relatedInvoicePaymentIds(existing, firmInvoices, hasVoucher)
     const stamp = new Date().toISOString().slice(0, 10)
-
-    const accounting = useAccountingStore()
-    if (hasVoucher) await accounting.reverseLedgerByRef(payRef)
 
     for (const billId of targetIds) {
       const inv = firmInvoices.find((row) => row.id === billId)

@@ -12,6 +12,7 @@ import {
   payStatusFromPaidPurchase,
 } from '@/services/partyPaymentAllocation'
 import { relatedPurchasePaymentIds } from '@/services/paymentReversal'
+import { resolvePaymentClearAction } from '@/services/paymentClear'
 import { movePurchaseBillsToFirm, type MovePurchaseBillsResult } from '@/services/purchaseCorrection'
 import {
   assertPurchaseReelsHaveNoConsumptionHistory,
@@ -230,9 +231,8 @@ export const usePurchaseStore = defineStore('purchases', () => {
 
   async function clearPayment(id: string) {
     const existing = await repo.get(id)
-    if (!existing || existing.is_deleted) return
-    if (money(existing.amt_paid || 0) <= 0) {
-      throw new Error(`Purchase ${existing.bill_no} par koi payment nahi hai.`)
+    if (!existing || existing.is_deleted) {
+      throw new Error('Purchase nahi mili — payment clear fail')
     }
 
     const payRef = `${id}_PAY`
@@ -241,13 +241,24 @@ export const usePurchaseStore = defineStore('purchases', () => {
       .equals(existing.firm_id)
       .filter((v) => v.ref_id === payRef && !v.is_deleted)
       .first())
+    const action = resolvePaymentClearAction(existing.amt_paid || 0, hasVoucher)
+
+    if (action === 'none') {
+      throw new Error(`Purchase ${existing.bill_no} par koi payment nahi hai.`)
+    }
+
+    const accounting = useAccountingStore()
+    if (hasVoucher) await accounting.reverseLedgerByRef(payRef)
+
+    if (action === 'voucher_only') {
+      await logActivity(existing.firm_id, 'update', 'purchase', id, `Orphan payment voucher removed for ${existing.bill_no}`)
+      await load()
+      return
+    }
 
     const firmPurchases = await db.purchases.where('firm_id').equals(existing.firm_id).toArray()
     const targetIds = relatedPurchasePaymentIds(existing, firmPurchases, hasVoucher)
     const stamp = new Date().toISOString().slice(0, 10)
-
-    const accounting = useAccountingStore()
-    if (hasVoucher) await accounting.reverseLedgerByRef(payRef)
 
     for (const billId of targetIds) {
       const pur = firmPurchases.find((row) => row.id === billId)

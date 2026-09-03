@@ -88,19 +88,39 @@ function clearSelection() {
   selected.value = new Set()
 }
 
+async function removePaymentEntry(row: PaymentRegistryRow) {
+  let billCleared = false
+  if (row.billId && row.billKind === 'invoice') {
+    try {
+      await invoiceStore.clearPayment(row.billId)
+      billCleared = true
+    } catch (err) {
+      if (!row.voucherId) throw err
+    }
+  } else if (row.billId && row.billKind === 'purchase') {
+    try {
+      await purchaseStore.clearPayment(row.billId)
+      billCleared = true
+    } catch (err) {
+      if (!row.voucherId) throw err
+    }
+  }
+
+  // Always drop voucher if still present (orphan / clearPayment miss / bill missing).
+  if (row.voucherId) {
+    await accountingStore.deleteVoucherById(row.voucherId)
+  } else if (!billCleared) {
+    throw new Error('Payment remove fail — bill/voucher nahi mila')
+  }
+}
+
 async function removeRow(row: PaymentRegistryRow) {
   const label = `${row.direction === 'in' ? 'Receipt' : 'Payment'} ₹${n2(row.amount)} · ${row.partyName || row.billNo}`
   if (!confirm(`Ye entry hata den?\n\n${label}\n\nBill paid amount + voucher (agar hai) reverse ho jayega.`)) return
 
   busy.value = true
   try {
-    if (row.billId && row.billKind === 'invoice') {
-      await invoiceStore.clearPayment(row.billId)
-    } else if (row.billId && row.billKind === 'purchase') {
-      await purchaseStore.clearPayment(row.billId)
-    } else if (row.voucherId) {
-      await accountingStore.deleteVoucherById(row.voucherId)
-    }
+    await removePaymentEntry(row)
     selected.value.delete(row.id)
     await accountingStore.load()
     await invoiceStore.load()
@@ -122,9 +142,7 @@ async function removeSelected() {
   try {
     for (const row of rows) {
       try {
-        if (row.billId && row.billKind === 'invoice') await invoiceStore.clearPayment(row.billId)
-        else if (row.billId && row.billKind === 'purchase') await purchaseStore.clearPayment(row.billId)
-        else if (row.voucherId) await accountingStore.deleteVoucherById(row.voucherId)
+        await removePaymentEntry(row)
         ok++
       } catch {
         // continue with rest
