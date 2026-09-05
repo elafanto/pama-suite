@@ -6,6 +6,7 @@ import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { usePurchaseStore } from '@/stores/purchases'
+import { usePartyAdvanceStore } from '@/stores/partyAdvances'
 import { useSettingsStore } from '@/stores/settings'
 import PpModal from '@/components/PpModal.vue'
 import AiScanPanel from '@/components/AiScanPanel.vue'
@@ -37,6 +38,14 @@ import {
 } from '@/services/purchaseLineKind'
 import { proposePurchaseReelSpecs, purchaseHasReelLines, proposePurchaseConsumableSpecs, purchaseHasConsumableLines, STOCK_LABELS, findDuplicateReelNosInList, INK_COLOR_SUGGESTIONS, normalizeInkColor, guessInkColorFromText, type PurchaseReelSpec, type PurchaseConsumableSpec } from '@/services/production'
 import { useTableSort } from '@/composables/useTableSort'
+import {
+  allocateVendorPayment,
+  allocationAppliedTotal,
+  formatAllocBreakdown,
+  type PaymentAllocMode,
+  type PaymentExcessAction,
+  type PaymentSettleReason,
+} from '@/services/partyPaymentAllocation'
 import type { CapitalCategory, ExpenseCategory, GstType, PaperType, PayStatus, Purchase, PurchaseItemLine } from '@/types/models'
 
 // Stores
@@ -44,6 +53,7 @@ const firmStore = useFirmStore()
 const partyStore = usePartyStore()
 const itemStore = useItemStore()
 const purchaseStore = usePurchaseStore()
+const partyAdvanceStore = usePartyAdvanceStore()
 const settingsStore = useSettingsStore()
 const router = useRouter()
 
@@ -72,6 +82,10 @@ const payAmount = ref(0)
 const payDate = ref(new Date().toISOString().slice(0, 10))
 const payNote = ref('')
 const payWriteOff = ref(false)
+const payApplyAdvance = ref(true)
+const payAllocMode = ref<PaymentAllocMode>('fifo')
+const payExcessAction = ref<PaymentExcessAction>('advance')
+const paySettleReason = ref<PaymentSettleReason>('settlement')
 
 // Confirm reel stock into Paper Reels (custom reel numbers)
 const showReelConfirmModal = ref(false)
@@ -1304,8 +1318,62 @@ function openPaymentModal(pur: Purchase) {
   payDate.value = new Date().toISOString().slice(0, 10)
   payNote.value = ''
   payWriteOff.value = false
+  payApplyAdvance.value = true
+  payAllocMode.value = 'fifo'
+  payExcessAction.value = 'advance'
+  paySettleReason.value = 'settlement'
   showPaymentModal.value = true
+  void partyAdvanceStore.load()
 }
+
+const payPurchase = computed(() => purchaseStore.list.find((p) => p.id === payPurchaseId.value))
+const payOpenAdvance = computed(() => {
+  const pur = payPurchase.value
+  if (!pur) return 0
+  return partyAdvanceStore.totalOpen(pur.supplier_id, pur.supplier_name, 'out')
+})
+
+const payPrimaryOutstanding = computed(() => {
+  const pur = payPurchase.value
+  if (!pur) return 0
+  return Math.round(Math.max(0, pur.grand_total - (pur.amt_paid || 0)) * 100) / 100
+})
+
+const payPreview = computed(() => {
+  const pur = payPurchase.value
+  if (!pur || payAmount.value <= 0) {
+    return { allocations: [] as { id: string; amount: number; billNo: string }[], applied: 0, excess: 0, shortfall: 0 }
+  }
+  let bankAmt = payAmount.value
+  if (payApplyAdvance.value && payOpenAdvance.value > 0.01) {
+    bankAmt = Math.max(0, Math.round((bankAmt - Math.min(bankAmt, payOpenAdvance.value)) * 100) / 100)
+  }
+  if (payWriteOff.value) {
+    const applied = Math.min(bankAmt, payPrimaryOutstanding.value)
+    const shortfall = Math.max(0, Math.round((payPrimaryOutstanding.value - applied) * 100) / 100)
+    return {
+      allocations: [{ id: pur.id, amount: applied, billNo: pur.bill_no || pur.id.slice(0, 8) }],
+      applied,
+      excess: Math.max(0, Math.round((bankAmt - applied) * 100) / 100),
+      shortfall,
+    }
+  }
+  const allocations = allocateVendorPayment(purchaseStore.list, pur.id, bankAmt, { mode: payAllocMode.value })
+  const billNos: Record<string, string> = {}
+  for (const a of allocations) {
+    const row = purchaseStore.list.find((p) => p.id === a.id)
+    if (row) billNos[a.id] = row.bill_no || row.id.slice(0, 8)
+  }
+  const applied = allocationAppliedTotal(allocations)
+  const excess = Math.max(0, Math.round((bankAmt - applied) * 100) / 100)
+  const shortfall = Math.max(0, Math.round((payPrimaryOutstanding.value - (allocations.find((a) => a.id === pur.id)?.amount || 0)) * 100) / 100)
+  return {
+    allocations: allocations.map((a) => ({ ...a, billNo: billNos[a.id] || a.id.slice(0, 8) })),
+    applied,
+    excess,
+    shortfall,
+  }
+})
 
 async function clearPurchasePayment(pur: Purchase) {
   if ((pur.amt_paid || 0) <= 0) return
@@ -1328,15 +1396,55 @@ async function submitPayment() {
     alert('Amount cannot be negative')
     return
   }
-  await purchaseStore.recordPayment(
-    payPurchaseId.value,
-    payAmount.value,
-    payWriteOff.value,
-    payNote.value,
-    payDate.value
-  )
-  showPaymentModal.value = false
-  alert('Payment logged successfully!')
+  if (payAmount.value <= 0 && !payApplyAdvance.value) {
+    alert('Amount must be positive')
+    return
+  }
+
+  let remaining = payAmount.value
+  let advanceApplied = 0
+  const pur = payPurchase.value
+
+  try {
+    if (payApplyAdvance.value && pur && payOpenAdvance.value > 0.01) {
+      const want = Math.min(remaining > 0 ? remaining : payOpenAdvance.value, payOpenAdvance.value)
+      const outstanding = Math.max(0, pur.grand_total - (pur.amt_paid || 0))
+      advanceApplied = await partyAdvanceStore.applyToBill({
+        billId: payPurchaseId.value,
+        billKind: 'purchase',
+        amount: Math.min(want, outstanding),
+        date: payDate.value,
+        note: payNote.value || 'Advance applied',
+      })
+      remaining = Math.round((Math.max(0, remaining) - advanceApplied) * 100) / 100
+      await purchaseStore.load()
+    }
+
+    if (remaining > 0.01) {
+      await purchaseStore.recordPayment(
+        payPurchaseId.value,
+        remaining,
+        payWriteOff.value,
+        payNote.value,
+        payDate.value,
+        undefined,
+        undefined,
+        {
+          mode: payAllocMode.value,
+          excessAction: payExcessAction.value,
+          settleReason: paySettleReason.value,
+        },
+      )
+    }
+    showPaymentModal.value = false
+    alert(
+      advanceApplied > 0.01
+        ? `Payment logged. Advance ₹${n2(advanceApplied)} applied` + (remaining > 0.01 ? `, bank ₹${n2(remaining)}.` : '.')
+        : 'Payment logged successfully!',
+    )
+  } catch (err: any) {
+    alert(err?.message || 'Payment record fail')
+  }
 }
 
 function payVendorRtgs(pur: Purchase) {
@@ -2599,6 +2707,12 @@ onMounted(async () => {
     <!-- Outstanding Payment Modal -->
     <PpModal :show="showPaymentModal" title="Record Payment to Vendor" @close="showPaymentModal = false">
       <div class="space-y-4">
+        <div class="p-3 bg-slate-50 rounded-lg space-y-1 text-sm" v-if="payPurchase">
+          <p class="text-slate-500">Bill: <strong class="text-navy">{{ payPurchase.bill_no }}</strong></p>
+          <p class="text-slate-500">Vendor: <strong>{{ payPurchase.supplier_name }}</strong></p>
+          <p class="text-slate-500">Outstanding: <strong class="text-danger">₹{{ n2(payPrimaryOutstanding) }}</strong></p>
+          <p v-if="payOpenAdvance > 0.01" class="text-emerald-700 text-xs">Open vendor advance: <strong>₹{{ n2(payOpenAdvance) }}</strong></p>
+        </div>
         <div>
           <label class="pp-label">Date of Payment</label>
           <input type="date" v-model="payDate" class="pp-input" />
@@ -2607,11 +2721,52 @@ onMounted(async () => {
           <label class="pp-label">Amount Paid (₹)</label>
           <input type="number" v-model.number="payAmount" class="pp-input" placeholder="0.00" />
         </div>
-        <div class="flex items-center gap-2">
-          <input type="checkbox" v-model="payWriteOff" id="write-off-chk" class="w-4 h-4 rounded text-accent" />
-          <label for="write-off-chk" class="text-sm font-semibold text-slate-600">
-            Write-off difference as Round Off Expense?
+        <div>
+          <label class="pp-label">Allocation</label>
+          <select v-model="payAllocMode" class="pp-input" :disabled="payWriteOff">
+            <option value="fifo">Oldest bills first (FIFO)</option>
+            <option value="primary_then_fifo">This bill first, then FIFO</option>
+            <option value="primary_only">This bill only</option>
+          </select>
+        </div>
+        <label v-if="payOpenAdvance > 0.01" class="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 cursor-pointer">
+          <input v-model="payApplyAdvance" type="checkbox" class="mt-0.5 rounded" />
+          <span class="text-xs text-emerald-900">
+            <strong>Pehle open advance apply karo</strong>
+            <span class="block mt-0.5">FIFO se vendor advance use hoga; baaki amount bank payment banega.</span>
+          </span>
+        </label>
+        <div v-if="payPreview.allocations.length || payPreview.excess > 0.01" class="rounded-lg border border-slate-200 bg-white p-3 space-y-1">
+          <p class="text-[11px] font-bold uppercase tracking-wide text-slate-500">Preview</p>
+          <p v-for="row in payPreview.allocations" :key="row.id" class="text-xs text-slate-700">
+            {{ row.billNo }} → ₹{{ n2(row.amount) }}
+          </p>
+          <p v-if="payPreview.excess > 0.01" class="text-xs text-amber-800">Excess ₹{{ n2(payPreview.excess) }}</p>
+        </div>
+        <div v-if="payPreview.excess > 0.01 && !payWriteOff">
+          <label class="pp-label">Excess amount</label>
+          <select v-model="payExcessAction" class="pp-input">
+            <option value="advance">Save as vendor advance</option>
+            <option value="ignore">Ignore (sirf bills pe apply)</option>
+            <option value="block">Block — amount kam karo</option>
+          </select>
+        </div>
+        <div class="p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-2">
+          <label class="flex items-start gap-2 cursor-pointer">
+            <input type="checkbox" v-model="payWriteOff" id="write-off-chk" class="mt-0.5 rounded text-accent" />
+            <span>
+              <span class="text-xs font-bold text-amber-800">Short payment — bill PAID close karo</span>
+              <span class="block text-[11px] text-amber-700 mt-0.5">Kam paisa diya lekin bill clear dikhana hai.</span>
+            </span>
           </label>
+          <div v-if="payWriteOff">
+            <label class="pp-label">Close reason</label>
+            <select v-model="paySettleReason" class="pp-input">
+              <option value="settlement">Settlement discount</option>
+              <option value="bad_debt">Bad debt write-off</option>
+              <option value="round_off">Round-off</option>
+            </select>
+          </div>
         </div>
         <div>
           <label class="pp-label">Transaction Reference / Note</label>

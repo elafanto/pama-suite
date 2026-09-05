@@ -3,11 +3,12 @@ import {
   isCustomerCreditDoc,
   isCustomerDebitDoc,
   normalizePartyName as normalizePartyNameShared,
+  parseAllocTag,
 } from '@/services/partyPaymentAllocation'
-import type { Invoice, Party, Purchase, Voucher } from '@/types/models'
+import type { Invoice, Party, PartyAdvance, Purchase, Voucher } from '@/types/models'
 
 export type PartyLedgerMode = 'customer' | 'vendor' | 'both'
-export type PartyLedgerDocType = 'invoice' | 'purchase'
+export type PartyLedgerDocType = 'invoice' | 'purchase' | 'advance'
 
 export interface PartyLedgerFilters {
   firmId: string
@@ -159,6 +160,66 @@ export function resolvePaymentLedgerAmount(
   return round2(recordedPaid)
 }
 
+function findPayVoucher(docId: string, vouchers?: Voucher[]) {
+  const payRef = `${docId}_PAY`
+  return vouchers
+    ?.filter((v) => !v.is_deleted && v.ref_id === payRef && (v.type === 'PAYMENT' || v.type === 'RECEIPT'))
+    .sort((a, b) => b.date.localeCompare(a.date) || (b.updated_at || '').localeCompare(a.updated_at || ''))[0]
+}
+
+function findAllocPartsForDoc(docId: string, vouchers?: Voucher[]) {
+  if (!vouchers?.length) return [] as ReturnType<typeof parseAllocTag>
+  const own = parseAllocTag(findPayVoucher(docId, vouchers)?.narration || '')
+  if (own.length) return own
+  for (const v of vouchers) {
+    if (v.is_deleted || (v.type !== 'PAYMENT' && v.type !== 'RECEIPT')) continue
+    const parts = parseAllocTag(v.narration || '')
+    if (parts.some((p) => p.id === docId)) return parts
+  }
+  return []
+}
+
+/** Clear lump / settlement text for party statements */
+export function resolvePaymentLedgerNarration(opts: {
+  docId: string
+  billNo: string
+  paid: number
+  billAmount: number
+  voucherTotal: number
+  mode: 'customer' | 'vendor'
+  billNotes?: string
+  vouchers?: Voucher[]
+}): string {
+  const verb = opts.mode === 'customer' ? 'Received' : 'Paid'
+  const writeOffMatch = (opts.billNotes || '').match(/\[Write-off:\s*₹?([\d,.]+)\s*—\s*([^\]]+)\]/i)
+    || (opts.billNotes || '').match(/\[Write-off:\s*₹?([\d,.]+)\]/i)
+  const writeOffNote = writeOffMatch
+    ? writeOffMatch[2]
+      ? ` Includes ${writeOffMatch[2].trim()} ₹${writeOffMatch[1]}.`
+      : ` Includes write-off ₹${writeOffMatch[1]}.`
+    : /write-off/i.test(opts.billNotes || '')
+      ? ' Includes write-off.'
+      : ''
+
+  const allocParts = findAllocPartsForDoc(opts.docId, opts.vouchers)
+  if (allocParts.length > 1) {
+    const breakdown = allocParts
+      .map((p) => `${p.billNo} ₹${p.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+      .join(' + ')
+    const lumpTotal = round2(allocParts.reduce((s, p) => s + p.amount, 0))
+    const thisPart = allocParts.find((p) => p.id === opts.docId)
+    if (thisPart && thisPart.id !== allocParts[0].id) {
+      return `Part of lump ${verb.toLowerCase()} ₹${lumpTotal.toLocaleString('en-IN')} (${breakdown}) — this bill ₹${thisPart.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.${writeOffNote}`
+    }
+    return `${verb} ₹${Math.max(opts.voucherTotal, lumpTotal).toLocaleString('en-IN')} lump · ${breakdown}.${writeOffNote}`
+  }
+
+  if (opts.voucherTotal > opts.paid + 0.01 || opts.paid > opts.billAmount + 0.01) {
+    return `${verb} ₹${Math.max(opts.voucherTotal, opts.paid).toLocaleString('en-IN')} against ${opts.billNo} (lump sum).${writeOffNote}`
+  }
+  return `${verb} against ${opts.billNo}.${writeOffNote}`
+}
+
 function compareLedgerRows(a: Omit<PartyLedgerRow, 'balance'>, b: Omit<PartyLedgerRow, 'balance'>) {
   const byDate = a.date.localeCompare(b.date)
   if (byDate !== 0) return byDate
@@ -300,6 +361,7 @@ export function buildPartyLedger(
   purchases: Purchase[],
   filters: PartyLedgerFilters,
   vouchers?: Voucher[],
+  advances: PartyAdvance[] = [],
 ): PartyLedgerResult {
   const entries: Omit<PartyLedgerRow, 'balance'>[] = []
   const seenDocs = new Set<string>()
@@ -324,7 +386,6 @@ export function buildPartyLedger(
       const paymentRowAmount = round2(paid)
 
       seenDocs.add(`invoice:${inv.id}`)
-      const writeOffNote = /write-off/i.test(inv.notes || '') ? ' Includes write-off.' : ''
       const docLabel = customerDocLabel(inv)
       const base = {
         docId: inv.id,
@@ -355,9 +416,16 @@ export function buildPartyLedger(
           id: `${inv.id}:paid`,
           date: paymentDate,
           type: /write-off/i.test(inv.notes || '') ? 'Receipt / Write-off' : 'Receipt',
-          narration: voucherTotal > paymentRowAmount + 0.01 || paymentRowAmount > amount + 0.01
-            ? `Received ₹${Math.max(voucherTotal, paymentRowAmount).toLocaleString('en-IN')} against ${inv.bill_no} (lump sum).${writeOffNote}`
-            : `Received against ${inv.bill_no}.${writeOffNote}`,
+          narration: resolvePaymentLedgerNarration({
+            docId: inv.id,
+            billNo: inv.bill_no,
+            paid: paymentRowAmount,
+            billAmount: amount,
+            voucherTotal,
+            mode: 'customer',
+            billNotes: inv.notes,
+            vouchers,
+          }),
           debit: 0,
           credit: paymentRowAmount,
         })
@@ -382,7 +450,6 @@ export function buildPartyLedger(
       const paymentRowAmount = round2(paid)
 
       seenDocs.add(`purchase:${pur.id}`)
-      const writeOffNote = /write-off/i.test(pur.notes || '') ? ' Includes write-off.' : ''
       const base = {
         docId: pur.id,
         docType: 'purchase' as const,
@@ -412,14 +479,53 @@ export function buildPartyLedger(
           id: `${pur.id}:paid`,
           date: paymentDate,
           type: /write-off/i.test(pur.notes || '') ? 'Payment / Write-off' : 'Payment',
-          narration: voucherTotal > paymentRowAmount + 0.01 || paymentRowAmount > amount + 0.01
-            ? `Paid ₹${Math.max(voucherTotal, paymentRowAmount).toLocaleString('en-IN')} against ${base.refNo} (lump sum).${writeOffNote}`
-            : `Paid against ${base.refNo}.${writeOffNote}`,
+          narration: resolvePaymentLedgerNarration({
+            docId: pur.id,
+            billNo: base.refNo,
+            paid: paymentRowAmount,
+            billAmount: amount,
+            voucherTotal,
+            mode: 'vendor',
+            billNotes: pur.notes,
+            vouchers,
+          }),
           debit: paymentRowAmount,
           credit: 0,
         })
       }
     }
+  }
+
+  for (const adv of advances) {
+    if (adv.firm_id !== filters.firmId || adv.is_deleted || adv.status === 'reversed') continue
+    const rem = round2(adv.remaining)
+    if (rem <= 0.01 && filters.pendingOnly) continue
+    const mode = adv.direction === 'in' ? 'customer' as const : 'vendor' as const
+    if (filters.mode !== 'both' && filters.mode !== mode) continue
+    if (!matchesParty(adv.party_id, adv.party_name, filters)) continue
+    if (!inAmountRange(adv.amount, rem, filters)) continue
+
+    seenDocs.add(`advance:${adv.id}`)
+    entries.push({
+      id: `${adv.id}:adv`,
+      docId: adv.id,
+      docType: 'advance',
+      mode,
+      date: adv.date,
+      refNo: `ADV-${adv.id.slice(0, 6)}`,
+      type: adv.direction === 'in' ? 'Customer Advance' : 'Vendor Advance',
+      partyId: adv.party_id,
+      partyName: adv.party_name || 'Unknown',
+      narration: adv.narration
+        ? `Advance open ₹${rem.toLocaleString('en-IN')} — ${adv.narration}`
+        : `Advance open ₹${rem.toLocaleString('en-IN')} (of ₹${round2(adv.amount).toLocaleString('en-IN')})`,
+      debit: adv.direction === 'out' ? rem : 0,
+      credit: adv.direction === 'in' ? rem : 0,
+      amount: round2(adv.amount),
+      paid: round2(adv.amount - rem),
+      outstanding: rem,
+      payStatus: adv.status.toUpperCase(),
+    })
   }
 
   const sorted = entries.sort(compareLedgerRows)

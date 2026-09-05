@@ -8,6 +8,7 @@ import { useAccountingStore } from '@/stores/accounting'
 import { useProductionStore } from '@/stores/production'
 import { useCapitalAssetStore } from '@/stores/assets'
 import { usePayrollStore } from '@/stores/payroll'
+import { usePartyAdvanceStore } from '@/stores/partyAdvances'
 
 /** Reload all Dexie-backed stores after cloud pull. */
 export async function reloadAllStores() {
@@ -23,5 +24,6 @@ export async function reloadAllStores() {
     useProductionStore().load(),
     useCapitalAssetStore().load(),
     usePayrollStore().load(),
+    usePartyAdvanceStore().load(),
   ])
 }

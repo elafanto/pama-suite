@@ -4,6 +4,7 @@ import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
 import { useInvoiceStore } from '@/stores/invoices'
 import { usePurchaseStore } from '@/stores/purchases'
+import { usePartyAdvanceStore } from '@/stores/partyAdvances'
 import { useSettingsStore } from '@/stores/settings'
 import {
   parseBankStatementFile,
@@ -24,6 +25,7 @@ const firmStore = useFirmStore()
 const partyStore = usePartyStore()
 const invoiceStore = useInvoiceStore()
 const purchaseStore = usePurchaseStore()
+const partyAdvanceStore = usePartyAdvanceStore()
 const settingsStore = useSettingsStore()
 
 const step = ref<'upload' | 'map' | 'review'>('upload')
@@ -37,7 +39,7 @@ const statusMsg = ref('')
 const useGemini = ref(true)
 
 onMounted(async () => {
-  await Promise.all([partyStore.load(), invoiceStore.load(), purchaseStore.load()])
+  await Promise.all([partyStore.load(), invoiceStore.load(), purchaseStore.load(), partyAdvanceStore.load()])
 })
 
 const visibleRows = computed(() => {
@@ -137,19 +139,27 @@ function toggleCandidate(row: BankMatchSuggestion, id: string) {
 }
 
 async function confirmSelected() {
-  const rows = suggestions.value.filter((r) => !r.ignored && !r.alreadyDone && r.selectedIds.length > 0)
-  if (!rows.length) return alert('Koi selected match nahi')
-  const ok = confirm(`${rows.length} bank line(s) confirm karke payment post karein?`)
+  const paymentRows = suggestions.value.filter((r) =>
+    !r.ignored && !r.alreadyDone && r.selectedIds.length > 0 && !r.selectedIds.includes('__ADVANCE__'),
+  )
+  const advanceRows = suggestions.value.filter((r) =>
+    !r.ignored && !r.alreadyDone && r.selectedIds.includes('__ADVANCE__'),
+  )
+  if (!paymentRows.length && !advanceRows.length) return alert('Koi selected match nahi')
+
+  const parts: string[] = []
+  if (paymentRows.length) parts.push(`${paymentRows.length} payment`)
+  if (advanceRows.length) parts.push(`${advanceRows.length} advance`)
+  const ok = confirm(`${parts.join(' + ')} confirm karein?`)
   if (!ok) return
   busy.value = true
   let okCount = 0
   const doneKeys: string[] = []
   try {
-    for (const row of rows) {
+    for (const row of paymentRows) {
       const amount = row.line.amount
       const date = row.line.date
       const note = `Bank reconcile · ${row.matchKind} · ${row.line.narration || row.line.utr || 'statement'}`.slice(0, 180)
-      // Oldest selected first so FIFO spill starts from earliest bill
       const orderedIds = [...row.selectedIds].sort((a, b) => {
         const ca = row.candidates.find((c) => c.id === a)
         const cb = row.candidates.find((c) => c.id === b)
@@ -168,9 +178,39 @@ async function confirmSelected() {
       doneKeys.push(row.lineKey)
       okCount++
     }
+
+    for (const row of advanceRows) {
+      const partyName = (row.geminiPartyName || row.line.partyHint || '').trim()
+      const partyId = row.geminiPartyId || null
+      const party = partyId
+        ? partyStore.list.find((p) => p.id === partyId)
+        : partyStore.list.find((p) => !p.is_deleted && p.name.toLowerCase() === partyName.toLowerCase())
+      const resolvedName = party?.name || partyName
+      if (!resolvedName) {
+        alert(`Advance line ${row.line.date} ₹${n2(row.line.amount)}: party name missing — Gemini/party hint chahiye`)
+        continue
+      }
+
+      const direction = row.line.side === 'debit' ? 'out' : 'in'
+      await partyAdvanceStore.record({
+        party_id: party?.id || partyId,
+        party_name: resolvedName,
+        direction,
+        date: row.line.date,
+        amount: row.line.amount,
+        mode: 'bank',
+        narration: `Bank reconcile advance · ${row.line.narration || row.line.utr || ''}`.slice(0, 180),
+        postVoucher: true,
+      })
+      row.alreadyDone = true
+      row.selectedIds = []
+      doneKeys.push(row.lineKey)
+      okCount++
+    }
+
     saveDoneFingerprints(firmStore.activeFirmId, doneKeys)
-    statusMsg.value = `${okCount} payment(s) posted`
-    await Promise.all([invoiceStore.load(), purchaseStore.load()])
+    statusMsg.value = `${okCount} line(s) posted`
+    await Promise.all([invoiceStore.load(), purchaseStore.load(), partyAdvanceStore.load()])
   } catch (err: any) {
     alert(err?.message || 'Confirm fail')
   } finally {
@@ -312,7 +352,7 @@ function resetAll() {
           :class="{ 'opacity-50': busy || !confirmableCount }"
           @click="confirmSelected"
         >
-          Confirm {{ confirmableCount }} payment(s)
+          Confirm {{ confirmableCount }} selected
         </button>
       </div>
 
@@ -348,7 +388,18 @@ function resetAll() {
               </td>
               <td class="p-3">
                 <div v-if="row.alreadyDone" class="text-xs text-emerald-700">Already reconciled</div>
-                <div v-else-if="row.matchKind === 'advance'" class="text-xs text-violet-700">Advance — bill pe auto-match nahi</div>
+                <div v-else-if="row.matchKind === 'advance'" class="text-xs text-violet-700 space-y-1">
+                  <div>Advance — bill pe auto-match nahi</div>
+                  <label class="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      :checked="row.selectedIds.includes('__ADVANCE__')"
+                      :disabled="row.ignored || row.alreadyDone || !(row.geminiPartyName || row.line.partyHint)"
+                      @change="toggleCandidate(row, '__ADVANCE__')"
+                    />
+                    <span>Party advance record karo{{ row.geminiPartyName || row.line.partyHint ? ` (${row.geminiPartyName || row.line.partyHint})` : ' — party name chahiye' }}</span>
+                  </label>
+                </div>
                 <div v-else-if="!row.candidates.length" class="text-xs text-slate-400">No match</div>
                 <label
                   v-for="c in row.candidates"

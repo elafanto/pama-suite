@@ -338,6 +338,33 @@ export interface StaffAdvance extends BaseRecord {
   voucher_id?: string
 }
 
+/** Customer advance (in) = money received before invoice; vendor advance (out) = money paid before purchase. */
+export type PartyAdvanceDirection = 'in' | 'out'
+export type PartyAdvanceStatus = 'open' | 'partial' | 'applied' | 'reversed'
+export type PartyAdvanceMode = 'cash' | 'bank'
+
+export interface PartyAdvanceApplication {
+  bill_id: string
+  bill_kind: 'invoice' | 'purchase'
+  bill_no: string
+  amount: number
+  date: string
+}
+
+export interface PartyAdvance extends BaseRecord {
+  party_id: string | null
+  party_name: string
+  direction: PartyAdvanceDirection
+  date: string
+  amount: number
+  remaining: number
+  mode: PartyAdvanceMode
+  narration: string
+  status: PartyAdvanceStatus
+  applications: PartyAdvanceApplication[]
+  voucher_id?: string
+}
+
 export interface PayrollAdvanceItem {
   advance_id: string
   date: string

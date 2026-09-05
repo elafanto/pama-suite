@@ -11,11 +11,28 @@ import { allocateBillNo, allocateChallanNo } from '@/services/invoiceNumber'
 import { isDeliveryChallan } from '@/services/invoiceDoc'
 import { notifyLocalDirty } from '@/services/localDirty'
 import { isInvoiceCancelled, isInvoiceActive } from '@/services/invoiceStatus'
-import { allocateCustomerReceipt, payStatusFromPaid } from '@/services/partyPaymentAllocation'
+import {
+  allocateCustomerReceipt,
+  allocationAppliedTotal,
+  buildAllocTag,
+  formatAllocBreakdown,
+  payStatusFromPaid,
+  settleReasonLabel,
+  type PaymentAllocMode,
+  type PaymentExcessAction,
+  type PaymentSettleReason,
+} from '@/services/partyPaymentAllocation'
 import { relatedInvoicePaymentIds } from '@/services/paymentReversal'
 import { resolvePaymentClearAction } from '@/services/paymentClear'
 import { isSalesMonthLocked, salesMonthLockMessage, salesPeriodFromDate } from '@/services/salesMonthLock'
+import { usePartyAdvanceStore } from '@/stores/partyAdvances'
 import type { Invoice } from '@/types/models'
+
+export interface RecordInvoicePaymentOpts {
+  mode?: PaymentAllocMode
+  excessAction?: PaymentExcessAction
+  settleReason?: PaymentSettleReason
+}
 
 const repo = createRepo<Invoice>(db.invoices)
 const plain = <X>(o: X): X => JSON.parse(JSON.stringify(o))
@@ -251,7 +268,15 @@ export const useInvoiceStore = defineStore('invoices', () => {
     await load()
   }
 
-  async function recordPayment(id: string, amount: number, isWriteOff: boolean, note = '', date = '', onlyBillIds?: string[]) {
+  async function recordPayment(
+    id: string,
+    amount: number,
+    isWriteOff: boolean,
+    note = '',
+    date = '',
+    onlyBillIds?: string[],
+    opts: RecordInvoicePaymentOpts = {},
+  ) {
     const existing = await repo.get(id)
     if (!existing) return
     if (!isInvoiceActive(existing)) {
@@ -260,50 +285,91 @@ export const useInvoiceStore = defineStore('invoices', () => {
 
     const paymentAmount = money(Math.max(0, amount))
     if (paymentAmount <= 0) return
+    const payDate = date || new Date().toISOString().slice(0, 10)
+    const mode = opts.mode ?? (onlyBillIds?.length ? 'primary_then_fifo' : 'fifo')
+    const excessAction: PaymentExcessAction = opts.excessAction ?? 'advance'
+    const settleReason: PaymentSettleReason = opts.settleReason ?? 'round_off'
 
     if (isWriteOff) {
       const previousPaid = money(existing.amt_paid || 0)
       const outstanding = Math.max(0, money(existing.grand_total - previousPaid))
       const applied = money(Math.min(paymentAmount, outstanding))
       const writeOffAmt = money(Math.max(0, outstanding - applied))
+      const reasonText = settleReasonLabel(settleReason)
 
       await repo.update(id, {
         amt_paid: existing.grand_total,
         pay_status: 'PAID',
-        last_payment_date: date || new Date().toISOString().slice(0, 10),
-        notes: `${existing.notes || ''} [Write-off: ₹${writeOffAmt.toFixed(2)}]`.trim(),
+        last_payment_date: payDate,
+        notes: `${existing.notes || ''} [Write-off: ₹${writeOffAmt.toFixed(2)} — ${reasonText}]`.trim(),
       })
 
       const accounting = useAccountingStore()
-      await accounting.postPaymentVoucher(id, 'invoice', applied, true, writeOffAmt, date, note)
+      const settleNote = `${note}${note ? ' | ' : ''}${reasonText} ₹${writeOffAmt.toFixed(2)}`
+      await accounting.postPaymentVoucher(id, 'invoice', applied, true, writeOffAmt, payDate, settleNote)
       await load()
       return
     }
 
     const firmInvoices = await db.invoices.where('firm_id').equals(existing.firm_id).toArray()
-    const allocations = allocateCustomerReceipt(firmInvoices, id, paymentAmount, onlyBillIds)
+    const allocations = allocateCustomerReceipt(firmInvoices, id, paymentAmount, {
+      onlyBillIds,
+      mode,
+    })
     if (allocations.length === 0) {
       throw new Error('Is party par koi open invoice nahi mila.')
     }
 
+    const billNos: Record<string, string> = {}
     for (const allocation of allocations) {
       const inv = firmInvoices.find((row) => row.id === allocation.id)
       if (!inv) continue
+      billNos[inv.id] = inv.bill_no
       const newAmtPaid = money((inv.amt_paid || 0) + allocation.amount)
       await repo.update(inv.id, {
         amt_paid: newAmtPaid,
         pay_status: payStatusFromPaid(inv.grand_total, newAmtPaid),
-        last_payment_date: date || new Date().toISOString().slice(0, 10),
+        last_payment_date: payDate,
       })
     }
 
     const accounting = useAccountingStore()
-    const appliedTotal = money(allocations.reduce((sum, row) => sum + row.amount, 0))
+    const appliedTotal = allocationAppliedTotal(allocations)
     const excess = money(paymentAmount - appliedTotal)
-    const finalNote = excess > 0.01
-      ? `${note}${note ? ' | ' : ''}₹${excess.toFixed(2)} open bills se zyada — party advance`
-      : note
-    await accounting.postPaymentVoucher(id, 'invoice', paymentAmount, false, 0, date, finalNote)
+    const breakdown = formatAllocBreakdown(allocations, billNos)
+    const allocTag = buildAllocTag(allocations, billNos)
+
+    if (excess > 0.01 && excessAction === 'block') {
+      throw new Error(
+        `₹${excess.toFixed(2)} bills se zyada hai. Amount kam karein, ya excess ko Advance / Ignore choose karein.`,
+      )
+    }
+
+    let voucherCash = paymentAmount
+    let excessNote = ''
+    if (excess > 0.01 && excessAction === 'advance') {
+      voucherCash = appliedTotal
+      const advanceStore = usePartyAdvanceStore()
+      await advanceStore.record({
+        party_id: existing.party_id,
+        party_name: existing.party_name,
+        direction: 'in',
+        date: payDate,
+        amount: excess,
+        mode: 'bank',
+        narration: `Excess from receipt on ${existing.bill_no}${note ? ` — ${note}` : ''}`,
+      })
+      excessNote = `Excess ₹${excess.toFixed(2)} → customer advance`
+    } else if (excess > 0.01 && excessAction === 'ignore') {
+      voucherCash = appliedTotal
+      excessNote = `Excess ₹${excess.toFixed(2)} ignored (not recorded)`
+    }
+
+    const lumpPrefix = allocations.length > 1 || excess > 0.01
+      ? `Lump ₹${paymentAmount.toLocaleString('en-IN')} · ${breakdown}`
+      : breakdown
+    const finalNote = [note, lumpPrefix, excessNote, allocTag].filter(Boolean).join(' | ')
+    await accounting.postPaymentVoucher(id, 'invoice', voucherCash, false, 0, payDate, finalNote)
 
     await load()
   }

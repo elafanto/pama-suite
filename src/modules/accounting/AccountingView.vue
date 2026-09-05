@@ -5,6 +5,7 @@ import { useAccountingStore } from '@/stores/accounting'
 import { useInvoiceStore } from '@/stores/invoices'
 import { usePartyStore } from '@/stores/parties'
 import { usePurchaseStore } from '@/stores/purchases'
+import { usePartyAdvanceStore } from '@/stores/partyAdvances'
 import { useSettingsStore } from '@/stores/settings'
 import { cashBookFromVouchers, customerReceivableSummary } from '@/services/reports'
 import { isInvoiceActive } from '@/services/invoiceStatus'
@@ -26,6 +27,7 @@ const accountingStore = useAccountingStore()
 const invoiceStore = useInvoiceStore()
 const partyStore = usePartyStore()
 const purchaseStore = usePurchaseStore()
+const partyAdvanceStore = usePartyAdvanceStore()
 const settingsStore = useSettingsStore()
 
 // Navigation state
@@ -434,7 +436,7 @@ const partyLedgerResult = computed(() => buildPartyLedger(invoiceStore.list, pur
   maxAmount: amountFilter(partyLedgerMaxAmount.value),
   minOutstanding: amountFilter(partyLedgerMinOutstanding.value),
   maxOutstanding: amountFilter(partyLedgerMaxOutstanding.value),
-}, accountingStore.vouchers))
+}, accountingStore.vouchers, partyAdvanceStore.list))
 
 function exportPartyLedgerCsv() {
   const headers = ['Date', 'Ref No', 'Mode', 'Party', 'Type', 'Narration', 'Debit', 'Credit', 'Balance', 'Outstanding', 'Status']
@@ -544,7 +546,13 @@ function applyVoucherScan(r: VoucherScanResult) {
 }
 
 onMounted(async () => {
-  await Promise.all([accountingStore.load(), invoiceStore.load(), partyStore.load(), purchaseStore.load()])
+  await Promise.all([
+    accountingStore.load(),
+    invoiceStore.load(),
+    partyStore.load(),
+    purchaseStore.load(),
+    partyAdvanceStore.load(),
+  ])
   await loadVoucherDocFlags()
 })
 

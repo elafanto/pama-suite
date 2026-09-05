@@ -44,6 +44,7 @@ type SyncTable =
   | 'staff'
   | 'staff_advances'
   | 'payroll_runs'
+  | 'party_advances'
 
 const TABLE_MAP: Record<SyncTable, string> = {
   firms: 'firms',
@@ -65,6 +66,7 @@ const TABLE_MAP: Record<SyncTable, string> = {
   staff: 'staff',
   staff_advances: 'staff_advances',
   payroll_runs: 'payroll_runs',
+  party_advances: 'party_advances',
 }
 
 const PAYROLL_SYNC_TABLES: SyncTable[] = ['staff', 'staff_advances', 'payroll_runs']
@@ -86,6 +88,7 @@ const PAYLOAD_TABLES: SyncTable[] = [
   'staff',
   'staff_advances',
   'payroll_runs',
+  'party_advances',
 ]
 
 function isNewer(remote: string, local?: string): boolean {
@@ -110,6 +113,7 @@ const OPTIONAL_TABLE_MIGRATIONS: Partial<Record<SyncTable, string>> = {
   staff: '011_payroll.sql',
   staff_advances: '011_payroll.sql',
   payroll_runs: '011_payroll.sql',
+  party_advances: '018_party_advances.sql',
 }
 
 let syncInFlight: Promise<string> | null = null

@@ -20,7 +20,7 @@ import type {
   Party, Firm, Item, Invoice, Purchase, Recipe, Account, Voucher, ActivityLog,
   ReelStock, ProductionJob, ProductionStageEntry, StockMovement, ItemStockMovement,
   DashboardTodo, Staff, StaffAdvance, PayrollRun, CapitalAsset, StockStatement,
-  ConsumableLot,
+  ConsumableLot, PartyAdvance,
 } from '@/types/models'
 
 export const BACKUP_FORMAT = 'pama_suite_backup'
@@ -76,6 +76,7 @@ export interface SuiteBackup {
   staff?: Staff[]
   staff_advances?: StaffAdvance[]
   payroll_runs?: PayrollRun[]
+  party_advances?: PartyAdvance[]
   settings?: {
     geminiKey?: string
     supabaseUrl?: string
@@ -101,7 +102,7 @@ export async function exportAll(options: ExportOptions = {}): Promise<SuiteBacku
   const [
     firms, parties, items, invoices, purchases, recipes, accounts, vouchers, activity_log,
     reel_stocks, consumable_lots, capital_assets, stock_statements, production_jobs, production_stages, stock_movements, item_stock_movements,
-    dashboard_todos, staff, staff_advances, payroll_runs,
+    dashboard_todos, staff, staff_advances, payroll_runs, party_advances,
   ] = await Promise.all([
     db.firms.toArray(),
     db.parties.toArray(),
@@ -124,6 +125,7 @@ export async function exportAll(options: ExportOptions = {}): Promise<SuiteBacku
     db.staff.toArray(),
     db.staff_advances.toArray(),
     db.payroll_runs.toArray(),
+    db.party_advances.toArray(),
   ])
 
   let templates: unknown[] = []
@@ -157,7 +159,7 @@ export async function exportAll(options: ExportOptions = {}): Promise<SuiteBacku
     exportedAt: new Date().toISOString(),
     firms, parties, items, invoices, purchases, recipes, accounts, vouchers, activity_log,
     reel_stocks, consumable_lots, capital_assets, stock_statements, production_jobs, production_stages, stock_movements, item_stock_movements,
-    dashboard_todos, staff, staff_advances, payroll_runs,
+    dashboard_todos, staff, staff_advances, payroll_runs, party_advances,
     settings,
   }
 }
@@ -285,6 +287,7 @@ async function importSuiteBackup(data: any, mode: ImportMode, options: ImportOpt
     await upsertAll(db.staff, data.staff || [], 'staff')
     await upsertAll(db.staff_advances, data.staff_advances || [], 'staff_advances')
     await upsertAll(db.payroll_runs, data.payroll_runs || [], 'payroll_runs')
+    await upsertAll(db.party_advances, data.party_advances || [], 'party_advances')
 
     await repairImportedInvoiceNumbers()
   })
@@ -639,6 +642,7 @@ function suiteImportTables(data: any) {
     { key: 'staff', table: db.staff, rows: asArray<ImportableRecord>(data.staff) },
     { key: 'staff_advances', table: db.staff_advances, rows: asArray<ImportableRecord>(data.staff_advances) },
     { key: 'payroll_runs', table: db.payroll_runs, rows: asArray<ImportableRecord>(data.payroll_runs) },
+    { key: 'party_advances', table: db.party_advances, rows: asArray<ImportableRecord>(data.party_advances) },
   ]
 }
 

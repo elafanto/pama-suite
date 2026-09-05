@@ -7,6 +7,7 @@ import { getPendingRTGS, clearPendingRTGS } from '@/services/rtgsBridge'
 import PpModal from '@/components/PpModal.vue'
 import BankReconcilePanel from '@/modules/banking/BankReconcilePanel.vue'
 import PaymentsRegistryPanel from '@/modules/banking/PaymentsRegistryPanel.vue'
+import PartyAdvancesPanel from '@/modules/banking/PartyAdvancesPanel.vue'
 import { formatGstin } from '@/services/gst'
 import { fetchIfscDetails, findPartyBankDetails, isValidIfsc } from '@/services/partyLookup'
 
@@ -34,7 +35,7 @@ const purpose = ref(localStorage.getItem('pama_rtgs_purpose') || 'procurement of
 const BANK_EMAIL_KEY = 'pama_bank_email'
 const bankEmail = ref(localStorage.getItem(BANK_EMAIL_KEY) || 'ubijaspur@unionbankofindia.co.in')
 const autoOpenGmail = ref(localStorage.getItem('pama_rtgs_auto_gmail') !== '0')
-const bankingTab = ref<'rtgs' | 'reconcile' | 'payments'>('rtgs')
+const bankingTab = ref<'rtgs' | 'reconcile' | 'payments' | 'advances'>('rtgs')
 
 // Active beneficiaries in this transaction
 interface BankBeneficiary {
@@ -535,6 +536,7 @@ onMounted(async () => {
         <button type="button" class="pp-btn" :class="bankingTab === 'rtgs' ? 'pp-btn-primary' : 'pp-btn-ghost'" @click="bankingTab = 'rtgs'">RTGS / NEFT</button>
         <button type="button" class="pp-btn" :class="bankingTab === 'reconcile' ? 'pp-btn-primary' : 'pp-btn-ghost'" @click="bankingTab = 'reconcile'">Reconcile</button>
         <button type="button" class="pp-btn" :class="bankingTab === 'payments' ? 'pp-btn-primary' : 'pp-btn-ghost'" @click="bankingTab = 'payments'">All Payments</button>
+        <button type="button" class="pp-btn" :class="bankingTab === 'advances' ? 'pp-btn-primary' : 'pp-btn-ghost'" @click="bankingTab = 'advances'">Advances</button>
         <span class="text-xs font-semibold px-3 py-1 bg-blue-50 text-blue-800 rounded-full border border-blue-100">
           🏦 Union Bank of India, Jaspur
         </span>
@@ -543,6 +545,7 @@ onMounted(async () => {
 
     <BankReconcilePanel v-if="bankingTab === 'reconcile'" />
     <PaymentsRegistryPanel v-else-if="bankingTab === 'payments'" />
+    <PartyAdvancesPanel v-else-if="bankingTab === 'advances'" />
 
     <template v-else-if="bankingTab === 'rtgs'">
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">

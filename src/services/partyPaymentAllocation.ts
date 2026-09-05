@@ -48,15 +48,57 @@ export interface PaymentAllocation {
   amount: number
 }
 
+/** fifo = oldest open first; primary_then_fifo = clicked bill first then oldest; primary_only = only clicked bill */
+export type PaymentAllocMode = 'fifo' | 'primary_then_fifo' | 'primary_only'
+
+/** Excess after bills: create party advance, ignore (apply only), or block save */
+export type PaymentExcessAction = 'advance' | 'ignore' | 'block'
+
+export type PaymentSettleReason = 'settlement' | 'bad_debt' | 'round_off'
+
+export interface AllocatePaymentOptions {
+  onlyBillIds?: string[]
+  mode?: PaymentAllocMode
+}
+
+function normalizeAllocateOpts(arg?: string[] | AllocatePaymentOptions): {
+  onlyBillIds?: string[]
+  mode: PaymentAllocMode
+} {
+  if (Array.isArray(arg)) {
+    return { onlyBillIds: arg, mode: 'primary_then_fifo' }
+  }
+  return {
+    onlyBillIds: arg?.onlyBillIds,
+    mode: arg?.mode ?? 'fifo',
+  }
+}
+
+function orderOpenBills<T extends { id: string }>(
+  open: T[],
+  primaryId: string,
+  mode: PaymentAllocMode,
+): T[] {
+  if (mode === 'primary_only') {
+    return open.filter((row) => row.id === primaryId)
+  }
+  if (mode === 'primary_then_fifo') {
+    return [...open.filter((row) => row.id === primaryId), ...open.filter((row) => row.id !== primaryId)]
+  }
+  // fifo — already sorted oldest-first by caller
+  return open
+}
+
 export function allocateCustomerReceipt(
   invoices: Invoice[],
   primaryId: string,
   totalAmount: number,
-  onlyBillIds?: string[],
+  onlyBillIdsOrOpts?: string[] | AllocatePaymentOptions,
 ): PaymentAllocation[] {
   const primary = invoices.find((inv) => inv.id === primaryId)
   if (!primary) return []
 
+  const { onlyBillIds, mode } = normalizeAllocateOpts(onlyBillIdsOrOpts)
   const allow = onlyBillIds?.length ? new Set(onlyBillIds) : null
   const open = invoices
     .filter((inv) => isInvoiceActive(inv) && isCustomerDebitDoc(inv))
@@ -65,7 +107,7 @@ export function allocateCustomerReceipt(
     .filter((inv) => !allow || allow.has(inv.id))
     .sort((a, b) => a.date.localeCompare(b.date) || a.bill_no.localeCompare(b.bill_no))
 
-  const ordered = [...open.filter((inv) => inv.id === primaryId), ...open.filter((inv) => inv.id !== primaryId)]
+  const ordered = orderOpenBills(open, primaryId, mode)
 
   let remaining = round2(Math.max(0, totalAmount))
   const allocations: PaymentAllocation[] = []
@@ -86,11 +128,12 @@ export function allocateVendorPayment(
   purchases: Purchase[],
   primaryId: string,
   totalAmount: number,
-  onlyBillIds?: string[],
+  onlyBillIdsOrOpts?: string[] | AllocatePaymentOptions,
 ): PaymentAllocation[] {
   const primary = purchases.find((pur) => pur.id === primaryId)
   if (!primary || primary.is_deleted) return []
 
+  const { onlyBillIds, mode } = normalizeAllocateOpts(onlyBillIdsOrOpts)
   const allow = onlyBillIds?.length ? new Set(onlyBillIds) : null
   const open = purchases
     .filter((pur) => !pur.is_deleted)
@@ -103,7 +146,7 @@ export function allocateVendorPayment(
       return da.localeCompare(db) || (a.bill_no || '').localeCompare(b.bill_no || '')
     })
 
-  const ordered = [...open.filter((pur) => pur.id === primaryId), ...open.filter((pur) => pur.id !== primaryId)]
+  const ordered = orderOpenBills(open, primaryId, mode)
 
   let remaining = round2(Math.max(0, totalAmount))
   const allocations: PaymentAllocation[] = []
@@ -118,4 +161,52 @@ export function allocateVendorPayment(
   }
 
   return allocations
+}
+
+export function allocationAppliedTotal(allocations: PaymentAllocation[]) {
+  return round2(allocations.reduce((sum, row) => sum + row.amount, 0))
+}
+
+/** Structured tag for voucher/notes — ledger can parse for clear party statements */
+export function buildAllocTag(
+  allocations: PaymentAllocation[],
+  billNos: Record<string, string>,
+): string {
+  if (!allocations.length) return ''
+  const body = allocations
+    .map((a) => `${a.id}=${a.amount.toFixed(2)}|${billNos[a.id] || a.id.slice(0, 8)}`)
+    .join(';')
+  return `[ALLOC:${body}]`
+}
+
+export function formatAllocBreakdown(
+  allocations: PaymentAllocation[],
+  billNos: Record<string, string>,
+): string {
+  return allocations
+    .map((a) => `${billNos[a.id] || a.id.slice(0, 8)} ₹${a.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+    .join(' + ')
+}
+
+export interface ParsedAllocPart {
+  id: string
+  amount: number
+  billNo: string
+}
+
+export function parseAllocTag(text: string | null | undefined): ParsedAllocPart[] {
+  if (!text) return []
+  const m = text.match(/\[ALLOC:([^\]]+)\]/)
+  if (!m) return []
+  return m[1].split(';').map((part) => {
+    const [left, billNo = ''] = part.split('|')
+    const [id, amt] = left.split('=')
+    return { id: id || '', amount: round2(Number(amt) || 0), billNo: billNo || id || '' }
+  }).filter((p) => p.id && p.amount > 0)
+}
+
+export function settleReasonLabel(reason: PaymentSettleReason) {
+  if (reason === 'bad_debt') return 'Bad debt write-off'
+  if (reason === 'settlement') return 'Settlement discount'
+  return 'Round-off'
 }
