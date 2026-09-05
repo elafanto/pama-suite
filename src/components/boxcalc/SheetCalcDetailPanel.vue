@@ -11,7 +11,7 @@ defineProps<{
 <template>
   <div v-if="detail" class="space-y-4">
     <section class="rounded-xl border border-slate-200 bg-slate-50 p-4">
-      <h4 class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">1 · Caliper & inner size</h4>
+      <h4 class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">1 · Caliper & outer size</h4>
       <p class="text-sm text-navy font-mono">
         {{ detail.input.ply }}-{{ detail.input.flute }} → caliper
         <strong>{{ detail.caliper.value }} mm</strong>
@@ -63,7 +63,7 @@ defineProps<{
       </div>
       <p class="mt-2 text-xs font-mono text-teal-800">Area: {{ detail.blank.areaFormula }}</p>
           <p v-if="!compact" class="mt-1 text-xs text-slate-500">
-            Glue flap {{ fmtInt(detail.blank.glueFlap) }} mm · Clearance {{ fmtInt(detail.blank.clearanceMM) }} mm · Width uses H + {{ detail.blank.widthCaliperFactor }}×t<span v-if="detail.blank.heightAllowanceMM"> + {{ detail.blank.heightAllowanceMM }} mm ({{ detail.input.ply }})</span>
+            Blank from <strong>outer</strong> size · Glue flap {{ fmtInt(detail.blank.glueFlap) }} mm · Clearance {{ fmtInt(detail.blank.clearanceMM) }} mm · Width uses outer H + {{ detail.blank.widthCaliperFactor }}×t<span v-if="detail.blank.heightAllowanceMM"> + {{ detail.blank.heightAllowanceMM }} mm ({{ detail.input.ply }})</span> · L/W round up to 5 mm
           </p>
     </section>
 

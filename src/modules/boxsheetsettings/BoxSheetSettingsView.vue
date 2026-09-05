@@ -100,7 +100,7 @@ const machineFields: { key: keyof BoxSheetSettings['machine']; label: string; hi
     <div class="space-y-4">
       <section class="pp-card p-4 space-y-3">
         <h2 class="font-bold text-navy">Inner ↔ Outer conversion</h2>
-        <p class="text-xs text-slate-500">Board caliper (t) se inner/outer adjust — Fibre Box Handbook style.</p>
+        <p class="text-xs text-slate-500">Board caliper (t) se inner↔outer convert; blank sheet size <strong>outer</strong> dims se nikalti hai, L/W 5 mm pe round-up.</p>
         <div class="grid sm:grid-cols-2 gap-3">
           <div>
             <label class="pp-label">L / W factor (× t)</label>

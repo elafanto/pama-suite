@@ -41,7 +41,6 @@ import { useTableSort } from '@/composables/useTableSort'
 import {
   allocateVendorPayment,
   allocationAppliedTotal,
-  formatAllocBreakdown,
   type PaymentAllocMode,
   type PaymentExcessAction,
   type PaymentSettleReason,

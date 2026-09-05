@@ -123,16 +123,19 @@ describe('calculate — 3-ply RSC (inner dims)', () => {
     expect(res.dimensions.outer.H).toBeCloseTo(150 + 2.7 * 3.2, 5)
   })
 
-  it('computes the blank from inner dims + standard scoring allowances', () => {
+  it('computes the blank from outer dims + scoring allowances, round up to 5 mm', () => {
     const t = 3.2
-    // each panel + ~1 caliper of fold take-up, + glueFlap(3-ply=35)
-    expect(res.sheet.length).toBeCloseTo(2 * (300 + t) + 2 * (200 + t) + 35, 4)
-    // sheetWidth = innerW + innerH + 2×caliper + ply height allowance(3) + fold clearance(6)
-    expect(res.sheet.width).toBeCloseTo(200 + 150 + 2 * t + 3 + 6, 4)
+    const outerL = 300 + 1.5 * t
+    const outerW = 200 + 1.5 * t
+    const outerH = 150 + 2.7 * t
+    const lengthRaw = 2 * (outerL + t) + 2 * (outerW + t) + 35
+    const widthRaw = outerW + outerH + 2 * t + 3 + 6
+    expect(res.sheet.length).toBe(Math.ceil(lengthRaw / 5) * 5)
+    expect(res.sheet.width).toBe(Math.ceil(widthRaw / 5) * 5)
     expect(res.sheetCalcDetail?.blank.widthParts).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ label: 'Width (W)', mm: 200 }),
-        expect.objectContaining({ label: 'Height + 2×t + 3', mm: 150 + 2 * t + 3 }),
+        expect.objectContaining({ label: 'Outer width (W)', mm: outerW }),
+        expect.objectContaining({ label: 'Outer H + 2×t + 3', mm: outerH + 2 * t + 3 }),
       ]),
     )
   })
@@ -145,7 +148,9 @@ describe('calculate — 3-ply RSC (inner dims)', () => {
     expect(res.reel.feasible).toBe(true)
     expect(res.reel.reelWidthMM).toBeGreaterThan(0)
     expect(res.weight.paperTotal).toBeGreaterThan(0)
-    // sheetWidth=365.4 → N_w=floor(1702/365.4)=4; effectiveUnit=1047.8+10=1057.8 → N_l=floor(2286/1057.8)=2
+    // outer-based blank → L=1070 W=380 after 5 mm ceil
+    expect(res.sheet.length).toBe(1070)
+    expect(res.sheet.width).toBe(380)
     expect(res.reel.sheetsPerWidth).toBe(4)
     expect(res.reel.sheetsPerLength).toBe(2)
     expect(res.reel.boxesPerBigSheet).toBe(8)
