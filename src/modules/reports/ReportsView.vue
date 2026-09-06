@@ -12,15 +12,25 @@ import {
   cashBookFromVouchers, ewayInvoices, itemSalesReport, getStateName, getStateCode,
 } from '@/services/reports'
 import { downloadGstrOfflineExcel, periodMonthBounds } from '@/services/gstrExport'
+import {
+  buildSalesPurchaseSummary,
+  resolvePeriodBounds,
+  type SalesPurchasePeriodPreset,
+} from '@/services/salesPurchaseReport'
+import { downloadSalesPurchaseExcel } from '@/services/salesPurchaseExcel'
 import { recentActivity } from '@/services/activityLog'
 import { displayGstinForInvoice } from '@/services/invoiceDisplay'
 import type { ActivityLog } from '@/types/models'
 import type { Invoice } from '@/types/models'
 
-const tab = ref<'b2b' | 'b2c' | 'hsn' | 'items' | 'outstanding' | 'cashbook' | 'eway' | 'activity' | 'deleted'>('b2b')
+const tab = ref<'sales' | 'b2b' | 'b2c' | 'hsn' | 'items' | 'outstanding' | 'cashbook' | 'eway' | 'activity' | 'deleted'>('sales')
 const from = ref('')
 const to = ref('')
 const gstrMonth = ref(new Date().toISOString().slice(0, 7))
+const salesPreset = ref<SalesPurchasePeriodPreset>('this_fy')
+const salesMonth = ref(new Date().toISOString().slice(0, 7))
+const salesView = ref<'month' | 'year' | 'register'>('month')
+const registerSide = ref<'sales' | 'purchases'>('sales')
 
 const invoiceStore = useInvoiceStore()
 const partyStore = usePartyStore()
@@ -71,6 +81,7 @@ onMounted(async () => {
   await firmStore.load()
   await Promise.all([invoiceStore.load(), partyStore.load(), itemStore.load(), purchaseStore.load()])
   await accountingStore.load()
+  applySalesPreset('this_fy')
   const firmId = firmStore.activeFirmId
   if (firmId) activity.value = await recentActivity(firmId, 2000)
   await loadDeleted()
@@ -128,6 +139,82 @@ async function restoreDeleted(row: { entity: string; id: string; type: string })
 const filtered = computed(() =>
   filterInvoices(invoiceStore.list, firmStore.activeFirmId, from.value || undefined, to.value || undefined)
 )
+
+const salesPeriod = computed(() =>
+  resolvePeriodBounds(salesPreset.value, {
+    from: from.value || undefined,
+    to: to.value || undefined,
+    month: salesPreset.value === 'custom' ? salesMonth.value : undefined,
+  }),
+)
+
+const salesPurchaseSummary = computed(() =>
+  buildSalesPurchaseSummary({
+    invoices: invoiceStore.list,
+    purchases: purchaseStore.list,
+    firmId: firmStore.activeFirmId,
+    period: salesPeriod.value,
+  }),
+)
+
+const salesMonthRows = computed(() => {
+  const s = salesPurchaseSummary.value
+  const keys = [...new Set([...s.salesByMonth.map((r) => r.key), ...s.purchasesByMonth.map((r) => r.key)])].sort()
+  return keys.map((key) => {
+    const sales = s.salesByMonth.find((r) => r.key === key)
+    const purchases = s.purchasesByMonth.find((r) => r.key === key)
+    return {
+      key,
+      label: sales?.label || purchases?.label || key,
+      salesBills: sales?.billCount || 0,
+      salesTotal: sales?.grandTotal || 0,
+      purchaseBills: purchases?.billCount || 0,
+      purchaseTotal: purchases?.grandTotal || 0,
+      net: Math.round(((sales?.grandTotal || 0) - (purchases?.grandTotal || 0)) * 100) / 100,
+    }
+  })
+})
+
+const salesYearRows = computed(() => {
+  const s = salesPurchaseSummary.value
+  const keys = [...new Set([...s.salesByYear.map((r) => r.key), ...s.purchasesByYear.map((r) => r.key)])].sort()
+  return keys.map((key) => {
+    const sales = s.salesByYear.find((r) => r.key === key)
+    const purchases = s.purchasesByYear.find((r) => r.key === key)
+    return {
+      key,
+      salesBills: sales?.billCount || 0,
+      salesTotal: sales?.grandTotal || 0,
+      purchaseBills: purchases?.billCount || 0,
+      purchaseTotal: purchases?.grandTotal || 0,
+      net: Math.round(((sales?.grandTotal || 0) - (purchases?.grandTotal || 0)) * 100) / 100,
+    }
+  })
+})
+
+function applySalesPreset(preset: SalesPurchasePeriodPreset) {
+  salesPreset.value = preset
+  if (preset === 'custom') return
+  const bounds = resolvePeriodBounds(preset, { month: salesMonth.value })
+  from.value = bounds.from || ''
+  to.value = bounds.to || ''
+}
+
+function onSalesMonthPick() {
+  salesPreset.value = 'custom'
+  const bounds = resolvePeriodBounds('custom', { month: salesMonth.value })
+  from.value = bounds.from || ''
+  to.value = bounds.to || ''
+}
+
+function exportSalesPurchaseExcel() {
+  const res = downloadSalesPurchaseExcel(salesPurchaseSummary.value, firmStore.activeFirm?.name)
+  alert(
+    `Excel downloaded: ${res.file}\n\n`
+    + `Sales bills: ${res.salesBills} · Purchase bills: ${res.purchaseBills}\n`
+    + `Sheets: Summary, Sales Register, Purchase Register, By Month, By FY, Party sheets.`,
+  )
+}
 
 const b2bRows = computed(() => gstrB2B(filtered.value))
 const b2cRows = computed(() => gstrB2C(filtered.value))
@@ -211,7 +298,7 @@ async function exportGstrOffline() {
     <header class="mb-4 flex flex-wrap items-end justify-between gap-3">
       <div>
         <h1 class="text-2xl font-bold text-navy">Reports</h1>
-        <p class="text-sm text-slate-500">GSTR-1, Outstanding, Cash Book &amp; more</p>
+        <p class="text-sm text-slate-500">Sales / Purchase summary, GSTR-1, Outstanding &amp; more</p>
       </div>
       <div class="flex gap-2 flex-wrap items-end">
         <div>
@@ -221,18 +308,208 @@ async function exportGstrOffline() {
         <button class="pp-btn pp-btn-primary !py-2" type="button" @click="exportGstrOffline">
           📥 GSTR-1 Excel (V2.2)
         </button>
-        <div><label class="pp-label">From</label><input v-model="from" type="date" class="pp-input !w-36" /></div>
-        <div><label class="pp-label">To</label><input v-model="to" type="date" class="pp-input !w-36" /></div>
+        <div><label class="pp-label">From</label><input v-model="from" type="date" class="pp-input !w-36" @change="salesPreset = 'custom'" /></div>
+        <div><label class="pp-label">To</label><input v-model="to" type="date" class="pp-input !w-36" @change="salesPreset = 'custom'" /></div>
       </div>
     </header>
 
     <div class="flex flex-wrap gap-1 mb-4 border-b border-slate-200 pb-2">
       <button v-for="t in [
-        ['b2b','GSTR B2B'],['b2c','GSTR B2C'],['hsn','HSN'],['items','Item Sales'],
+        ['sales','Sales & Purchases'],['b2b','GSTR B2B'],['b2c','GSTR B2C'],['hsn','HSN'],['items','Item Sales'],
         ['outstanding','Outstanding'],['cashbook','Cash Book'],['eway','E-Way'],['activity','Activity'],['deleted','Deleted']
       ]" :key="t[0]"
         :class="['px-3 py-1.5 rounded-lg text-xs font-semibold', tab === t[0] ? 'bg-accent text-white' : 'bg-slate-100 text-slate-600']"
         @click="tab = t[0] as any">{{ t[1] }}</button>
+    </div>
+
+    <!-- Sales & Purchases summary -->
+    <div v-if="tab === 'sales'" class="space-y-4">
+      <div class="pp-card p-4 space-y-3">
+        <div class="flex flex-wrap gap-2 items-end justify-between">
+          <div class="flex flex-wrap gap-2 items-end">
+            <div>
+              <label class="pp-label">Period</label>
+              <div class="flex flex-wrap gap-1">
+                <button
+                  v-for="p in [
+                    ['all','All time'],['this_month','This month'],['last_month','Last month'],
+                    ['this_fy','This FY'],['last_fy','Last FY'],['this_calendar_year','Calendar year'],['custom','Custom']
+                  ]"
+                  :key="p[0]"
+                  type="button"
+                  class="px-2.5 py-1.5 rounded-lg text-xs font-semibold"
+                  :class="salesPreset === p[0] ? 'bg-navy text-white' : 'bg-slate-100 text-slate-600'"
+                  @click="applySalesPreset(p[0] as any)"
+                >{{ p[1] }}</button>
+              </div>
+            </div>
+            <div>
+              <label class="pp-label">Pick month</label>
+              <input v-model="salesMonth" type="month" class="pp-input !w-40" @change="onSalesMonthPick" />
+            </div>
+          </div>
+          <button type="button" class="pp-btn pp-btn-primary !py-2" @click="exportSalesPurchaseExcel">
+            📥 Excel (Sales + Purchase)
+          </button>
+        </div>
+        <p class="text-xs text-slate-500">
+          Showing <strong>{{ salesPeriod.label }}</strong>
+          <span v-if="salesPeriod.from || salesPeriod.to">
+            ({{ salesPeriod.from || '…' }} → {{ salesPeriod.to || '…' }})
+          </span>
+        </p>
+      </div>
+
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div class="pp-card p-4">
+          <div class="text-xs text-slate-500">Sales</div>
+          <div class="text-xl font-bold text-emerald-700">₹{{ n2(salesPurchaseSummary.sales.grandTotal) }}</div>
+          <div class="text-xs text-slate-500 mt-1">{{ salesPurchaseSummary.sales.billCount }} bills · Tax ₹{{ n2(salesPurchaseSummary.sales.tax) }}</div>
+        </div>
+        <div class="pp-card p-4">
+          <div class="text-xs text-slate-500">Purchases</div>
+          <div class="text-xl font-bold text-orange-700">₹{{ n2(salesPurchaseSummary.purchases.grandTotal) }}</div>
+          <div class="text-xs text-slate-500 mt-1">{{ salesPurchaseSummary.purchases.billCount }} bills · Tax ₹{{ n2(salesPurchaseSummary.purchases.tax) }}</div>
+        </div>
+        <div class="pp-card p-4">
+          <div class="text-xs text-slate-500">Net (Sales − Purchase)</div>
+          <div class="text-xl font-bold" :class="salesPurchaseSummary.net >= 0 ? 'text-navy' : 'text-rose-700'">₹{{ n2(salesPurchaseSummary.net) }}</div>
+        </div>
+        <div class="pp-card p-4">
+          <div class="text-xs text-slate-500">Outstanding</div>
+          <div class="text-sm font-semibold text-slate-700">Recv ₹{{ n2(salesPurchaseSummary.sales.outstanding) }}</div>
+          <div class="text-sm font-semibold text-slate-700">Pay ₹{{ n2(salesPurchaseSummary.purchases.outstanding) }}</div>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap gap-1">
+        <button
+          v-for="v in [['month','Month-wise'],['year','Year-wise (FY)'],['register','Bill register']]"
+          :key="v[0]"
+          type="button"
+          class="px-3 py-1.5 rounded-lg text-xs font-semibold"
+          :class="salesView === v[0] ? 'bg-accent text-white' : 'bg-slate-100 text-slate-600'"
+          @click="salesView = v[0] as any"
+        >{{ v[1] }}</button>
+      </div>
+
+      <div v-if="salesView === 'month'" class="pp-card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b bg-slate-50">
+              <th class="text-left p-2">Month</th>
+              <th class="text-right p-2">Sales bills</th>
+              <th class="text-right p-2">Sales ₹</th>
+              <th class="text-right p-2">Purchase bills</th>
+              <th class="text-right p-2">Purchase ₹</th>
+              <th class="text-right p-2">Net ₹</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in salesMonthRows" :key="row.key" class="border-b border-slate-100">
+              <td class="p-2 font-medium">{{ row.label }}</td>
+              <td class="text-right p-2">{{ row.salesBills }}</td>
+              <td class="text-right p-2 text-emerald-700">₹{{ n2(row.salesTotal) }}</td>
+              <td class="text-right p-2">{{ row.purchaseBills }}</td>
+              <td class="text-right p-2 text-orange-700">₹{{ n2(row.purchaseTotal) }}</td>
+              <td class="text-right p-2 font-semibold">₹{{ n2(row.net) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-if="!salesMonthRows.length" class="p-8 text-center text-slate-400">
+          Is period me koi sales / purchase nahi.
+        </p>
+      </div>
+
+      <div v-else-if="salesView === 'year'" class="pp-card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b bg-slate-50">
+              <th class="text-left p-2">Financial year</th>
+              <th class="text-right p-2">Sales bills</th>
+              <th class="text-right p-2">Sales ₹</th>
+              <th class="text-right p-2">Purchase bills</th>
+              <th class="text-right p-2">Purchase ₹</th>
+              <th class="text-right p-2">Net ₹</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in salesYearRows" :key="row.key" class="border-b border-slate-100">
+              <td class="p-2 font-medium">{{ row.key }}</td>
+              <td class="text-right p-2">{{ row.salesBills }}</td>
+              <td class="text-right p-2 text-emerald-700">₹{{ n2(row.salesTotal) }}</td>
+              <td class="text-right p-2">{{ row.purchaseBills }}</td>
+              <td class="text-right p-2 text-orange-700">₹{{ n2(row.purchaseTotal) }}</td>
+              <td class="text-right p-2 font-semibold">₹{{ n2(row.net) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-if="!salesYearRows.length" class="p-8 text-center text-slate-400">
+          Is period me koi sales / purchase nahi.
+        </p>
+      </div>
+
+      <div v-else class="pp-card overflow-x-auto">
+        <div class="flex flex-wrap gap-2 items-center justify-between p-3 border-b">
+          <div class="flex gap-1">
+            <button
+              type="button"
+              class="px-3 py-1.5 rounded-lg text-xs font-semibold"
+              :class="registerSide === 'sales' ? 'bg-emerald-600 text-white' : 'bg-slate-100'"
+              @click="registerSide = 'sales'"
+            >Sales register</button>
+            <button
+              type="button"
+              class="px-3 py-1.5 rounded-lg text-xs font-semibold"
+              :class="registerSide === 'purchases' ? 'bg-orange-600 text-white' : 'bg-slate-100'"
+              @click="registerSide = 'purchases'"
+            >Purchase register</button>
+          </div>
+          <span class="text-xs text-slate-500">Excel me dono registers milenge</span>
+        </div>
+        <table v-if="registerSide === 'sales'" class="w-full text-sm">
+          <thead>
+            <tr class="border-b bg-slate-50">
+              <th class="text-left p-2">Date</th><th class="text-left p-2">Bill</th><th class="text-left p-2">Party</th>
+              <th class="text-right p-2">Taxable</th><th class="text-right p-2">Tax</th><th class="text-right p-2">Total</th><th class="text-center p-2">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="b in salesPurchaseSummary.salesRegister" :key="b.id" class="border-b border-slate-100">
+              <td class="p-2">{{ b.date }}</td>
+              <td class="p-2 font-mono text-xs">{{ b.bill_no }}</td>
+              <td class="p-2">{{ b.party_name }}</td>
+              <td class="text-right p-2">₹{{ n2(b.sub) }}</td>
+              <td class="text-right p-2">₹{{ n2(b.total_tax) }}</td>
+              <td class="text-right p-2 font-semibold">₹{{ n2(b.grand_total) }}</td>
+              <td class="text-center p-2 text-xs">{{ b.pay_status }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <table v-else class="w-full text-sm">
+          <thead>
+            <tr class="border-b bg-slate-50">
+              <th class="text-left p-2">Date</th><th class="text-left p-2">Bill</th><th class="text-left p-2">Supplier</th>
+              <th class="text-right p-2">Taxable</th><th class="text-right p-2">Tax</th><th class="text-right p-2">Total</th><th class="text-center p-2">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="p in salesPurchaseSummary.purchaseRegister" :key="p.id" class="border-b border-slate-100">
+              <td class="p-2">{{ p.date || p.received_date }}</td>
+              <td class="p-2 font-mono text-xs">{{ p.bill_no }}</td>
+              <td class="p-2">{{ p.supplier_name }}</td>
+              <td class="text-right p-2">₹{{ n2(p.sub) }}</td>
+              <td class="text-right p-2">₹{{ n2(p.total_tax) }}</td>
+              <td class="text-right p-2 font-semibold">₹{{ n2(p.grand_total) }}</td>
+              <td class="text-center p-2 text-xs">{{ p.pay_status }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p
+          v-if="registerSide === 'sales' ? !salesPurchaseSummary.salesRegister.length : !salesPurchaseSummary.purchaseRegister.length"
+          class="p-8 text-center text-slate-400"
+        >Is period me bills nahi mile.</p>
+      </div>
     </div>
 
     <!-- GSTR B2B -->
