@@ -327,7 +327,7 @@ function enrichRowsWithBalanceAndOutstanding(
     const fifo = fifoByGroup.get(groupKey)!
 
     const isBillRow = row.id.endsWith(':bill')
-    const isPaymentRow = row.id.endsWith(':paid')
+    const isPaymentRow = row.id.endsWith(':paid') || row.id.endsWith(':writeoff')
 
     if (isBillRow) {
       if (row.mode === 'customer') {
@@ -356,6 +356,35 @@ function enrichRowsWithBalanceAndOutstanding(
   })
 }
 
+function voucherBankCash(v: Voucher, mode: 'customer' | 'vendor') {
+  if (mode === 'customer') {
+    return round2(
+      (v.entries || [])
+        .filter((e) => /bank|cash/i.test(e.accountName || '') && (e.debit || 0) > 0)
+        .reduce((s, e) => s + (e.debit || 0), 0),
+    )
+  }
+  return round2(
+    (v.entries || [])
+      .filter((e) => /bank|cash/i.test(e.accountName || '') && (e.credit || 0) > 0)
+      .reduce((s, e) => s + (e.credit || 0), 0),
+  )
+}
+
+function voucherWriteOffAmount(v: Voucher) {
+  return round2(
+    (v.entries || [])
+      .filter((e) => /round\s*off/i.test(e.accountName || ''))
+      .reduce((s, e) => s + Math.max(e.debit || 0, e.credit || 0), 0),
+  )
+}
+
+function parsePayRef(refId: string | null | undefined): string | null {
+  const ref = String(refId || '')
+  if (!ref.endsWith('_PAY')) return null
+  return ref.slice(0, -4) || null
+}
+
 export function buildPartyLedger(
   invoices: Invoice[],
   purchases: Purchase[],
@@ -365,7 +394,11 @@ export function buildPartyLedger(
 ): PartyLedgerResult {
   const entries: Omit<PartyLedgerRow, 'balance'>[] = []
   const seenDocs = new Set<string>()
+  const invoiceById = new Map(invoices.map((i) => [i.id, i]))
+  const purchaseById = new Map(purchases.map((p) => [p.id, p]))
+  const billsCoveredByVoucher = new Set<string>()
 
+  // ── Bill rows (invoice / purchase) ──────────────────────────────────────
   if (filters.mode === 'customer' || filters.mode === 'both') {
     for (const inv of invoices) {
       if (inv.firm_id !== filters.firmId || !isInvoiceActive(inv)) continue
@@ -380,18 +413,13 @@ export function buildPartyLedger(
       if (filters.pendingOnly && filterOutstanding <= 0.01) continue
       if (!inAmountRange(amount, filterOutstanding, filters)) continue
 
-      const billDate = inv.date
-      const paymentDate = resolvePaymentLedgerDate(inv.id, billDate, inv.last_payment_date, vouchers)
-      const voucherTotal = resolvePaymentLedgerAmount(inv.id, paid, 'customer', vouchers)
-      const paymentRowAmount = round2(paid)
-
       seenDocs.add(`invoice:${inv.id}`)
       const docLabel = customerDocLabel(inv)
       const base = {
         docId: inv.id,
         docType: 'invoice' as const,
         mode: 'customer' as const,
-        date: billDate,
+        date: inv.date,
         refNo: inv.bill_no,
         partyId: inv.party_id,
         partyName: inv.party_name || 'Unknown',
@@ -409,27 +437,6 @@ export function buildPartyLedger(
         debit: isCreditNote ? 0 : amount,
         credit: isCreditNote ? amount : 0,
       })
-
-      if (!isCreditNote && paid > 0) {
-        entries.push({
-          ...base,
-          id: `${inv.id}:paid`,
-          date: paymentDate,
-          type: /write-off/i.test(inv.notes || '') ? 'Receipt / Write-off' : 'Receipt',
-          narration: resolvePaymentLedgerNarration({
-            docId: inv.id,
-            billNo: inv.bill_no,
-            paid: paymentRowAmount,
-            billAmount: amount,
-            voucherTotal,
-            mode: 'customer',
-            billNotes: inv.notes,
-            vouchers,
-          }),
-          debit: 0,
-          credit: paymentRowAmount,
-        })
-      }
     }
   }
 
@@ -444,10 +451,6 @@ export function buildPartyLedger(
       const outstanding = round2(Math.max(0, amount - Math.min(paid, amount)))
       if (filters.pendingOnly && outstanding <= 0.01) continue
       if (!inAmountRange(amount, outstanding, filters)) continue
-
-      const paymentDate = resolvePaymentLedgerDate(pur.id, billDate, pur.last_payment_date, vouchers)
-      const voucherTotal = resolvePaymentLedgerAmount(pur.id, paid, 'vendor', vouchers)
-      const paymentRowAmount = round2(paid)
 
       seenDocs.add(`purchase:${pur.id}`)
       const base = {
@@ -472,25 +475,270 @@ export function buildPartyLedger(
         debit: 0,
         credit: amount,
       })
+    }
+  }
 
-      if (paid > 0) {
-        entries.push({
-          ...base,
-          id: `${pur.id}:paid`,
-          date: paymentDate,
-          type: /write-off/i.test(pur.notes || '') ? 'Payment / Write-off' : 'Payment',
-          narration: resolvePaymentLedgerNarration({
-            docId: pur.id,
-            billNo: base.refNo,
-            paid: paymentRowAmount,
-            billAmount: amount,
-            voucherTotal,
+  // ── Payment rows from actual RECEIPT/PAYMENT vouchers (cash + voucher date) ──
+  const activeVouchers = (vouchers || []).filter((v) => !v.is_deleted && (v.type === 'RECEIPT' || v.type === 'PAYMENT'))
+  for (const v of activeVouchers) {
+    const primaryId = parsePayRef(v.ref_id)
+    const allocParts = parseAllocTag(v.narration || '')
+    const mode: 'customer' | 'vendor' = v.type === 'RECEIPT' ? 'customer' : 'vendor'
+    if (filters.mode !== 'both' && filters.mode !== mode) continue
+
+    let partyId: string | null = null
+    let partyName = ''
+    let refNo = ''
+    let docId = primaryId || v.id
+    let coveredIds: string[] = []
+
+    if (mode === 'customer') {
+      const primary = primaryId ? invoiceById.get(primaryId) : undefined
+      const allocInvs = allocParts
+        .map((p) => invoiceById.get(p.id))
+        .filter((x): x is Invoice => !!x)
+      const sample = primary || allocInvs[0]
+      if (!sample) continue
+      if (sample.firm_id !== filters.firmId || !isInvoiceActive(sample)) continue
+      if (!matchesParty(sample.party_id, sample.party_name, filters)) continue
+      partyId = sample.party_id
+      partyName = sample.party_name || 'Unknown'
+      const payDateEarly = (v.date || '').slice(0, 10)
+      if (allocParts.length) {
+        coveredIds = allocParts.map((p) => p.id)
+      } else if (primaryId) {
+        coveredIds = [primaryId]
+        for (const inv of invoices) {
+          if (inv.id === primaryId || !isInvoiceActive(inv) || inv.firm_id !== filters.firmId) continue
+          if (!matchesParty(inv.party_id, inv.party_name, {
+            firmId: filters.firmId,
+            mode: 'customer',
+            partyId: sample.party_id || undefined,
+            partyName: sample.party_name,
+          })) continue
+          if ((inv.amt_paid || 0) > 0.01 && String(inv.last_payment_date || '').slice(0, 10) === payDateEarly) {
+            coveredIds.push(inv.id)
+          }
+        }
+      }
+      const billNos = coveredIds
+        .map((id) => invoiceById.get(id)?.bill_no || id.slice(0, 8))
+        .join(', ')
+      refNo = coveredIds.length > 1 ? `LUMP-${(primaryId || v.id).slice(0, 6)}` : (primary?.bill_no || billNos || v.voucher_no)
+      docId = primaryId || sample.id
+    } else {
+      const primary = primaryId ? purchaseById.get(primaryId) : undefined
+      const allocPurs = allocParts
+        .map((p) => purchaseById.get(p.id))
+        .filter((x): x is Purchase => !!x)
+      const sample = primary || allocPurs[0]
+      if (!sample || sample.is_deleted) continue
+      if (sample.firm_id !== filters.firmId) continue
+      if (!matchesParty(sample.supplier_id, sample.supplier_name, filters)) continue
+      partyId = sample.supplier_id
+      partyName = sample.supplier_name || 'Unknown'
+      const payDateEarly = (v.date || '').slice(0, 10)
+      if (allocParts.length) {
+        coveredIds = allocParts.map((p) => p.id)
+      } else if (primaryId) {
+        coveredIds = [primaryId]
+        for (const pur of purchases) {
+          if (pur.id === primaryId || pur.is_deleted || pur.firm_id !== filters.firmId) continue
+          if (!matchesParty(pur.supplier_id, pur.supplier_name, {
+            firmId: filters.firmId,
             mode: 'vendor',
-            billNotes: pur.notes,
-            vouchers,
-          }),
-          debit: paymentRowAmount,
+            partyId: sample.supplier_id || undefined,
+            partyName: sample.supplier_name,
+          })) continue
+          if ((pur.amt_paid || 0) > 0.01 && String(pur.last_payment_date || '').slice(0, 10) === payDateEarly) {
+            coveredIds.push(pur.id)
+          }
+        }
+      }
+      const billNos = coveredIds
+        .map((id) => purchaseById.get(id)?.bill_no || id.slice(0, 8))
+        .join(', ')
+      refNo = coveredIds.length > 1 ? `LUMP-${(primaryId || v.id).slice(0, 6)}` : (primary?.bill_no || billNos || v.voucher_no)
+      docId = primaryId || sample.id
+    }
+
+    for (const id of coveredIds) billsCoveredByVoucher.add(`${mode}:${id}`)
+
+    const cash = voucherBankCash(v, mode)
+    const writeOff = voucherWriteOffAmount(v)
+    const payDate = (v.date || '').slice(0, 10)
+    if (cash <= 0.01 && writeOff <= 0.01) continue
+
+    const breakdown = allocParts.length > 1
+      ? allocParts
+        .map((p) => `${p.billNo} ₹${p.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+        .join(' + ')
+      : ''
+
+    if (cash > 0.01) {
+      const narration = breakdown
+        ? `${mode === 'customer' ? 'Received' : 'Paid'} ₹${cash.toLocaleString('en-IN')} · ${breakdown}`
+        : `${mode === 'customer' ? 'Received' : 'Paid'} ₹${cash.toLocaleString('en-IN')}${refNo ? ` against ${refNo}` : ''}`
+      entries.push({
+        id: `${v.id}:paid`,
+        docId,
+        docType: mode === 'customer' ? 'invoice' : 'purchase',
+        mode,
+        date: payDate,
+        refNo,
+        type: mode === 'customer' ? 'Receipt' : 'Payment',
+        partyId,
+        partyName,
+        narration,
+        debit: mode === 'vendor' ? cash : 0,
+        credit: mode === 'customer' ? cash : 0,
+        amount: cash,
+        paid: cash,
+        outstanding: 0,
+        payStatus: 'PAID',
+      })
+    }
+
+    if (writeOff > 0.01) {
+      entries.push({
+        id: `${v.id}:writeoff`,
+        docId,
+        docType: mode === 'customer' ? 'invoice' : 'purchase',
+        mode,
+        date: payDate,
+        refNo,
+        type: 'Write-off',
+        partyId,
+        partyName,
+        narration: `Settlement / write-off ₹${writeOff.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        debit: mode === 'vendor' ? writeOff : 0,
+        credit: mode === 'customer' ? writeOff : 0,
+        amount: writeOff,
+        paid: writeOff,
+        outstanding: 0,
+        payStatus: 'PAID',
+      })
+    }
+  }
+
+  // ── Fallback: bill amt_paid with no payment voucher (legacy / advance-only) ──
+  if (filters.mode === 'customer' || filters.mode === 'both') {
+    for (const inv of invoices) {
+      if (inv.firm_id !== filters.firmId || !isInvoiceActive(inv) || isCustomerCreditDoc(inv)) continue
+      if (!isCustomerDebitDoc(inv)) continue
+      if (!matchesParty(inv.party_id, inv.party_name, filters)) continue
+      const paid = round2(inv.amt_paid)
+      if (paid <= 0.01) continue
+      if (billsCoveredByVoucher.has(`customer:${inv.id}`)) continue
+
+      const amount = round2(inv.grand_total)
+      const paymentDate = resolvePaymentLedgerDate(inv.id, inv.date, inv.last_payment_date, vouchers)
+      const writeOffMatch = (inv.notes || '').match(/\[Write-off:\s*₹?([\d,.]+)/i)
+      const writeOff = writeOffMatch ? round2(Number(String(writeOffMatch[1]).replace(/,/g, '')) || 0) : 0
+      // Without voucher: show recorded paid (incl. overpayment). Write-off cash = bill − write-off.
+      const cash = writeOff > 0.01
+        ? round2(Math.max(0, Math.min(paid, amount) - writeOff))
+        : paid
+
+      if (cash > 0.01) {
+        entries.push({
+          id: `${inv.id}:paid`,
+          docId: inv.id,
+          docType: 'invoice',
+          mode: 'customer',
+          date: paymentDate,
+          refNo: inv.bill_no,
+          type: 'Receipt',
+          partyId: inv.party_id,
+          partyName: inv.party_name || 'Unknown',
+          narration: `Received ₹${cash.toLocaleString('en-IN')} against ${inv.bill_no}`,
+          debit: 0,
+          credit: cash,
+          amount: cash,
+          paid: cash,
+          outstanding: round2(Math.max(0, amount - Math.min(paid, amount))),
+          payStatus: inv.pay_status,
+        })
+      }
+      if (writeOff > 0.01) {
+        entries.push({
+          id: `${inv.id}:writeoff`,
+          docId: inv.id,
+          docType: 'invoice',
+          mode: 'customer',
+          date: paymentDate,
+          refNo: inv.bill_no,
+          type: 'Write-off',
+          partyId: inv.party_id,
+          partyName: inv.party_name || 'Unknown',
+          narration: `Settlement / write-off ₹${writeOff.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          debit: 0,
+          credit: writeOff,
+          amount: writeOff,
+          paid: writeOff,
+          outstanding: 0,
+          payStatus: 'PAID',
+        })
+      }
+    }
+  }
+
+  if (filters.mode === 'vendor' || filters.mode === 'both') {
+    for (const pur of purchases) {
+      if (pur.firm_id !== filters.firmId || pur.is_deleted) continue
+      if (!matchesParty(pur.supplier_id, pur.supplier_name, filters)) continue
+      const paid = round2(pur.amt_paid)
+      if (paid <= 0.01) continue
+      if (billsCoveredByVoucher.has(`vendor:${pur.id}`)) continue
+
+      const amount = round2(pur.grand_total)
+      const billDate = pur.received_date || pur.date
+      const paymentDate = resolvePaymentLedgerDate(pur.id, billDate, pur.last_payment_date, vouchers)
+      const writeOffMatch = (pur.notes || '').match(/\[Write-off:\s*₹?([\d,.]+)/i)
+      const writeOff = writeOffMatch ? round2(Number(String(writeOffMatch[1]).replace(/,/g, '')) || 0) : 0
+      const cash = writeOff > 0.01
+        ? round2(Math.max(0, Math.min(paid, amount) - writeOff))
+        : paid
+      const refNo = pur.bill_no || pur.id.slice(0, 8)
+
+      if (cash > 0.01) {
+        entries.push({
+          id: `${pur.id}:paid`,
+          docId: pur.id,
+          docType: 'purchase',
+          mode: 'vendor',
+          date: paymentDate,
+          refNo,
+          type: 'Payment',
+          partyId: pur.supplier_id,
+          partyName: pur.supplier_name || 'Unknown',
+          narration: `Paid ₹${cash.toLocaleString('en-IN')} against ${refNo}`,
+          debit: cash,
           credit: 0,
+          amount: cash,
+          paid: cash,
+          outstanding: round2(Math.max(0, amount - Math.min(paid, amount))),
+          payStatus: pur.pay_status,
+        })
+      }
+      if (writeOff > 0.01) {
+        entries.push({
+          id: `${pur.id}:writeoff`,
+          docId: pur.id,
+          docType: 'purchase',
+          mode: 'vendor',
+          date: paymentDate,
+          refNo,
+          type: 'Write-off',
+          partyId: pur.supplier_id,
+          partyName: pur.supplier_name || 'Unknown',
+          narration: `Settlement / write-off ₹${writeOff.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          debit: writeOff,
+          credit: 0,
+          amount: writeOff,
+          paid: writeOff,
+          outstanding: 0,
+          payStatus: 'PAID',
         })
       }
     }
@@ -539,8 +787,11 @@ export function buildPartyLedger(
       if (row.balance != null) acc.balance = row.balance
       if (row.mode === 'customer' && row.id.endsWith(':bill') && row.debit > 0) acc.billed = round2(acc.billed + row.debit)
       if (row.mode === 'customer' && row.type.includes('Receipt')) acc.received = round2(acc.received + row.credit)
+      if (row.mode === 'customer' && row.type === 'Write-off') acc.received = round2(acc.received + row.credit)
       if (row.mode === 'vendor' && row.type === 'Purchase') acc.payable = round2(acc.payable + row.amount)
-      if (row.mode === 'vendor' && row.debit > 0) acc.paid = round2(acc.paid + row.debit)
+      if (row.mode === 'vendor' && (row.type === 'Payment' || row.type === 'Write-off') && row.debit > 0) {
+        acc.paid = round2(acc.paid + row.debit)
+      }
       acc.rows += 1
       return acc
     },
@@ -565,7 +816,7 @@ export function buildPartyLedger(
       if (!fifoByGroup.has(groupKey)) fifoByGroup.set(groupKey, createFifoState())
       const fifo = fifoByGroup.get(groupKey)!
       const isBillRow = row.id.endsWith(':bill')
-      const isPaymentRow = row.id.endsWith(':paid')
+      const isPaymentRow = row.id.endsWith(':paid') || row.id.endsWith(':writeoff')
       if (isBillRow) {
         if (row.mode === 'customer') {
           if (row.debit > 0) addBillToFifo(fifo, row.id, row.debit)

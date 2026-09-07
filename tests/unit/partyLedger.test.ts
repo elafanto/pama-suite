@@ -91,7 +91,7 @@ describe('party ledger lump sum allocation', () => {
       vouchers,
     )
 
-    const paid = result.rows.find((r) => r.id === 'inv-18:paid')
+    const paid = result.rows.find((r) => r.id === 'v1:paid' || r.id === 'inv-18:paid')
     expect(paid?.date).toBe('2026-08-15')
     expect(paid?.credit).toBe(100000)
     expect(result.rows.find((r) => r.id === 'inv-18:bill')).toBeUndefined()
@@ -114,16 +114,18 @@ describe('party ledger lump sum allocation', () => {
 
     expect(aug.totals.outstanding).toBe(130633)
     expect(aug.rows).toHaveLength(1)
-    expect(aug.rows[0].id).toBe('inv-18:paid')
+    expect(aug.rows[0].id.endsWith(':paid')).toBe(true)
+    expect(aug.rows[0].credit).toBe(100000)
   })
 
-  it('does not double-count lump sum when payment is split across invoices', () => {
+  it('does not double-count lump sum — one receipt for voucher cash on payment date', () => {
     const vouchers = [{
       id: 'v1',
       firm_id: firmId,
       ref_id: 'inv-18_PAY',
       type: 'RECEIPT',
       date: '2026-08-15',
+      narration: 'Lump | [ALLOC:inv-18=37643.00|INV-0018;inv-19=62357.00|INV-0019]',
       is_deleted: false,
       updated_at: '2026-08-15T00:00:00.000Z',
       entries: [{ accountId: 'b', accountName: 'Bank Account', debit: 100000, credit: 0 }],
@@ -139,7 +141,45 @@ describe('party ledger lump sum allocation', () => {
 
     expect(result.totals.credit).toBe(100000)
     expect(result.totals.outstanding).toBe(130633)
-    expect(result.rows.find((r) => r.id === 'inv-18:paid')?.credit).toBe(37643)
-    expect(result.rows.find((r) => r.id === 'inv-19:paid')?.credit).toBe(62357)
+    const receipt = result.rows.find((r) => r.id === 'v1:paid')
+    expect(receipt?.credit).toBe(100000)
+    expect(receipt?.date).toBe('2026-08-15')
+    expect(result.rows.filter((r) => r.id.endsWith(':paid'))).toHaveLength(1)
+  })
+
+  it('write-off shows cash receipt separately from settlement amount', () => {
+    const vouchers = [{
+      id: 'v-wo',
+      firm_id: firmId,
+      ref_id: 'inv-18_PAY',
+      type: 'RECEIPT',
+      date: '2026-08-20',
+      is_deleted: false,
+      updated_at: '',
+      entries: [
+        { accountId: 'b', accountName: 'Bank Account', debit: 9000, credit: 0 },
+        { accountId: 'r', accountName: 'Round Off Expense', debit: 1000, credit: 0 },
+        { accountId: 'd', accountName: 'Sundry Debtors', debit: 0, credit: 10000 },
+      ],
+    }] as Voucher[]
+
+    const result = buildPartyLedger(
+      [invoice({
+        id: 'inv-18',
+        bill_no: 'INV-0018',
+        date: '2026-07-13',
+        grand_total: 10000,
+        amt_paid: 10000,
+        pay_status: 'PAID',
+        notes: '[Write-off: ₹1000.00 — Settlement discount]',
+      })],
+      [],
+      { firmId, mode: 'customer', partyId },
+      vouchers,
+    )
+
+    expect(result.rows.find((r) => r.id === 'v-wo:paid')?.credit).toBe(9000)
+    expect(result.rows.find((r) => r.id === 'v-wo:writeoff')?.credit).toBe(1000)
+    expect(result.rows.find((r) => r.id === 'v-wo:paid')?.date).toBe('2026-08-20')
   })
 })
