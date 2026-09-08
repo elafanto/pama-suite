@@ -445,7 +445,14 @@ const recentReelMoves = computed(() => {
     .slice(0, 12)
 })
 const reelInventory = computed(() => reelInventorySummary(production.reels, production.movements))
-const reelBalanceReportRowsBase = computed(() => reelInventory.value.breakdown)
+/** Zero-stock breakdown rows hidden unless toggled. */
+const showBreakdownZeroStock = ref(false)
+const reelBalanceReportRowsBase = computed(() => {
+  const rows = reelInventory.value.breakdown
+  if (showBreakdownZeroStock.value) return rows
+  // Sirf active stock configs — zero / fully consumed configs hide
+  return rows.filter((r) => r.stockStatus !== 'zero' && r.activeReels > 0)
+})
 
 type BreakdownSortKey =
   | 'paper_type'
@@ -529,8 +536,9 @@ function downloadAbstractPdf(rows?: ReelInventoryBreakdownRow[]) {
 
 function downloadLowStockPdf() {
   const inv = reelInventory.value
+  // Full breakdown — zero rows included even if table hides them
   const res = downloadReelLowStockPdf({
-    breakdown: reelBalanceReportRows.value,
+    breakdown: inv.breakdown,
     firmName: firmStore.activeFirm?.name,
     totals: {
       totalReels: inv.totalReels,
@@ -1393,12 +1401,16 @@ onMounted(async () => {
         <div class="pp-card p-4 overflow-x-auto">
           <div class="flex flex-wrap items-center justify-between gap-2 mb-3 border-b pb-2">
             <h3 class="font-semibold text-sm">Breakdown by GSM / BF / Deckle / Color</h3>
-            <div class="flex flex-wrap gap-2">
+            <div class="flex flex-wrap items-center gap-3">
+              <label class="inline-flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                <input v-model="showBreakdownZeroStock" type="checkbox" class="h-3.5 w-3.5" />
+                Show zero stock
+              </label>
               <button type="button" class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs" @click="downloadAbstractPdf()">PDF Abstract</button>
               <button type="button" class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs" @click="downloadLowStockPdf()">PDF Low/Zero</button>
             </div>
           </div>
-          <table class="w-full text-sm min-w-[980px]">
+          <table class="w-full text-sm min-w-[900px]">
             <thead class="text-xs uppercase text-slate-500 bg-slate-50">
               <tr>
                 <th class="p-2" :class="breakdownSort.thClass('paper_type')" @click="breakdownSort.toggle('paper_type')">Type{{ breakdownSort.indicator('paper_type') }}</th>
@@ -1406,8 +1418,7 @@ onMounted(async () => {
                 <th class="p-2" :class="breakdownSort.thClass('bf')" @click="breakdownSort.toggle('bf')">BF{{ breakdownSort.indicator('bf') }}</th>
                 <th class="p-2" :class="breakdownSort.thClass('deckle')" @click="breakdownSort.toggle('deckle')">Deckle{{ breakdownSort.indicator('deckle') }}</th>
                 <th class="p-2" :class="breakdownSort.thClass('color')" @click="breakdownSort.toggle('color')">Color{{ breakdownSort.indicator('color') }}</th>
-                <th class="p-2" :class="breakdownSort.thClass('reels', 'right')" @click="breakdownSort.toggle('reels', 'desc')">Reels{{ breakdownSort.indicator('reels') }}</th>
-                <th class="p-2" :class="breakdownSort.thClass('active', 'right')" @click="breakdownSort.toggle('active', 'desc')">Active{{ breakdownSort.indicator('active') }}</th>
+                <th class="p-2" :class="breakdownSort.thClass('active', 'right')" @click="breakdownSort.toggle('active', 'desc')">Active qty{{ breakdownSort.indicator('active') }}</th>
                 <th class="p-2" :class="breakdownSort.thClass('available', 'right')" @click="breakdownSort.toggle('available', 'desc')">Available KG{{ breakdownSort.indicator('available') }}</th>
                 <th class="p-2" :class="breakdownSort.thClass('consumed', 'right')" @click="breakdownSort.toggle('consumed', 'desc')">Consumed KG{{ breakdownSort.indicator('consumed') }}</th>
                 <th class="p-2" :class="breakdownSort.thClass('status', 'center')" @click="breakdownSort.toggle('status')">Status{{ breakdownSort.indicator('status') }}</th>
@@ -1428,9 +1439,8 @@ onMounted(async () => {
                 <td class="p-2">{{ row.bf }}</td>
                 <td class="p-2">{{ row.deckle }}</td>
                 <td class="p-2">{{ row.color }}</td>
-                <td class="p-2 text-right font-mono">{{ row.reels }}</td>
-                <td class="p-2 text-right font-mono">{{ row.activeReels }}</td>
-                <td class="p-2 text-right font-mono">{{ n2(row.currentWeight) }}</td>
+                <td class="p-2 text-right font-mono font-bold text-emerald-700">{{ row.activeReels }}</td>
+                <td class="p-2 text-right font-mono font-bold text-emerald-700">{{ n2(row.currentWeight) }}</td>
                 <td class="p-2 text-right font-mono text-slate-600">{{ n2(row.consumedWeight) }}</td>
                 <td class="p-2 text-center">
                   <span class="pp-badge text-xs" :class="BREAKDOWN_STATUS_META[row.stockStatus].cls">
@@ -1439,7 +1449,9 @@ onMounted(async () => {
                 </td>
               </tr>
               <tr v-if="reelBalanceReportRows.length === 0">
-                <td colspan="10" class="p-6 text-center text-slate-400">No paper reel stock yet.</td>
+                <td colspan="9" class="p-6 text-center text-slate-400">
+                  {{ showBreakdownZeroStock ? 'No paper reel stock yet.' : 'No active reel stock — tick Show zero stock for empty configs.' }}
+                </td>
               </tr>
             </tbody>
           </table>
@@ -2206,7 +2218,11 @@ onMounted(async () => {
       <div class="pp-card p-6">
         <div class="flex flex-wrap items-end justify-between gap-3 border-b pb-2 mb-4">
           <h2 class="font-semibold">Reel Balance by Type / GSM / BF / Deckle / Color</h2>
-          <div class="flex flex-wrap gap-2">
+          <div class="flex flex-wrap items-center gap-3">
+            <label class="inline-flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+              <input v-model="showBreakdownZeroStock" type="checkbox" class="h-3.5 w-3.5" />
+              Show zero stock
+            </label>
             <button type="button" class="pp-btn pp-btn-primary !py-1.5 !px-3 text-xs" title="Har reel number + Found/Phys.KG" @click="downloadPhysicalVerificationPdf">Physical verify PDF</button>
             <button type="button" class="pp-btn pp-btn-ghost !py-1.5 !px-3 text-xs" title="CSV with every reel number" @click="downloadReelDetailCsv">CSV Reel detail</button>
             <button type="button" class="pp-btn pp-btn-ghost !py-1.5 !px-3 text-xs" @click="downloadReelWisePdf">PDF Reel-wise</button>
@@ -2233,7 +2249,7 @@ onMounted(async () => {
           </div>
         </div>
         <div class="overflow-x-auto">
-          <table class="w-full text-sm min-w-[1020px]">
+          <table class="w-full text-sm min-w-[960px]">
             <thead class="text-xs uppercase text-slate-500 bg-slate-50">
               <tr>
                 <th class="p-3" :class="breakdownSort.thClass('paper_type')" @click="breakdownSort.toggle('paper_type')">Type{{ breakdownSort.indicator('paper_type') }}</th>
@@ -2241,8 +2257,7 @@ onMounted(async () => {
                 <th class="p-3" :class="breakdownSort.thClass('bf')" @click="breakdownSort.toggle('bf')">BF{{ breakdownSort.indicator('bf') }}</th>
                 <th class="p-3" :class="breakdownSort.thClass('deckle')" @click="breakdownSort.toggle('deckle')">Deckle{{ breakdownSort.indicator('deckle') }}</th>
                 <th class="p-3" :class="breakdownSort.thClass('color')" @click="breakdownSort.toggle('color')">Color{{ breakdownSort.indicator('color') }}</th>
-                <th class="p-3" :class="breakdownSort.thClass('reels', 'right')" @click="breakdownSort.toggle('reels', 'desc')">Reels{{ breakdownSort.indicator('reels') }}</th>
-                <th class="p-3" :class="breakdownSort.thClass('active', 'right')" @click="breakdownSort.toggle('active', 'desc')">Active{{ breakdownSort.indicator('active') }}</th>
+                <th class="p-3" :class="breakdownSort.thClass('active', 'right')" @click="breakdownSort.toggle('active', 'desc')">Active qty{{ breakdownSort.indicator('active') }}</th>
                 <th class="p-3" :class="breakdownSort.thClass('opening', 'right')" @click="breakdownSort.toggle('opening', 'desc')">Opening KG{{ breakdownSort.indicator('opening') }}</th>
                 <th class="p-3" :class="breakdownSort.thClass('available', 'right')" @click="breakdownSort.toggle('available', 'desc')">Available KG{{ breakdownSort.indicator('available') }}</th>
                 <th class="p-3" :class="breakdownSort.thClass('consumed', 'right')" @click="breakdownSort.toggle('consumed', 'desc')">Consumed KG{{ breakdownSort.indicator('consumed') }}</th>
@@ -2256,10 +2271,9 @@ onMounted(async () => {
                 <td class="p-3">{{ row.bf }}</td>
                 <td class="p-3">{{ row.deckle }}</td>
                 <td class="p-3">{{ row.color }}</td>
-                <td class="p-3 text-right font-mono">{{ row.reels }}</td>
-                <td class="p-3 text-right font-mono">{{ row.activeReels }}</td>
+                <td class="p-3 text-right font-mono font-bold text-emerald-700">{{ row.activeReels }}</td>
                 <td class="p-3 text-right font-mono">{{ n2(row.openingWeight) }}</td>
-                <td class="p-3 text-right font-mono">{{ n2(row.currentWeight) }}</td>
+                <td class="p-3 text-right font-mono font-bold text-emerald-700">{{ n2(row.currentWeight) }}</td>
                 <td class="p-3 text-right font-mono">{{ n2(row.consumedWeight) }}</td>
                 <td class="p-3 text-center">
                   <span class="pp-badge text-xs" :class="BREAKDOWN_STATUS_META[row.stockStatus].cls">
@@ -2268,7 +2282,9 @@ onMounted(async () => {
                 </td>
               </tr>
               <tr v-if="reelBalanceReportRows.length === 0">
-                <td colspan="11" class="p-8 text-center text-slate-400">No paper reel stock yet.</td>
+                <td colspan="10" class="p-8 text-center text-slate-400">
+                  {{ showBreakdownZeroStock ? 'No paper reel stock yet.' : 'No active reel stock — tick Show zero stock for empty configs.' }}
+                </td>
               </tr>
             </tbody>
           </table>
