@@ -35,6 +35,8 @@ export interface ReelWisePdfRow {
   currentKg: number
   status: string
   date: string
+  remark: string
+  billNo: string
 }
 
 export interface ReelAbstractPdfRow {
@@ -75,6 +77,8 @@ export function buildReelWisePdfRows(reels: ReelStock[]): ReelWisePdfRow[] {
       currentKg: Number(r.current_weight) || 0,
       status: r.status || '—',
       date: (r.created_at || '').slice(0, 10) || '—',
+      remark: (r.remark || '').trim() || '—',
+      billNo: (r.purchase_bill_no || '').trim() || '—',
     }))
 }
 
@@ -227,6 +231,175 @@ export function downloadReelWiseStockPdf(opts: {
 
   const file = opts.filename || `Reel_Stock_ReelWise_${todayStamp()}.pdf`
   pdf.save(file)
+  return { file, rows: rows.length }
+}
+
+/**
+ * Physical verification sheet — every reel number + system KG,
+ * with blank Found / Phys. KG / Notes columns for floor check.
+ */
+export function downloadReelPhysicalVerificationPdf(opts: {
+  reels: ReelStock[]
+  firmName?: string
+  filterNote?: string
+  filename?: string
+  /** Default: active reels only when caller passes filtered list; title reflects count. */
+}): { file: string; rows: number } {
+  const rows = buildReelWisePdfRows(opts.reels)
+  const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'landscape' })
+  const pageW = pdf.internal.pageSize.getWidth()
+  const pageH = pdf.internal.pageSize.getHeight()
+  const L = 7
+  const R = pageW - 7
+  let y = drawHeader(pdf, {
+    title: 'Paper Reel — Physical Verification (Reel No. Wise)',
+    firmName: opts.firmName,
+    subtitle: opts.filterNote,
+    pageW,
+  })
+  pdf.setFont('helvetica', 'normal').setFontSize(7.5)
+  pdf.text('Floor pe har reel number milao · Found tick karo · Phys. KG likho agar weigh kiya', L, y)
+  y += 5
+
+  const cols = [
+    { key: 'sn', label: '#', w: 8 },
+    { key: 'reelNo', label: 'Reel No', w: 22 },
+    { key: 'paperType', label: 'Type', w: 14 },
+    { key: 'mill', label: 'Mill', w: 28 },
+    { key: 'deckle', label: 'Deckle', w: 24 },
+    { key: 'gsm', label: 'GSM', w: 10 },
+    { key: 'bf', label: 'BF', w: 9 },
+    { key: 'color', label: 'Color', w: 11 },
+    { key: 'condition', label: 'Cond.', w: 12 },
+    { key: 'currentKg', label: 'Sys KG', w: 16, num: true },
+    { key: 'status', label: 'Status', w: 14 },
+    { key: 'found', label: 'Found ✓', w: 14 },
+    { key: 'physKg', label: 'Phys. KG', w: 16 },
+    { key: 'notes', label: 'Notes', w: 45 },
+  ] as const
+
+  const drawTableHeader = () => {
+    pdf.setFillColor(241, 245, 249)
+    pdf.rect(L, y, R - L, 7, 'F')
+    pdf.setFont('helvetica', 'bold').setFontSize(6.5)
+    let x = L + 1
+    for (const c of cols) {
+      if ('num' in c && c.num) pdf.text(c.label, x + c.w - 2, y + 4.5, { align: 'right' })
+      else pdf.text(c.label, x, y + 4.5)
+      x += c.w
+    }
+    y += 7
+  }
+
+  drawTableHeader()
+  let sumCur = 0
+  pdf.setFont('helvetica', 'normal').setFontSize(6.5)
+  rows.forEach((row, idx) => {
+    const millLines = pdf.splitTextToSize(row.mill || '—', 25) as string[]
+    const deckleLines = pdf.splitTextToSize(row.deckle || '—', 21) as string[]
+    const rowH = Math.max(7, Math.max(millLines.length, deckleLines.length) * 3.2 + 2)
+    y = ensurePage(pdf, y, rowH + 1, pageH)
+    if (y === 12) drawTableHeader()
+    sumCur += row.currentKg
+
+    // light row box for tick space
+    pdf.setDrawColor(226, 232, 240)
+    pdf.rect(L, y, R - L, rowH)
+
+    let x = L + 1
+    const cells: Record<string, string> = {
+      sn: String(idx + 1),
+      reelNo: row.reelNo,
+      paperType: row.paperType,
+      mill: row.mill,
+      deckle: row.deckle,
+      gsm: row.gsm,
+      bf: row.bf,
+      color: row.color,
+      condition: row.condition,
+      currentKg: n2(row.currentKg),
+      status: row.status,
+      found: '',
+      physKg: '',
+      notes: row.remark !== '—' ? row.remark : '',
+    }
+    for (const c of cols) {
+      const val = cells[c.key] || ''
+      if (c.key === 'mill' || c.key === 'deckle') {
+        const lines = pdf.splitTextToSize(val || '—', c.w - 3) as string[]
+        lines.forEach((line: string, i: number) => pdf.text(line, x, y + 4 + i * 3.2))
+      } else if (c.key === 'found') {
+        pdf.rect(x + 2, y + 1.5, 5, 4)
+      } else if (c.key === 'physKg') {
+        pdf.setDrawColor(203, 213, 225)
+        pdf.line(x + 1, y + rowH - 1.5, x + c.w - 2, y + rowH - 1.5)
+      } else if (c.key === 'notes') {
+        if (val) {
+          const lines = pdf.splitTextToSize(val, c.w - 3) as string[]
+          lines.slice(0, 2).forEach((line: string, i: number) => pdf.text(line, x, y + 3.5 + i * 3))
+        }
+        pdf.setDrawColor(203, 213, 225)
+        pdf.line(x + 1, y + rowH - 1.5, x + c.w - 2, y + rowH - 1.5)
+      } else if ('num' in c && c.num) pdf.text(val, x + c.w - 2, y + 4, { align: 'right' })
+      else pdf.text(val, x, y + 4)
+      x += c.w
+    }
+    y += rowH
+  })
+
+  y = ensurePage(pdf, y, 18, pageH)
+  pdf.setFont('helvetica', 'bold').setFontSize(8)
+  pdf.text(`Total reels: ${rows.length}    System current: ${n2(sumCur)} KG`, L, y + 5)
+  y += 9
+  pdf.setFont('helvetica', 'normal').setFontSize(7.5)
+  pdf.text('Verified by: ________________    Date: ____________    Signature: ________________', L, y + 3)
+
+  const file = opts.filename || `Reel_Physical_Verification_${todayStamp()}.pdf`
+  pdf.save(file)
+  return { file, rows: rows.length }
+}
+
+/** CSV — every reel number with full detail (Excel me physical count ke liye). */
+export function downloadReelWiseCsv(opts: {
+  reels: ReelStock[]
+  filename?: string
+}): { file: string; rows: number } {
+  const rows = buildReelWisePdfRows(opts.reels)
+  const headers = [
+    'S.No', 'Reel No', 'Type', 'Mill', 'Deckle', 'GSM', 'BF', 'Color', 'Condition',
+    'Opening KG', 'Current KG', 'Status', 'In Date', 'Purchase Bill', 'Remark',
+    'Found (Y/N)', 'Physical KG', 'Notes',
+  ]
+  const lines = [
+    headers.join(','),
+    ...rows.map((r, i) => [
+      i + 1,
+      r.reelNo,
+      r.paperType,
+      r.mill,
+      r.deckle,
+      r.gsm,
+      r.bf,
+      r.color,
+      r.condition,
+      r.openingKg.toFixed(2),
+      r.currentKg.toFixed(2),
+      r.status,
+      r.date,
+      r.billNo,
+      r.remark,
+      '',
+      '',
+      '',
+    ].map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')),
+  ]
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+  const a = document.createElement('a')
+  const file = opts.filename || `Reel_Stock_Detail_${todayStamp()}.csv`
+  a.href = URL.createObjectURL(blob)
+  a.download = file
+  a.click()
+  URL.revokeObjectURL(a.href)
   return { file, rows: rows.length }
 }
 

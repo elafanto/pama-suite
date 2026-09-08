@@ -6,7 +6,7 @@ import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useProductionStore } from '@/stores/production'
 import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveRemainingWeightUpdate, resolveDecklePair, deckleFromMm, deckleFromInch, formatDeckleDisplay, estimateReelWeightKg, REEL_CORE_DIA_MM, filterReelsForDeletion, filterReelLinkedMovements, STAGE_LABELS, STOCK_LABELS, CONSUMABLE_TYPES, consumableLotTotals, findDuplicateReelNosInList, findReelNosAlreadyInStock, normalizeInkColor, INK_COLOR_SUGGESTIONS, type ConsumableStockType, type ReelIntakeCondition, type ReelInventoryBreakdownRow } from '@/services/production'
-import { downloadReelAbstractStockPdf, downloadReelLowStockPdf, downloadReelWiseStockPdf } from '@/services/reelStockPdf'
+import { downloadReelAbstractStockPdf, downloadReelLowStockPdf, downloadReelPhysicalVerificationPdf, downloadReelWiseCsv, downloadReelWiseStockPdf } from '@/services/reelStockPdf'
 import { useTableSort } from '@/composables/useTableSort'
 import type { ConsumableLot, PaperType, ProductionStage, ProductionStockType, ReelStock } from '@/types/models'
 
@@ -138,13 +138,95 @@ function onDeckleInchInput(v: number) {
   manualReelForm.deckle_inch = pair.deckle_inch
 }
 
+const editingReelId = ref<string | null>(null)
+const editReelForm = reactive({
+  reel_no: '',
+  paper_type: 'KRAFT' as PaperType,
+  supplier_name: '',
+  deckle_mm: 0,
+  deckle_inch: 0,
+  gsm: '',
+  bf: '',
+  color: 'NS',
+  intake_condition: 'fresh' as ReelIntakeCondition,
+  remark: '',
+})
+
+function openEditReel(reel: ReelStock) {
+  const pair = resolveDecklePair({
+    deckle_mm: reel.deckle_mm,
+    deckle_inch: reel.deckle_inch,
+    deckle_size: reel.deckle_size,
+  })
+  editingReelId.value = reel.id
+  editReelForm.reel_no = reel.reel_no || ''
+  editReelForm.paper_type = paperTypeOf(reel)
+  editReelForm.supplier_name = reel.supplier_name || ''
+  editReelForm.deckle_mm = pair.deckle_mm
+  editReelForm.deckle_inch = pair.deckle_inch
+  editReelForm.gsm = reel.gsm || ''
+  editReelForm.bf = reel.bf || ''
+  editReelForm.color = normalizeReelColor(reel.color)
+  editReelForm.intake_condition = reel.intake_condition === 'partial' ? 'partial' : 'fresh'
+  editReelForm.remark = reel.remark || ''
+}
+
+function closeEditReel() {
+  editingReelId.value = null
+}
+
+function onEditDeckleMmInput(v: number) {
+  const pair = deckleFromMm(v)
+  editReelForm.deckle_mm = pair.deckle_mm
+  editReelForm.deckle_inch = pair.deckle_inch
+}
+
+function onEditDeckleInchInput(v: number) {
+  const pair = deckleFromInch(v)
+  editReelForm.deckle_mm = pair.deckle_mm
+  editReelForm.deckle_inch = pair.deckle_inch
+}
+
+async function saveEditReel() {
+  if (!editingReelId.value) return
+  if (!editReelForm.reel_no.trim()) return alert('Reel number required')
+  if (!editReelForm.supplier_name.trim()) return alert('Paper mill required')
+  if (!editReelForm.gsm.trim()) return alert('GSM required')
+  if (!editReelForm.bf.trim()) return alert('BF required')
+  const deckle = resolveDecklePair({
+    deckle_mm: editReelForm.deckle_mm,
+    deckle_inch: editReelForm.deckle_inch,
+  })
+  if (!deckle.deckle_mm && !deckle.deckle_inch) return alert('Deckle (mm or inch) required')
+  try {
+    await production.updateReelSpecs({
+      reel_id: editingReelId.value,
+      reel_no: editReelForm.reel_no.trim(),
+      paper_type: editReelForm.paper_type,
+      supplier_name: editReelForm.supplier_name.trim(),
+      deckle_mm: deckle.deckle_mm,
+      deckle_inch: deckle.deckle_inch,
+      deckle_size: deckle.deckle_size,
+      gsm: editReelForm.gsm.trim(),
+      bf: editReelForm.bf.trim(),
+      color: normalizeReelColor(editReelForm.color),
+      intake_condition: editReelForm.intake_condition,
+      remark: editReelForm.remark.trim() || undefined,
+    })
+    closeEditReel()
+  } catch (err: any) {
+    alert(err?.message || 'Reel update nahi hua.')
+  }
+}
+
 const reelFilters = reactive({
   paper_type: '',
   gsm: '',
   bf: '',
   deckle: '',
   color: '',
-  status: 'active',
+  /** When false (default), only active reels. Check to include consumed. */
+  showConsumed: false,
 })
 
 const reelCleanupForm = reactive({
@@ -197,7 +279,7 @@ const filteredReelsBase = computed(() => production.reels.filter((reel) =>
   (!reelFilters.bf || reel.bf === reelFilters.bf) &&
   (!reelFilters.deckle || reel.deckle_size === reelFilters.deckle) &&
   (!reelFilters.color || normalizeReelColor(reel.color) === reelFilters.color) &&
-  (reelFilters.status === 'all' || reel.status === reelFilters.status),
+  (reelFilters.showConsumed || reel.status === 'active'),
 ))
 
 type ReelSortKey =
@@ -401,7 +483,7 @@ function reelPdfFilterNote(): string {
   if (reelFilters.bf) bits.push(`BF ${reelFilters.bf}`)
   if (reelFilters.deckle) bits.push(`Deckle ${reelFilters.deckle}`)
   if (reelFilters.color) bits.push(`Color ${reelFilters.color}`)
-  if (reelFilters.status && reelFilters.status !== 'all') bits.push(`Status ${reelFilters.status}`)
+  bits.push(reelFilters.showConsumed ? 'Active + Consumed' : 'Active only')
   return bits.length ? bits.join(', ') : 'All filters'
 }
 
@@ -412,6 +494,20 @@ function downloadReelWisePdf() {
     filterNote: reelPdfFilterNote(),
   })
   alert(`PDF saved: ${res.file}\n${res.rows} reel row(s).`)
+}
+
+function downloadPhysicalVerificationPdf() {
+  const res = downloadReelPhysicalVerificationPdf({
+    reels: filteredReels.value,
+    firmName: firmStore.activeFirm?.name,
+    filterNote: `${reelPdfFilterNote()} · Physical verification`,
+  })
+  alert(`Physical verification PDF: ${res.file}\n${res.rows} reel(s) — har reel number + Found/Phys.KG columns.`)
+}
+
+function downloadReelDetailCsv() {
+  const res = downloadReelWiseCsv({ reels: filteredReels.value })
+  alert(`CSV saved: ${res.file}\n${res.rows} reel row(s) with reel numbers.`)
 }
 
 function downloadAbstractPdf(rows?: ReelInventoryBreakdownRow[]) {
@@ -1363,6 +1459,22 @@ onMounted(async () => {
           <div class="flex flex-wrap gap-2">
             <button
               type="button"
+              class="pp-btn pp-btn-primary !py-1.5 !px-3 text-xs"
+              title="Har reel number ke saath physical verification sheet (Found ✓ / Phys. KG)"
+              @click="downloadPhysicalVerificationPdf"
+            >
+              Physical verify PDF
+            </button>
+            <button
+              type="button"
+              class="pp-btn pp-btn-ghost !py-1.5 !px-3 text-xs"
+              title="Excel/CSV — har reel number + detail"
+              @click="downloadReelDetailCsv"
+            >
+              CSV Reel detail
+            </button>
+            <button
+              type="button"
               class="pp-btn pp-btn-ghost !py-1.5 !px-3 text-xs"
               title="PDF of filtered reel list (reel number wise)"
               @click="downloadReelWisePdf"
@@ -1449,13 +1561,11 @@ onMounted(async () => {
             <option v-for="color in reelFilterOptions.color" :key="color" :value="color">{{ color }}</option>
           </select>
         </div>
-        <div>
-          <label class="pp-label">Status</label>
-          <select v-model="reelFilters.status" class="pp-input">
-            <option value="all">All Status</option>
-            <option value="active">Active</option>
-            <option value="consumed">Consumed</option>
-          </select>
+        <div class="flex items-end">
+          <label class="inline-flex items-center gap-2 text-sm cursor-pointer pb-2">
+            <input v-model="reelFilters.showConsumed" type="checkbox" class="h-4 w-4" />
+            <span>Show consumed reels</span>
+          </label>
         </div>
       </div>
       <div class="overflow-x-auto">
@@ -1482,7 +1592,7 @@ onMounted(async () => {
               <th class="p-3" :class="reelSort.thClass('color')" @click="reelSort.toggle('color')">Color{{ reelSort.indicator('color') }}</th>
               <th class="p-3">Remark</th>
               <th class="p-3" :class="reelSort.thClass('opening', 'right')" @click="reelSort.toggle('opening', 'desc')">Opening KG{{ reelSort.indicator('opening') }}</th>
-              <th class="p-3" :class="reelSort.thClass('current', 'right')" @click="reelSort.toggle('current', 'desc')">Current KG{{ reelSort.indicator('current') }}</th>
+              <th class="p-3" :class="reelSort.thClass('current', 'right')" @click="reelSort.toggle('current', 'desc')">Qty left{{ reelSort.indicator('current') }}</th>
               <th class="p-3 text-right">Remaining (KG / Dia)</th>
               <th class="p-3" :class="reelSort.thClass('status', 'center')" @click="reelSort.toggle('status')">Status{{ reelSort.indicator('status') }}</th>
               <th class="p-3 text-right">Action</th>
@@ -1520,7 +1630,10 @@ onMounted(async () => {
               <td class="p-3">{{ normalizeReelColor(reel.color) }}</td>
               <td class="p-3 text-xs text-slate-600 max-w-[10rem] truncate" :title="reel.remark || ''">{{ reel.remark || '—' }}</td>
               <td class="p-3 text-right font-mono">{{ n2(reel.opening_weight) }}</td>
-              <td class="p-3 text-right font-mono">{{ n2(reel.current_weight) }}</td>
+              <td
+                class="p-3 text-right font-mono"
+                :class="reel.status === 'active' ? 'font-bold text-emerald-700' : 'text-slate-400'"
+              >{{ n2(reel.current_weight) }}</td>
               <td class="p-3 text-right">
                 <template v-if="reel.status === 'active' && reel.current_weight > 0">
                   <div class="inline-flex flex-col items-end gap-1 min-w-[9rem]">
@@ -1580,6 +1693,14 @@ onMounted(async () => {
                     title="Kis party / job me use hui"
                   />
                   <div class="inline-flex flex-wrap items-center justify-end gap-1">
+                  <button
+                    type="button"
+                    class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs"
+                    title="Galat specification (GSM/BF/deckle/type/reel no) correct karo"
+                    @click="openEditReel(reel)"
+                  >
+                    Edit
+                  </button>
                   <button
                     v-if="reel.status === 'active' && reel.current_weight > 0"
                     type="button"
@@ -2086,6 +2207,8 @@ onMounted(async () => {
         <div class="flex flex-wrap items-end justify-between gap-3 border-b pb-2 mb-4">
           <h2 class="font-semibold">Reel Balance by Type / GSM / BF / Deckle / Color</h2>
           <div class="flex flex-wrap gap-2">
+            <button type="button" class="pp-btn pp-btn-primary !py-1.5 !px-3 text-xs" title="Har reel number + Found/Phys.KG" @click="downloadPhysicalVerificationPdf">Physical verify PDF</button>
+            <button type="button" class="pp-btn pp-btn-ghost !py-1.5 !px-3 text-xs" title="CSV with every reel number" @click="downloadReelDetailCsv">CSV Reel detail</button>
             <button type="button" class="pp-btn pp-btn-ghost !py-1.5 !px-3 text-xs" @click="downloadReelWisePdf">PDF Reel-wise</button>
             <button type="button" class="pp-btn pp-btn-primary !py-1.5 !px-3 text-xs" @click="downloadAbstractPdf()">PDF Abstract</button>
             <button type="button" class="pp-btn pp-btn-ghost !py-1.5 !px-3 text-xs" @click="downloadLowStockPdf()">PDF Low/Zero</button>
@@ -2212,6 +2335,91 @@ onMounted(async () => {
             </table>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <div
+    v-if="editingReelId"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+    @click.self="closeEditReel"
+  >
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-5 space-y-3">
+      <div class="flex items-center justify-between border-b pb-2">
+        <h3 class="font-semibold text-navy">Edit reel specification</h3>
+        <button type="button" class="pp-btn pp-btn-ghost !py-1 !px-2 text-xs" @click="closeEditReel">Close</button>
+      </div>
+      <p class="text-xs text-slate-500">GSM / BF / deckle / type / mill / reel no sahi karo. Stock KG change nahi hota — uske liye Remaining Update use karo.</p>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2">
+          <label class="pp-label">Reel No *</label>
+          <input v-model="editReelForm.reel_no" class="pp-input font-mono" />
+        </div>
+        <div class="col-span-2">
+          <label class="pp-label">Paper Mill *</label>
+          <input v-model="editReelForm.supplier_name" class="pp-input" list="reel-mill-options" />
+        </div>
+        <div>
+          <label class="pp-label">Paper Type *</label>
+          <select v-model="editReelForm.paper_type" class="pp-input">
+            <option v-for="type in paperTypes" :key="type" :value="type">{{ type }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="pp-label">Color *</label>
+          <input v-model="editReelForm.color" class="pp-input" list="reel-color-options" />
+        </div>
+        <div>
+          <label class="pp-label">GSM *</label>
+          <input v-model="editReelForm.gsm" class="pp-input" list="reel-gsm-options" />
+        </div>
+        <div>
+          <label class="pp-label">BF *</label>
+          <input v-model="editReelForm.bf" class="pp-input" list="reel-bf-options" />
+        </div>
+        <div>
+          <label class="pp-label">Deckle (inch)</label>
+          <input
+            type="number"
+            min="0"
+            step="0.001"
+            class="pp-input text-right"
+            :value="editReelForm.deckle_inch || ''"
+            @input="onEditDeckleInchInput(Number(($event.target as HTMLInputElement).value))"
+          />
+        </div>
+        <div>
+          <label class="pp-label">Deckle (mm) *</label>
+          <input
+            type="number"
+            min="0"
+            step="0.1"
+            class="pp-input text-right"
+            :value="editReelForm.deckle_mm || ''"
+            @input="onEditDeckleMmInput(Number(($event.target as HTMLInputElement).value))"
+          />
+        </div>
+        <div class="col-span-2">
+          <label class="pp-label">Condition</label>
+          <div class="flex gap-4 text-sm pt-1">
+            <label class="inline-flex items-center gap-1.5">
+              <input v-model="editReelForm.intake_condition" type="radio" value="fresh" />
+              Fresh
+            </label>
+            <label class="inline-flex items-center gap-1.5">
+              <input v-model="editReelForm.intake_condition" type="radio" value="partial" />
+              Partial used
+            </label>
+          </div>
+        </div>
+        <div class="col-span-2">
+          <label class="pp-label">Remark</label>
+          <input v-model="editReelForm.remark" class="pp-input" placeholder="Optional" />
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 pt-2 border-t">
+        <button type="button" class="pp-btn pp-btn-ghost !py-1.5 !px-3 text-xs" @click="closeEditReel">Cancel</button>
+        <button type="button" class="pp-btn pp-btn-primary !py-1.5 !px-3 text-xs" @click="saveEditReel">Save specs</button>
       </div>
     </div>
   </div>

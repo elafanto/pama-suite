@@ -977,6 +977,74 @@ export function resolveRemainingWeightUpdate(currentWeight: number, remainingKg:
   return { used: roundWeight(current - remaining), remaining }
 }
 
+/** Correct reel master specs (type / mill / GSM / BF / deckle / color / reel no) without changing stock KG. */
+export async function updateReelSpecification(data: {
+  firm_id: string
+  reel_id: string
+  reel_no: string
+  paper_type?: PaperType
+  supplier_name: string
+  deckle_mm?: number
+  deckle_inch?: number
+  deckle_size?: string
+  gsm: string
+  bf: string
+  color: string
+  intake_condition?: ReelIntakeCondition
+  remark?: string
+}) {
+  if (!data.reel_id) throw new Error('Reel select karo')
+  const reel = await db.reel_stocks.get(data.reel_id)
+  if (!reel || reel.is_deleted || reel.firm_id !== data.firm_id) {
+    throw new Error('Selected reel stock nahi mila')
+  }
+
+  const reel_no = String(data.reel_no || '').trim()
+  if (!reel_no) throw new Error('Reel number required')
+  await assertUniqueReelNo(data.firm_id, reel_no, data.reel_id)
+
+  const mill = String(data.supplier_name || '').trim()
+  if (!mill) throw new Error('Paper mill required')
+  const gsm = String(data.gsm || '').trim()
+  const bf = String(data.bf || '').trim()
+  if (!gsm) throw new Error('GSM required')
+  if (!bf) throw new Error('BF required')
+
+  const deckle = resolveDecklePair({
+    deckle_mm: data.deckle_mm,
+    deckle_inch: data.deckle_inch,
+    deckle_size: data.deckle_size || reel.deckle_size,
+  })
+  if (!deckle.deckle_mm && !deckle.deckle_inch && !deckle.deckle_size) {
+    throw new Error('Deckle (mm or inch) required')
+  }
+
+  const intake_condition: ReelIntakeCondition =
+    data.intake_condition === 'partial' ? 'partial' : 'fresh'
+  const remark = String(data.remark || '').trim()
+  const now = nowISO()
+
+  const updated = plain({
+    ...reel,
+    reel_no,
+    paper_type: normalizePaperType(data.paper_type ?? reel.paper_type),
+    supplier_name: mill,
+    deckle_size: deckle.deckle_size || String(data.deckle_size || reel.deckle_size || '').trim(),
+    deckle_mm: deckle.deckle_mm || undefined,
+    deckle_inch: deckle.deckle_inch || undefined,
+    gsm,
+    bf,
+    color: normalizeReelColor(data.color),
+    intake_condition,
+    remark: remark || undefined,
+    updated_at: now,
+    _dirty: true,
+  }) as ReelStock
+
+  await db.reel_stocks.put(updated)
+  return updated
+}
+
 /** Partial consume by setting the new remaining KG on a reel. */
 export async function updateReelRemainingWeight(data: {
   firm_id: string

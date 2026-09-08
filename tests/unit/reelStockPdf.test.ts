@@ -32,13 +32,21 @@ describe('buildReelWisePdfRows', () => {
   it('sorts by reel number and maps fields', () => {
     const rows = buildReelWisePdfRows([
       reel({ id: 'b', reel_no: 'R-110', current_weight: 80 }),
-      reel({ id: 'a', reel_no: 'R-101', intake_condition: 'partial' }),
+      reel({
+        id: 'a',
+        reel_no: 'R-101',
+        intake_condition: 'partial',
+        remark: 'Damaged edge',
+        purchase_bill_no: 'PB-44',
+      }),
     ])
     expect(rows.map((r) => r.reelNo)).toEqual(['R-101', 'R-110'])
     expect(rows[0].condition).toBe('partial')
     expect(rows[0].openingKg).toBe(200)
     expect(rows[0].currentKg).toBe(150)
     expect(rows[0].mill).toBe('Test Mill')
+    expect(rows[0].remark).toBe('Damaged edge')
+    expect(rows[0].billNo).toBe('PB-44')
   })
 })
 

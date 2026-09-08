@@ -19,6 +19,7 @@ import {
   saveStockAdjustment,
   softDeleteReelsWithMovements,
   updateReelRemainingWeight,
+  updateReelSpecification,
   type ConsumableStockType,
 } from '@/services/production'
 import type { ConsumableLot, PaperType, ProductionJob, ProductionStageEntry, ProductionStockType, ReelStock, StockMovement } from '@/types/models'
@@ -314,6 +315,36 @@ export const useProductionStore = defineStore('production', () => {
     return rec
   }
 
+  async function updateReelSpecs(data: {
+    reel_id: string
+    reel_no: string
+    paper_type?: PaperType
+    supplier_name: string
+    deckle_mm?: number
+    deckle_inch?: number
+    deckle_size?: string
+    gsm: string
+    bf: string
+    color: string
+    intake_condition?: 'fresh' | 'partial'
+    remark?: string
+  }) {
+    const firm = useFirmStore()
+    const rec = await updateReelSpecification({
+      firm_id: firm.activeFirmId,
+      ...data,
+    })
+    await logActivity(
+      firm.activeFirmId,
+      'update',
+      'reel_stock',
+      data.reel_id,
+      `Reel specs updated — ${rec.reel_no} (${rec.gsm}/${rec.bf}/${rec.deckle_size})`,
+    )
+    await load()
+    return rec
+  }
+
   async function fullConsumeSelected(reelIds: string[], date?: string, notes?: string) {
     const firm = useFirmStore()
     const recs = await fullConsumeReels({
@@ -358,6 +389,7 @@ export const useProductionStore = defineStore('production', () => {
     deleteReelsBeforeDate,
     resetAllReelStock,
     updateReelRemaining,
+    updateReelSpecs,
     fullConsumeSelected,
   }
 })
