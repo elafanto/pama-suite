@@ -485,11 +485,10 @@ export function calculate(input: CalcInput) {
   // Sheet Size Sizing
   const termL = 2 * (wrapL + effectiveT)
   const termW = 2 * (wrapW + effectiveT)
-  const widthCaliperTotal = sheetCfg.widthCaliperFactor * effectiveT
   const heightAllowance = sheetCfg.heightAllowanceDefaults[input.ply] ?? 0
-  const heightTerm = wrapH + widthCaliperTotal + heightAllowance
+  // Blank width = outer H + outer W + ply height allowance (no caliper/clearance add-on)
   const sheetLengthRaw = termL + termW + glueFlap
-  const sheetWidthRaw = wrapW + heightTerm + effectiveClearance
+  const sheetWidthRaw = wrapH + wrapW + heightAllowance
   const sheetLength = Math.ceil(sheetLengthRaw / 5) * 5
   const sheetWidth = Math.ceil(sheetWidthRaw / 5) * 5
   const sheetAreaM2 = (sheetLength / 1000) * (sheetWidth / 1000)
@@ -507,16 +506,9 @@ export function calculate(input: CalcInput) {
     })
   }
   const widthParts: SheetCalcDetailPart[] = [
-    {
-      label: heightAllowance > 0
-        ? `Outer H + ${sheetCfg.widthCaliperFactor}×t + ${heightAllowance}`
-        : `Outer H + ${sheetCfg.widthCaliperFactor}×t`,
-      mm: heightTerm,
-      formula: heightAllowance > 0
-        ? `= ${wrapH.toFixed(2)} + ${sheetCfg.widthCaliperFactor}×${effectiveT} + ${heightAllowance}`
-        : `= ${wrapH.toFixed(2)} + ${sheetCfg.widthCaliperFactor}×${effectiveT}`,
-    },
-    { label: 'Clearance', mm: effectiveClearance },
+    { label: 'Outer H', mm: wrapH, formula: `= ${wrapH.toFixed(2)}` },
+    { label: 'Outer W', mm: wrapW, formula: `= ${wrapW.toFixed(2)}` },
+    { label: 'Height allowance', mm: heightAllowance },
   ]
   if (Math.abs(sheetWidth - sheetWidthRaw) > 0.01) {
     widthParts.push({

@@ -118,13 +118,13 @@ const machineFields: { key: keyof BoxSheetSettings['machine']; label: string; hi
       <section class="pp-card p-4 space-y-3">
         <h2 class="font-bold text-navy">Blank formula</h2>
         <div>
-          <label class="pp-label">Sheet width clearance (mm)</label>
+          <label class="pp-label">Sheet width clearance (mm) — unused</label>
           <input v-model.number="form.clearanceMM" type="number" step="0.5" min="0" class="pp-input max-w-xs" />
-          <p class="text-xs text-slate-500 mt-1">Width = W + (H + factor×t + ply allowance) + clearance</p>
+          <p class="text-xs text-slate-500 mt-1">Width = Outer H + Outer W + Height allowance (then round up to 5 mm). Clearance / caliper factor blank width me ab use nahi hote.</p>
           <div class="mt-2">
-            <label class="pp-label">Width caliper factor (× t)</label>
+            <label class="pp-label">Width caliper factor (× t) — unused</label>
             <input v-model.number="form.widthCaliperFactor" type="number" step="0.5" min="0" class="pp-input max-w-xs" />
-            <p class="text-[10px] text-slate-400 mt-1">Default {{ DEFAULT_BOX_SHEET_SETTINGS.widthCaliperFactor }} — RSC blank width me H ke saath 2× board thickness</p>
+            <p class="text-[10px] text-slate-400 mt-1">Legacy setting — blank width ab H + W + height allowance use karti hai</p>
           </div>
         </div>
         <div class="grid sm:grid-cols-3 gap-3">

@@ -14,9 +14,9 @@ export interface BoxSheetSettings {
   innerOuterLwFactor: number
   innerOuterHFactor: number
   clearanceMM: number
-  /** Caliper (t) count in blank width: W + H + (factor × t) + clearance. Default 2 (H + 2×t). */
+  /** Legacy — blank width is Outer H + Outer W + height allowance (factor unused). */
   widthCaliperFactor: number
-  /** Extra mm added to height term in blank width, per ply (e.g. 3-ply +3, 5-ply +8). */
+  /** Extra mm added to blank width: Outer H + Outer W + this allowance (per ply). */
   heightAllowanceDefaults: Record<string, number>
   glueFlapDefaults: Record<string, number>
   caliperTable: Record<string, number>

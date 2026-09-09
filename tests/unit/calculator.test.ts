@@ -129,16 +129,17 @@ describe('calculate — 3-ply RSC (inner dims)', () => {
     const outerW = 200 + 1.5 * t
     const outerH = 150 + 2.7 * t
     const lengthRaw = 2 * (outerL + t) + 2 * (outerW + t) + 35
-    const widthRaw = outerW + outerH + 2 * t + 3 + 6
+    const heightAllowance = 3 // 3-ply default
+    const widthRaw = outerH + outerW + heightAllowance
     expect(res.sheet.length).toBe(Math.ceil(lengthRaw / 5) * 5)
     expect(res.sheet.width).toBe(Math.ceil(widthRaw / 5) * 5)
     expect(res.sheetCalcDetail?.blank.widthParts).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ label: 'Outer H + 2×t + 3', mm: outerH + 2 * t + 3 }),
-        expect.objectContaining({ label: 'Clearance' }),
+        expect.objectContaining({ label: 'Outer H', mm: outerH }),
+        expect.objectContaining({ label: 'Outer W', mm: outerW }),
+        expect.objectContaining({ label: 'Height allowance', mm: heightAllowance }),
       ]),
     )
-    expect(res.sheetCalcDetail?.blank.widthParts.some((p) => p.label === 'Outer width (W)')).toBe(false)
     expect(res.sheetCalcDetail?.blank.lengthParts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ label: '2 × outer L' }),
@@ -156,9 +157,9 @@ describe('calculate — 3-ply RSC (inner dims)', () => {
     expect(res.reel.feasible).toBe(true)
     expect(res.reel.reelWidthMM).toBeGreaterThan(0)
     expect(res.weight.paperTotal).toBeGreaterThan(0)
-    // outer-based blank → L=1070 W=380 after 5 mm ceil
+    // outer-based blank → L=1070; W = ceil(H+W+allowance)=370
     expect(res.sheet.length).toBe(1070)
-    expect(res.sheet.width).toBe(380)
+    expect(res.sheet.width).toBe(370)
     expect(res.reel.sheetsPerWidth).toBe(4)
     expect(res.reel.sheetsPerLength).toBe(2)
     expect(res.reel.boxesPerBigSheet).toBe(8)

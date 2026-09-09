@@ -54,28 +54,23 @@ describe('calculate with sheetSettings', () => {
     expect(res.sheetCalcDetail?.nesting.boxesPerBigSheet).toBe(res.reel?.boxesPerBigSheet)
   })
 
-  it('applies custom clearance to sheet width (before 5 mm round-up)', () => {
+  it('stores clearance in detail but blank width ignores it (H+W+allowance only)', () => {
     const def = calculate(baseInput)
     const wide = calculate({
       ...baseInput,
       sheetSettings: { clearanceMM: 20 },
     })
     expect(wide.sheetCalcDetail?.blank.clearanceMM).toBe(20)
-    expect(wide.sheet?.width).toBeGreaterThanOrEqual(def.sheet?.width ?? 0)
-    // +14 mm clearance → raw width +14, then both ceil to 5
-    const t = def.caliper ?? 0
-    const outerW = 200 + 1.5 * t
-    const outerH = 150 + 2.7 * t
-    const rawWide = outerW + outerH + 2 * t + 3 + 20
-    expect(wide.sheet?.width).toBe(Math.ceil(rawWide / 5) * 5)
+    // Clearance no longer changes blank width
+    expect(wide.sheet?.width).toBe(def.sheet?.width)
   })
 
-  it('uses width caliper factor and ply height allowance in blank width', () => {
+  it('blank width = Outer H + Outer W + height allowance', () => {
     const res = calculate(baseInput)
     const t = res.caliper ?? 0
     const outerW = 200 + 1.5 * t
     const outerH = 150 + 2.7 * t
-    const raw = outerW + outerH + 2 * t + 3 + 6
+    const raw = outerH + outerW + 3
     expect(res.sheet?.width).toBe(Math.ceil(raw / 5) * 5)
     expect(res.sheetCalcDetail?.blank.heightAllowanceMM).toBe(3)
   })
@@ -85,7 +80,7 @@ describe('calculate with sheetSettings', () => {
     const t = res.caliper ?? 0
     const outerW = 200 + 1.5 * t
     const outerH = 150 + 2.7 * t
-    const raw = outerW + outerH + 2 * t + 8 + 6
+    const raw = outerH + outerW + 8
     expect(res.sheet?.width).toBe(Math.ceil(raw / 5) * 5)
     expect(res.sheetCalcDetail?.blank.heightAllowanceMM).toBe(8)
   })

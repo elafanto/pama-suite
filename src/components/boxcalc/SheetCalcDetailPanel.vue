@@ -61,13 +61,13 @@ defineProps<{
             </tr>
           </table>
           <p class="mt-1 text-[10px] text-slate-500">
-            Total = outer W {{ fmtInt(detail.innerOuter.outer.W) }} + (H + {{ detail.blank.widthCaliperFactor }}×t) + clearance
+            Total = Outer H + Outer W + Height allowance
           </p>
         </div>
       </div>
       <p class="mt-2 text-xs font-mono text-teal-800">Area: {{ detail.blank.areaFormula }}</p>
           <p v-if="!compact" class="mt-1 text-xs text-slate-500">
-            Blank from <strong>outer</strong> size · Length = 2×outer L + 2×outer W + glue · Width = outer W + (H + {{ detail.blank.widthCaliperFactor }}×t<span v-if="detail.blank.heightAllowanceMM"> + {{ detail.blank.heightAllowanceMM }}</span>) + clearance {{ fmtInt(detail.blank.clearanceMM) }} mm · Glue flap {{ fmtInt(detail.blank.glueFlap) }} mm · L/W round up to 5 mm
+            Blank from <strong>outer</strong> size · Length = 2×outer L + 2×outer W + glue · Width = Outer H + Outer W + Height allowance<span v-if="detail.blank.heightAllowanceMM"> ({{ detail.blank.heightAllowanceMM }} mm)</span> · Glue flap {{ fmtInt(detail.blank.glueFlap) }} mm · L/W round up to 5 mm
           </p>
     </section>
 
