@@ -128,7 +128,7 @@ describe('calculate — 3-ply RSC (inner dims)', () => {
     const outerL = 300 + 1.5 * t
     const outerW = 200 + 1.5 * t
     const outerH = 150 + 2.7 * t
-    const lengthRaw = 2 * (outerL + t) + 2 * (outerW + t) + 35
+    const lengthRaw = 2 * outerL + 2 * outerW + 35
     const heightAllowance = 3 // 3-ply default
     const widthRaw = outerH + outerW + heightAllowance
     expect(res.sheet.length).toBe(Math.ceil(lengthRaw / 5) * 5)
@@ -142,8 +142,8 @@ describe('calculate — 3-ply RSC (inner dims)', () => {
     )
     expect(res.sheetCalcDetail?.blank.lengthParts).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ label: '2 × outer L' }),
-        expect.objectContaining({ label: '2 × outer W' }),
+        expect.objectContaining({ label: '2 × outer L', mm: 2 * outerL }),
+        expect.objectContaining({ label: '2 × outer W', mm: 2 * outerW }),
         expect.objectContaining({ label: 'Glue flap' }),
       ]),
     )
@@ -157,9 +157,13 @@ describe('calculate — 3-ply RSC (inner dims)', () => {
     expect(res.reel.feasible).toBe(true)
     expect(res.reel.reelWidthMM).toBeGreaterThan(0)
     expect(res.weight.paperTotal).toBeGreaterThan(0)
-    // outer-based blank → L=1070; W = ceil(H+W+allowance)=370
-    expect(res.sheet.length).toBe(1070)
-    expect(res.sheet.width).toBe(370)
+    // Length = 2L+2W+glue ceil5; Width = H+W+allowance ceil5
+    const t = 3.2
+    const outerL = 300 + 1.5 * t
+    const outerW = 200 + 1.5 * t
+    const outerH = 150 + 2.7 * t
+    expect(res.sheet.length).toBe(Math.ceil((2 * outerL + 2 * outerW + 35) / 5) * 5)
+    expect(res.sheet.width).toBe(Math.ceil((outerH + outerW + 3) / 5) * 5)
     expect(res.reel.sheetsPerWidth).toBe(4)
     expect(res.reel.sheetsPerLength).toBe(2)
     expect(res.reel.boxesPerBigSheet).toBe(8)

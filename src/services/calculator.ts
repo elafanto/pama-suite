@@ -473,8 +473,8 @@ export function calculate(input: CalcInput) {
   }
 
   // Blank & machine setup work from OUTER dimensions.
-  // Length terms include ~1 caliper take-up per fold (outer + t) so slots and
-  // blank stay aligned: 2(L+t)+2(W+t)+glue = 2L+2W+4t+glue.
+  // Length = 2×outer L + 2×outer W + glue (no caliper add-on).
+  // Width = outer H + outer W + ply height allowance.
   // Sheet L/W are then rounded UP to the nearest 5 mm.
   const wrapL = outerL
   const wrapW = outerW
@@ -483,10 +483,9 @@ export function calculate(input: CalcInput) {
   const effectiveClearance = sheetCfg.clearanceMM
 
   // Sheet Size Sizing
-  const termL = 2 * (wrapL + effectiveT)
-  const termW = 2 * (wrapW + effectiveT)
+  const termL = 2 * wrapL
+  const termW = 2 * wrapW
   const heightAllowance = sheetCfg.heightAllowanceDefaults[input.ply] ?? 0
-  // Blank width = outer H + outer W + ply height allowance (no caliper/clearance add-on)
   const sheetLengthRaw = termL + termW + glueFlap
   const sheetWidthRaw = wrapH + wrapW + heightAllowance
   const sheetLength = Math.ceil(sheetLengthRaw / 5) * 5
@@ -494,8 +493,8 @@ export function calculate(input: CalcInput) {
   const sheetAreaM2 = (sheetLength / 1000) * (sheetWidth / 1000)
 
   const lengthParts: SheetCalcDetailPart[] = [
-    { label: '2 × outer L', mm: termL, formula: `2 × (${wrapL.toFixed(2)} + ${effectiveT})` },
-    { label: '2 × outer W', mm: termW, formula: `2 × (${wrapW.toFixed(2)} + ${effectiveT})` },
+    { label: '2 × outer L', mm: termL, formula: `2 × ${wrapL.toFixed(2)}` },
+    { label: '2 × outer W', mm: termW, formula: `2 × ${wrapW.toFixed(2)}` },
     { label: 'Glue flap', mm: glueFlap },
   ]
   if (Math.abs(sheetLength - sheetLengthRaw) > 0.01) {
@@ -561,10 +560,10 @@ export function calculate(input: CalcInput) {
     bodyZone: { start: topCrease, end: bottomCrease }
   }
 
-  const slot1 = wrapL + effectiveT
-  const slot2 = wrapL + wrapW + 2 * effectiveT
-  const slot3 = 2 * wrapL + wrapW + 3 * effectiveT
-  const slot4 = 2 * wrapL + 2 * wrapW + 4 * effectiveT
+  const slot1 = wrapL
+  const slot2 = wrapL + wrapW
+  const slot3 = 2 * wrapL + wrapW
+  const slot4 = 2 * wrapL + 2 * wrapW
   const glueFlapStart = slot4
   const sheetEnd = slot4 + glueFlap
 

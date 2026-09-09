@@ -164,7 +164,7 @@ export function buildBoxCalcWorkbook(
   setFormula(calc, 'B44', 'IF(LOWER(B12)="outer",B9,B41+B16*B15)', n(results?.dimensions?.outer?.L), '0.00')
   setFormula(calc, 'B45', 'IF(LOWER(B12)="outer",B10,B42+B16*B15)', n(results?.dimensions?.outer?.W), '0.00')
   setFormula(calc, 'B46', 'IF(LOWER(B12)="outer",B11,B43+B17*B15)', n(results?.dimensions?.outer?.H), '0.00')
-  setFormula(calc, 'B47', 'CEILING(2*(B44+B15)+2*(B45+B15)+B21,5)', n(results?.sheet?.length), '0')
+  setFormula(calc, 'B47', 'CEILING(2*B44+2*B45+B21,5)', n(results?.sheet?.length), '0')
   setFormula(calc, 'B48', 'CEILING(B46+B45+B19,5)', n(results?.sheet?.width), '0')
   setFormula(calc, 'B49', '(B47/1000)*(B48/1000)', n(results?.sheet?.areaM2), '0.000000')
   setFormula(calc, 'B50', `SUMPRODUCT(Layers!C2:C${form.layers.length + 1},Layers!F2:F${form.layers.length + 1})+B23*(${form.layers.length}-1)`, n(results?.weight?.boardGSM), '0.00')
