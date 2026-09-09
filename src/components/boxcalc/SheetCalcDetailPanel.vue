@@ -53,17 +53,21 @@ defineProps<{
             <tr v-for="(p, i) in detail.blank.widthParts" :key="'w' + i" class="border-b border-teal-100">
               <td class="py-1 pr-2 text-slate-600">{{ p.label }}</td>
               <td class="py-1 text-right font-semibold">{{ fmtInt(p.mm) }}</td>
+              <td v-if="p.formula" class="py-1 pl-2 text-slate-400 hidden lg:table-cell">{{ p.formula }}</td>
             </tr>
             <tr class="font-bold text-teal-900">
               <td class="py-1">Total width</td>
               <td class="py-1 text-right">{{ fmtInt(detail.blank.widthTotal) }}</td>
             </tr>
           </table>
+          <p class="mt-1 text-[10px] text-slate-500">
+            Total = outer W {{ fmtInt(detail.innerOuter.outer.W) }} + (H + {{ detail.blank.widthCaliperFactor }}×t) + clearance
+          </p>
         </div>
       </div>
       <p class="mt-2 text-xs font-mono text-teal-800">Area: {{ detail.blank.areaFormula }}</p>
           <p v-if="!compact" class="mt-1 text-xs text-slate-500">
-            Blank from <strong>outer</strong> size · Glue flap {{ fmtInt(detail.blank.glueFlap) }} mm · Clearance {{ fmtInt(detail.blank.clearanceMM) }} mm · Width uses outer H + {{ detail.blank.widthCaliperFactor }}×t<span v-if="detail.blank.heightAllowanceMM"> + {{ detail.blank.heightAllowanceMM }} mm ({{ detail.input.ply }})</span> · L/W round up to 5 mm
+            Blank from <strong>outer</strong> size · Length = 2×outer L + 2×outer W + glue · Width = outer W + (H + {{ detail.blank.widthCaliperFactor }}×t<span v-if="detail.blank.heightAllowanceMM"> + {{ detail.blank.heightAllowanceMM }}</span>) + clearance {{ fmtInt(detail.blank.clearanceMM) }} mm · Glue flap {{ fmtInt(detail.blank.glueFlap) }} mm · L/W round up to 5 mm
           </p>
     </section>
 

@@ -134,8 +134,16 @@ describe('calculate — 3-ply RSC (inner dims)', () => {
     expect(res.sheet.width).toBe(Math.ceil(widthRaw / 5) * 5)
     expect(res.sheetCalcDetail?.blank.widthParts).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ label: 'Outer width (W)', mm: outerW }),
         expect.objectContaining({ label: 'Outer H + 2×t + 3', mm: outerH + 2 * t + 3 }),
+        expect.objectContaining({ label: 'Clearance' }),
+      ]),
+    )
+    expect(res.sheetCalcDetail?.blank.widthParts.some((p) => p.label === 'Outer width (W)')).toBe(false)
+    expect(res.sheetCalcDetail?.blank.lengthParts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: '2 × outer L' }),
+        expect.objectContaining({ label: '2 × outer W' }),
+        expect.objectContaining({ label: 'Glue flap' }),
       ]),
     )
   })

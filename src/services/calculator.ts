@@ -472,9 +472,10 @@ export function calculate(input: CalcInput) {
     )
   }
 
-  // Blank & machine setup work from OUTER dimensions (more comfortable blank)
-  // plus the standard RSC scoring allowances (~1 caliper take-up per fold) and
-  // fold clearance. Sheet L/W are then rounded UP to the nearest 5 mm.
+  // Blank & machine setup work from OUTER dimensions.
+  // Length terms include ~1 caliper take-up per fold (outer + t) so slots and
+  // blank stay aligned: 2(L+t)+2(W+t)+glue = 2L+2W+4t+glue.
+  // Sheet L/W are then rounded UP to the nearest 5 mm.
   const wrapL = outerL
   const wrapW = outerW
   const wrapH = outerH
@@ -494,8 +495,8 @@ export function calculate(input: CalcInput) {
   const sheetAreaM2 = (sheetLength / 1000) * (sheetWidth / 1000)
 
   const lengthParts: SheetCalcDetailPart[] = [
-    { label: '2 × (outer L + t)', mm: termL, formula: `2 × (${wrapL.toFixed(2)} + ${effectiveT})` },
-    { label: '2 × (outer W + t)', mm: termW, formula: `2 × (${wrapW.toFixed(2)} + ${effectiveT})` },
+    { label: '2 × outer L', mm: termL, formula: `2 × (${wrapL.toFixed(2)} + ${effectiveT})` },
+    { label: '2 × outer W', mm: termW, formula: `2 × (${wrapW.toFixed(2)} + ${effectiveT})` },
     { label: 'Glue flap', mm: glueFlap },
   ]
   if (Math.abs(sheetLength - sheetLengthRaw) > 0.01) {
@@ -506,15 +507,14 @@ export function calculate(input: CalcInput) {
     })
   }
   const widthParts: SheetCalcDetailPart[] = [
-    { label: 'Outer width (W)', mm: wrapW },
     {
       label: heightAllowance > 0
         ? `Outer H + ${sheetCfg.widthCaliperFactor}×t + ${heightAllowance}`
         : `Outer H + ${sheetCfg.widthCaliperFactor}×t`,
       mm: heightTerm,
       formula: heightAllowance > 0
-        ? `${wrapH.toFixed(2)} + ${sheetCfg.widthCaliperFactor}×${effectiveT} + ${heightAllowance}`
-        : `${wrapH.toFixed(2)} + ${sheetCfg.widthCaliperFactor}×${effectiveT}`,
+        ? `= ${wrapH.toFixed(2)} + ${sheetCfg.widthCaliperFactor}×${effectiveT} + ${heightAllowance}`
+        : `= ${wrapH.toFixed(2)} + ${sheetCfg.widthCaliperFactor}×${effectiveT}`,
     },
     { label: 'Clearance', mm: effectiveClearance },
   ]
