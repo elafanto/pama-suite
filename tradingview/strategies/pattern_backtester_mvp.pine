@@ -1,0 +1,328 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © PAMA Suite — Candlestick Pattern Backtester MVP
+// Paste into TradingView Pine Editor → Add to chart (15m recommended)
+
+//@version=6
+strategy(
+     "Pattern Backtester MVP",
+     overlay=true,
+     pyramiding=0,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     commission_type=strategy.commission.percent,
+     commission_value=0.03,
+     slippage=2,
+     initial_capital=100000,
+     margin_long=100,
+     margin_short=100,
+     calc_on_every_tick=false,
+     process_orders_on_close=true)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+grpMode = "Test Mode"
+testMode       = input.bool(true, "Test Mode (ek time par sirf ek pattern)", group=grpMode)
+testPattern    = input.string("Hammer", "Active Pattern (Test Mode)", options=["Hammer", "Bullish Engulfing", "Morning Star", "Three White Soldiers", "Bearish Engulfing", "Evening Star", "Three Black Crows"], group=grpMode)
+
+grpPat = "Patterns — Manual Toggle (Test Mode OFF)"
+useHammer      = input.bool(true,  "Hammer", group=grpPat)
+useBullEng     = input.bool(false, "Bullish Engulfing", group=grpPat)
+useMorningStar = input.bool(false, "Morning Star", group=grpPat)
+use3White      = input.bool(false, "Three White Soldiers", group=grpPat)
+useBearEng     = input.bool(false, "Bearish Engulfing", group=grpPat)
+useEveningStar = input.bool(false, "Evening Star", group=grpPat)
+use3Black      = input.bool(false, "Three Black Crows", group=grpPat)
+
+grpFilt = "Confirmations (Filters)"
+useVolFilter   = input.bool(true,  "Volume > SMA(20)", group=grpFilt, tooltip="Pattern candle par volume 20-period average se upar hona chahiye")
+volLen         = input.int(20, "Volume SMA Length", minval=5, group=grpFilt)
+useEmaFilter   = input.bool(true,  "EMA 200 Trend Filter", group=grpFilt, tooltip="Long: Close > EMA200 | Short: Close < EMA200")
+emaLen         = input.int(200, "EMA Length", minval=50, group=grpFilt)
+
+grpRisk = "Risk & Exit"
+atrLen         = input.int(14, "ATR Length", group=grpRisk)
+slAtrMult      = input.float(1.5, "Stop Loss (× ATR)", minval=0.5, step=0.1, group=grpRisk)
+tpRR           = input.float(2.0, "Take Profit (R multiple)", minval=0.5, step=0.5, group=grpRisk, tooltip="TP = SL distance × R. MVP: 2R")
+
+grpDisp = "Display"
+showMarkers    = input.bool(true, "Pattern Markers on Chart", group=grpDisp)
+showChecklist  = input.bool(true, "Confirmation Checklist Table", group=grpDisp)
+showPatTable   = input.bool(true, "Pattern Status Table", group=grpDisp)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CANDLE HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+body(int i) =>
+    math.abs(close[i] - open[i])
+
+upperWick(int i) =>
+    high[i] - math.max(open[i], close[i])
+
+lowerWick(int i) =>
+    math.min(open[i], close[i]) - low[i]
+
+cRange(int i) =>
+    high[i] - low[i]
+
+isBull(int i) =>
+    close[i] > open[i]
+
+isBear(int i) =>
+    close[i] < open[i]
+
+bodyTop(int i) =>
+    math.max(open[i], close[i])
+
+bodyBot(int i) =>
+    math.min(open[i], close[i])
+
+upperWickOk(int i) =>
+    upperWick(i) <= body(i) * 0.35
+
+lowerWickOk(int i) =>
+    lowerWick(i) <= body(i) * 0.35
+
+openInBullBody(int i) =>
+    open[i] >= bodyBot(i + 1) and open[i] <= bodyTop(i + 1)
+
+openInBearBody(int i) =>
+    open[i] <= bodyTop(i + 1) and open[i] >= bodyBot(i + 1)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PATTERN DETECTION
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Hammer — chhoti body upar, lambi lower wick, downtrend context optional
+detectHammer() =>
+    b  = body(0)
+    lw = lowerWick(0)
+    uw = upperWick(0)
+    r  = cRange(0)
+    okShape = r > 0 and b > 0 and lw >= b * 2.0 and uw <= b * 0.5 and (bodyBot(0) - low[0]) / r >= 0.55
+    okShape and isBull(0)
+
+// Bullish Engulfing
+detectBullEngulfing() =>
+    isBear(1) and isBull(0) and open <= close[1] and close >= open[1] and body(0) > body(1)
+
+// Morning Star — 3 candle
+detectMorningStar() =>
+    b2 = body(2)
+    b1 = body(1)
+    mid2 = (open[2] + close[2]) / 2.0
+    isBear(2) and b2 > b1 * 1.5 and isBull(0) and close > mid2 and body(0) > b1
+
+// Three White Soldiers
+detect3WhiteSoldiers() =>
+    isBull(2) and isBull(1) and isBull(0) and close > close[1] and close[1] > close[2] and openInBullBody(1) and openInBullBody(0) and upperWickOk(2) and upperWickOk(1) and upperWickOk(0)
+
+// Bearish Engulfing
+detectBearEngulfing() =>
+    isBull(1) and isBear(0) and open >= close[1] and close <= open[1] and body(0) > body(1)
+
+// Evening Star
+detectEveningStar() =>
+    b2 = body(2)
+    b1 = body(1)
+    mid2 = (open[2] + close[2]) / 2.0
+    isBull(2) and b2 > b1 * 1.5 and isBear(0) and close < mid2 and body(0) > b1
+
+// Three Black Crows
+detect3BlackCrows() =>
+    isBear(2) and isBear(1) and isBear(0) and close < close[1] and close[1] < close[2] and openInBearBody(1) and openInBearBody(0) and lowerWickOk(2) and lowerWickOk(1) and lowerWickOk(0)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RESOLVE ENABLED PATTERNS (Test Mode vs Manual)
+// ══════════════════════════════════════════════════════════════════════════════
+
+patHammer   = testMode ? testPattern == "Hammer"               : useHammer
+patBullEng  = testMode ? testPattern == "Bullish Engulfing"    : useBullEng
+patMStar    = testMode ? testPattern == "Morning Star"         : useMorningStar
+pat3White   = testMode ? testPattern == "Three White Soldiers" : use3White
+patBearEng  = testMode ? testPattern == "Bearish Engulfing"    : useBearEng
+patEStar    = testMode ? testPattern == "Evening Star"         : useEveningStar
+pat3Black   = testMode ? testPattern == "Three Black Crows"    : use3Black
+
+// Raw detection (bar confirmed)
+confirmed = barstate.isconfirmed
+
+hammerDet    = confirmed and patHammer   and detectHammer()
+bullEngDet   = confirmed and patBullEng  and detectBullEngulfing()
+mStarDet     = confirmed and patMStar    and detectMorningStar()
+soldiersDet  = confirmed and pat3White   and detect3WhiteSoldiers()
+bearEngDet   = confirmed and patBearEng  and detectBearEngulfing()
+eStarDet     = confirmed and patEStar    and detectEveningStar()
+crowsDet     = confirmed and pat3Black   and detect3BlackCrows()
+
+bullPatternRaw = hammerDet or bullEngDet or mStarDet or soldiersDet
+bearPatternRaw = bearEngDet or eStarDet or crowsDet
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONFIRMATIONS (FILTERS)
+// ══════════════════════════════════════════════════════════════════════════════
+
+volSma    = ta.sma(volume, volLen)
+emaTrend  = ta.ema(close, emaLen)
+atrVal    = ta.atr(atrLen)
+
+volOk     = not useVolFilter or volume > volSma
+emaLongOk = not useEmaFilter or close > emaTrend
+emaShortOk= not useEmaFilter or close < emaTrend
+
+longSignal  = bullPatternRaw and volOk and emaLongOk
+shortSignal = bearPatternRaw and volOk and emaShortOk
+
+// Kaunsa pattern trigger hua (display ke liye)
+var string lastPatName = ""
+if hammerDet
+    lastPatName := "Hammer"
+else if bullEngDet
+    lastPatName := "Bullish Engulfing"
+else if mStarDet
+    lastPatName := "Morning Star"
+else if soldiersDet
+    lastPatName := "Three White Soldiers"
+else if bearEngDet
+    lastPatName := "Bearish Engulfing"
+else if eStarDet
+    lastPatName := "Evening Star"
+else if crowsDet
+    lastPatName := "Three Black Crows"
+
+// ══════════════════════════════════════════════════════════════════════════════
+// STRATEGY ENTRIES & EXITS — SL 1.5 ATR, TP 2R
+// ══════════════════════════════════════════════════════════════════════════════
+
+slDist = slAtrMult * atrVal
+tpDist = slDist * tpRR
+
+if longSignal and strategy.position_size <= 0
+    float entryPx = close
+    strategy.entry("Long", strategy.long, comment=lastPatName)
+    strategy.exit("Long Exit", from_entry="Long", stop=entryPx - slDist, limit=entryPx + tpDist)
+
+if shortSignal and strategy.position_size >= 0
+    float entryPxS = close
+    strategy.entry("Short", strategy.short, comment=lastPatName)
+    strategy.exit("Short Exit", from_entry="Short", stop=entryPxS + slDist, limit=entryPxS - tpDist)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CHART MARKERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+plotshape(showMarkers and bullPatternRaw, title="Bull Pattern (raw)", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 30), size=size.tiny, text="P")
+plotshape(showMarkers and bearPatternRaw, title="Bear Pattern (raw)", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 30), size=size.tiny, text="P")
+
+plotshape(showMarkers and longSignal, title="Long Signal (confirmed)", style=shape.triangleup, location=location.belowbar, color=color.lime, size=size.small, text="L")
+plotshape(showMarkers and shortSignal, title="Short Signal (confirmed)", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="S")
+
+plot(emaTrend, "EMA 200", color=color.new(color.blue, 40), linewidth=2)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONFIRMATION CHECKLIST TABLE (top-right)
+// ══════════════════════════════════════════════════════════════════════════════
+
+var table checklist = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 85), border_width=1)
+
+if showChecklist and barstate.islast
+    table.cell(checklist, 0, 0, "Confirmation", text_color=color.white, text_size=size.small)
+    table.cell(checklist, 1, 0, "Status", text_color=color.white, text_size=size.small)
+
+    patText = bullPatternRaw ? "Bullish ✓" : bearPatternRaw ? "Bearish ✓" : "None"
+    patCol  = bullPatternRaw or bearPatternRaw ? color.yellow : color.gray
+    table.cell(checklist, 0, 1, "1. Pattern", text_color=color.silver, text_size=size.small)
+    table.cell(checklist, 1, 1, patText + (lastPatName != "" ? " (" + lastPatName + ")" : ""), text_color=patCol, text_size=size.small)
+
+    table.cell(checklist, 0, 2, "2. Volume > SMA", text_color=color.silver, text_size=size.small)
+    table.cell(checklist, 1, 2, volOk ? "PASS ✓" : "FAIL ✗", text_color=volOk ? color.lime : color.red, text_size=size.small)
+
+    emaTxt = longSignal or (bullPatternRaw and emaLongOk) ? "PASS (bull) ✓" : shortSignal or (bearPatternRaw and emaShortOk) ? "PASS (bear) ✓" : bullPatternRaw and not emaLongOk ? "FAIL (need >EMA)" : bearPatternRaw and not emaShortOk ? "FAIL (need <EMA)" : useEmaFilter ? "N/A" : "OFF"
+    emaPass = (bullPatternRaw and emaLongOk) or (bearPatternRaw and emaShortOk) or not useEmaFilter
+    table.cell(checklist, 0, 3, "3. EMA " + str.tostring(emaLen), text_color=color.silver, text_size=size.small)
+    table.cell(checklist, 1, 3, emaTxt, text_color=emaPass ? color.lime : color.red, text_size=size.small)
+
+    sigTxt = longSignal ? "LONG ENTRY ✓" : shortSignal ? "SHORT ENTRY ✓" : "NO TRADE"
+    sigCol = longSignal ? color.lime : shortSignal ? color.red : color.gray
+    table.cell(checklist, 0, 4, "→ Final Signal", text_color=color.white, text_size=size.small)
+    table.cell(checklist, 1, 4, sigTxt, text_color=sigCol, text_size=size.small)
+
+    table.cell(checklist, 0, 5, "SL / TP", text_color=color.silver, text_size=size.small)
+    table.cell(checklist, 1, 5, str.tostring(slDist, "#.##") + " / " + str.tostring(tpDist, "#.##"), text_color=color.silver, text_size=size.small)
+
+    table.cell(checklist, 0, 6, "Test Mode", text_color=color.silver, text_size=size.small)
+    table.cell(checklist, 1, 6, testMode ? "ON → " + testPattern : "OFF", text_color=color.aqua, text_size=size.small)
+
+    table.cell(checklist, 0, 7, "Vol / EMA filter", text_color=color.silver, text_size=size.small)
+    table.cell(checklist, 1, 7, (useVolFilter ? "Vol ON" : "Vol OFF") + " | " + (useEmaFilter ? "EMA ON" : "EMA OFF"), text_color=color.silver, text_size=size.small)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PATTERN STATUS TABLE (bottom-right) — har pattern alag dikhao
+// ══════════════════════════════════════════════════════════════════════════════
+
+var table patTable = table.new(position.bottom_right, 5, 8, bgcolor=color.new(color.black, 85), border_width=1)
+
+if showPatTable and barstate.islast
+    table.cell(patTable, 0, 0, "Pattern", text_color=color.white, text_size=size.tiny)
+    table.cell(patTable, 1, 0, "On", text_color=color.white, text_size=size.tiny)
+    table.cell(patTable, 2, 0, "Seen", text_color=color.white, text_size=size.tiny)
+    table.cell(patTable, 3, 0, "Vol", text_color=color.white, text_size=size.tiny)
+    table.cell(patTable, 4, 0, "EMA", text_color=color.white, text_size=size.tiny)
+
+    int row = 1
+    table.cell(patTable, 0, row, "Hammer", text_color=color.silver, text_size=size.tiny)
+    table.cell(patTable, 1, row, patHammer ? "Y" : "N", text_color=patHammer ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(patTable, 2, row, hammerDet ? "Y" : "—", text_color=hammerDet ? color.yellow : color.gray, text_size=size.tiny)
+    table.cell(patTable, 3, row, volOk ? "✓" : "✗", text_color=volOk ? color.lime : color.red, text_size=size.tiny)
+    table.cell(patTable, 4, row, emaLongOk ? "✓" : "✗", text_color=emaLongOk ? color.lime : color.red, text_size=size.tiny)
+
+    row += 1
+    table.cell(patTable, 0, row, "Bull Engulf", text_color=color.silver, text_size=size.tiny)
+    table.cell(patTable, 1, row, patBullEng ? "Y" : "N", text_color=patBullEng ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(patTable, 2, row, bullEngDet ? "Y" : "—", text_color=bullEngDet ? color.yellow : color.gray, text_size=size.tiny)
+    table.cell(patTable, 3, row, volOk ? "✓" : "✗", text_color=volOk ? color.lime : color.red, text_size=size.tiny)
+    table.cell(patTable, 4, row, emaLongOk ? "✓" : "✗", text_color=emaLongOk ? color.lime : color.red, text_size=size.tiny)
+
+    row += 1
+    table.cell(patTable, 0, row, "Morning Star", text_color=color.silver, text_size=size.tiny)
+    table.cell(patTable, 1, row, patMStar ? "Y" : "N", text_color=patMStar ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(patTable, 2, row, mStarDet ? "Y" : "—", text_color=mStarDet ? color.yellow : color.gray, text_size=size.tiny)
+    table.cell(patTable, 3, row, volOk ? "✓" : "✗", text_color=volOk ? color.lime : color.red, text_size=size.tiny)
+    table.cell(patTable, 4, row, emaLongOk ? "✓" : "✗", text_color=emaLongOk ? color.lime : color.red, text_size=size.tiny)
+
+    row += 1
+    table.cell(patTable, 0, row, "3 White Sol.", text_color=color.silver, text_size=size.tiny)
+    table.cell(patTable, 1, row, pat3White ? "Y" : "N", text_color=pat3White ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(patTable, 2, row, soldiersDet ? "Y" : "—", text_color=soldiersDet ? color.yellow : color.gray, text_size=size.tiny)
+    table.cell(patTable, 3, row, volOk ? "✓" : "✗", text_color=volOk ? color.lime : color.red, text_size=size.tiny)
+    table.cell(patTable, 4, row, emaLongOk ? "✓" : "✗", text_color=emaLongOk ? color.lime : color.red, text_size=size.tiny)
+
+    row += 1
+    table.cell(patTable, 0, row, "Bear Engulf", text_color=color.silver, text_size=size.tiny)
+    table.cell(patTable, 1, row, patBearEng ? "Y" : "N", text_color=patBearEng ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(patTable, 2, row, bearEngDet ? "Y" : "—", text_color=bearEngDet ? color.yellow : color.gray, text_size=size.tiny)
+    table.cell(patTable, 3, row, volOk ? "✓" : "✗", text_color=volOk ? color.lime : color.red, text_size=size.tiny)
+    table.cell(patTable, 4, row, emaShortOk ? "✓" : "✗", text_color=emaShortOk ? color.lime : color.red, text_size=size.tiny)
+
+    row += 1
+    table.cell(patTable, 0, row, "Evening Star", text_color=color.silver, text_size=size.tiny)
+    table.cell(patTable, 1, row, patEStar ? "Y" : "N", text_color=patEStar ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(patTable, 2, row, eStarDet ? "Y" : "—", text_color=eStarDet ? color.yellow : color.gray, text_size=size.tiny)
+    table.cell(patTable, 3, row, volOk ? "✓" : "✗", text_color=volOk ? color.lime : color.red, text_size=size.tiny)
+    table.cell(patTable, 4, row, emaShortOk ? "✓" : "✗", text_color=emaShortOk ? color.lime : color.red, text_size=size.tiny)
+
+    row += 1
+    table.cell(patTable, 0, row, "3 Black Crow", text_color=color.silver, text_size=size.tiny)
+    table.cell(patTable, 1, row, pat3Black ? "Y" : "N", text_color=pat3Black ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(patTable, 2, row, crowsDet ? "Y" : "—", text_color=crowsDet ? color.yellow : color.gray, text_size=size.tiny)
+    table.cell(patTable, 3, row, volOk ? "✓" : "✗", text_color=volOk ? color.lime : color.red, text_size=size.tiny)
+    table.cell(patTable, 4, row, emaShortOk ? "✓" : "✗", text_color=emaShortOk ? color.lime : color.red, text_size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ALERTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(longSignal,  "Long — Pattern + Confirmations",  "MVP Long: {{ticker}} — pattern confirmed with volume & EMA")
+alertcondition(shortSignal, "Short — Pattern + Confirmations", "MVP Short: {{ticker}} — pattern confirmed with volume & EMA")
