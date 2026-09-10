@@ -140,10 +140,20 @@ export const SAFETY_FACTORS = {
   maxEffectiveSF: 6.0
 }
 
-// Combined-board bursting strength factor. Summing every ply's BS overstates
-// the measured Mullen value because the corrugated medium contributes less than
-// a flat sheet — about a 20% fluting loss. Tune to match your lab readings.
-export const BS_COMBINED_FACTOR = 0.8
+/** Liner ply contribution toward combined board BS (Mullen-style). */
+export const BS_LINER_FACTOR = 0.95
+/** Fluting / medium ply contribution toward combined board BS. */
+export const BS_FLUTE_FACTOR = 0.5
+
+/** True when the layer is fluting/medium (by name). Everything else counts as liner. */
+export function isFlutingLayer(name: string): boolean {
+  const key = String(name || '').toLowerCase()
+  return key.includes('flute') || key.includes('fluting') || /\bmedium\b/.test(key)
+}
+
+export function bsContributionFactor(layerName: string): number {
+  return isFlutingLayer(layerName) ? BS_FLUTE_FACTOR : BS_LINER_FACTOR
+}
 
 /** Up to 400 g uses single-pin stitching; heavier boxes use double-pin stitching. */
 export const AUTO_DOUBLE_PIN_THRESHOLD_GM = 400
@@ -665,23 +675,25 @@ export function calculate(input: CalcInput) {
     const autoRCT = 0.6 * Math.sqrt(l.gsm * l.bf)
     const rctOverrideNum = l.rctOverride != null ? parseFloat(String(l.rctOverride)) : 0
     const finalRCT = rctOverrideNum > 0 ? rctOverrideNum : autoRCT
+    const bs = (l.bf * l.gsm) / 1000
+    const bsFactor = bsContributionFactor(l.name)
     return {
       name: l.name,
       gsm: l.gsm,
       bf: l.bf,
       takeUp: l.takeUp || 1.0,
-      bs: (l.bf * l.gsm) / 1000,
+      bs,
+      bsFactor,
+      bsContribution: bs * bsFactor,
       rct: finalRCT,
       rctAuto: autoRCT,
       rctOverridden: rctOverrideNum > 0
     }
   })
 
-  // Combined board burst. Raw = sum of each ply's BS (kg/cm²), then reduced by
-  // BS_COMBINED_FACTOR for fluting loss so it tracks the measured Mullen value.
-  // BF stays consistent with the (factored) BS: BF = BS × 1000 / Σgsm.
-  const rawCombinedBS = layerStrengths.reduce((s, l) => s + l.bs, 0)
-  const combinedBS = rawCombinedBS * BS_COMBINED_FACTOR
+  // Combined board burst: liner plies @ 95%, fluting/medium @ 50%.
+  // BF stays consistent with the factored BS: BF = BS × 1000 / Σgsm.
+  const combinedBS = layerStrengths.reduce((s, l) => s + l.bsContribution, 0)
   const combinedGsmRaw = layerStrengths.reduce((s, l) => s + l.gsm, 0)
   const combinedBF = combinedGsmRaw > 0 ? (combinedBS * 1000) / combinedGsmRaw : 0
 

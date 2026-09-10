@@ -171,8 +171,8 @@ describe('calculate — 3-ply RSC (inner dims)', () => {
     expect(res.cost.margin).toBeGreaterThan(0)
   })
 
-  it('reports combined sheet BS and BF with the fluting-loss factor', () => {
-    // 3 plies, each BS = 18×120/1000 = 2.16 → raw 6.48 × 0.8 = 5.184 kg/cm²
+  it('reports combined sheet BS and BF with liner 95% / flute 50% factors', () => {
+    // Top/Bottom liner: 2.16 × 0.95 each; Flute: 2.16 × 0.50 → 5.184 kg/cm²
     expect(res.strength.combinedBS).toBeCloseTo(5.184, 4)
     // BF stays consistent with factored BS: 5.184×1000/360 = 14.4
     expect(res.strength.combinedBF).toBeCloseTo(14.4, 4)
