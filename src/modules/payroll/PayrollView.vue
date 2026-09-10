@@ -1219,7 +1219,7 @@ onMounted(async () => {
       </div>
       <div class="flex flex-wrap gap-2 items-center justify-between">
         <button class="pp-btn pp-btn-primary" @click="openAdvance">+ Record advance</button>
-        <p class="text-xs text-slate-500">Calculate par {{ advanceFrom }} se {{ advanceTo }} tak ke advances {{ periodLabel(period) }} salary me adjust honge.</p>
+        <p class="text-xs text-slate-500">Calculate par {{ advanceFrom }} se {{ advanceTo }} tak ke advances {{ periodLabel(period) }} salary me adjust honge. (Rule: month ki 1–8 tarikh ka advance pichhle month ki salary me.)</p>
       </div>
       <div v-if="sortedAdvancesTable.length === 0" class="pp-card p-6 text-center text-slate-400">Is range me koi advance nahi.</div>
       <div v-else class="pp-card overflow-x-auto">
@@ -1648,6 +1648,9 @@ onMounted(async () => {
           <label class="pp-label">Note</label>
           <input v-model="advanceForm.narration" class="pp-input" placeholder="Optional" />
         </div>
+        <p class="text-xs text-slate-500">
+          Date 1–8 hone par advance pichhle month ki salary me adjust hota hai; 9 tarikh ke baad isi month me.
+        </p>
         <label class="flex items-center gap-2 text-sm">
           <input v-model="advanceForm.postVoucher" type="checkbox" />
           Post accounting voucher (Dr Staff Advances, Cr {{ advanceForm.mode === 'cash' ? 'Cash' : 'Bank' }})

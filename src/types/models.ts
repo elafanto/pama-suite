@@ -331,7 +331,7 @@ export interface StaffAdvance extends BaseRecord {
   amount: number
   mode: PayrollPaymentMode
   narration: string
-  /** Payroll month this advance belongs to (YYYY-MM). Defaults from date. */
+  /** Payroll month this advance is adjusted in (YYYY-MM). Day 1–8 → previous month; else same month. */
   payroll_period?: string
   /** Set when deducted from a salary run (YYYY-MM). */
   applied_period?: string
