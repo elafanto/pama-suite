@@ -1,0 +1,253 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © PAMA Suite — Darvas Box Breakout Strategy (Nicolas Darvas methodology)
+// For: Sandeep | Momentum breakout after consolidation — NSE swing/positional
+
+//@version=6
+strategy(
+     "Darvas Box Strategy",
+     overlay=true,
+     pyramiding=0,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     commission_type=strategy.commission.percent,
+     commission_value=0.03,
+     slippage=2,
+     initial_capital=100000,
+     currency=currency.INR,
+     margin_long=100,
+     margin_short=100,
+     calc_on_every_tick=false,
+     process_orders_on_close=true)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+grpBox = "Darvas Box"
+boxLen         = input.int(5, "Consolidation Bars", minval=3, maxval=30, group=grpBox)
+minBoxAtr      = input.float(0.8, "Min Box Height (× ATR)", minval=0.3, step=0.1, group=grpBox)
+atrLen         = input.int(14, "ATR Length", minval=1, group=grpBox)
+risingBoxOnly  = input.bool(true, "Rising Box Only", group=grpBox)
+maxBoxesDraw   = input.int(8, "Max Boxes on Chart", minval=1, maxval=20, group=grpBox)
+
+grpBreak = "Breakout"
+breakoutMode   = input.string("Close", "Breakout Mode", options=["Close", "Wick"], group=grpBreak)
+volFilter      = input.bool(true, "Volume Filter", group=grpBreak)
+volMult        = input.float(1.1, "Volume Multiplier", minval=0.5, step=0.1, group=grpBreak)
+volLen         = input.int(20, "Volume MA Length", minval=5, group=grpBreak)
+
+grpTrend = "Trend Filter"
+useTrend       = input.bool(true, "EMA Trend Filter", group=grpTrend)
+trendEmaLen    = input.int(50, "Trend EMA Length", minval=10, group=grpTrend)
+
+grpRisk = "Risk & Exit"
+stopMode       = input.string("Box Floor", "Stop Mode", options=["Box Floor", "Breached Top", "ATR Trail"], group=grpRisk)
+atrStopMult    = input.float(2.0, "ATR Stop Multiplier", minval=0.5, step=0.5, group=grpRisk)
+trailStop      = input.bool(true, "Trail Stop to Higher Boxes", group=grpRisk)
+rrTarget       = input.float(2.0, "RR Target (0 = off)", minval=0.0, step=0.5, group=grpRisk)
+
+grpIndia = "India"
+sessionFilter  = input.bool(false, "IST Session Filter", group=grpIndia)
+sessionTime    = input.session("0915-1500", "Session", group=grpIndia)
+
+grpVis = "Visuals"
+showBoxes      = input.bool(true, "Show Boxes", group=grpVis)
+showSignals    = input.bool(true, "Show BUY / EXIT Markers", group=grpVis)
+showDashboard  = input.bool(true, "Show Dashboard", group=grpVis)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+atr      = ta.atr(atrLen)
+trendEma = ta.ema(close, trendEmaLen)
+volMa    = ta.sma(volume, volLen)
+volOk    = not volFilter or (volume > 0 and volume >= volMa * volMult)
+trendOk  = not useTrend or close > trendEma
+inSession = not sessionFilter or not na(time(timeframe.period, sessionTime, "Asia/Kolkata"))
+
+calcStop(float boxTop, float boxBottom, float px) =>
+    stopMode == "Breached Top" ? boxTop : stopMode == "ATR Trail" ? px - atr * atrStopMult : boxBottom
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DARVAS BOX STATE MACHINE
+// 1. New high → start box (top = high, floor = low)
+// 2. Consolidation → floor = lowest low, top can extend on new highs
+// 3. Close below floor → invalidate box
+// 4. Close above top (with filters) → BUY; stop at floor
+// ══════════════════════════════════════════════════════════════════════════════
+
+var float boxTop       = na
+var float boxBottom    = na
+var int   boxStartBar  = na
+var bool  boxValid     = false
+var float lastClosedTop = na
+
+var float trailStopPx  = na
+var float entryPx      = na
+
+var box   liveBox      = na
+var line  liveTopLn    = na
+var line  liveBotLn    = na
+
+var box[] histBoxes = array.new_box()
+
+// Start or extend box on new high within lookback
+bool newSwingHigh = high >= ta.highest(high, boxLen)
+
+if strategy.position_size == 0
+    if newSwingHigh
+        if na(boxTop) or high > boxTop
+            if na(boxTop)
+                boxStartBar := bar_index
+            boxTop    := high
+            boxBottom := na(boxBottom) ? low : math.min(boxBottom, low)
+            boxValid  := false
+    else if not na(boxTop)
+        boxBottom := math.min(boxBottom, low)
+        if high > boxTop
+            boxTop := high
+
+    // Invalidate if structure breaks
+    if not na(boxBottom) and close < boxBottom
+        boxTop      := na
+        boxBottom   := na
+        boxStartBar := na
+        boxValid    := false
+        if not na(liveBox)
+            box.delete(liveBox)
+            liveBox := na
+        if not na(liveTopLn)
+            line.delete(liveTopLn)
+            liveTopLn := na
+        if not na(liveBotLn)
+            line.delete(liveBotLn)
+            liveBotLn := na
+
+    // Validate box size + rising box rule
+    if not na(boxTop) and not na(boxBottom)
+        float h = boxTop - boxBottom
+        bool risingOk = not risingBoxOnly or na(lastClosedTop) or boxTop > lastClosedTop
+        boxValid := h >= atr * minBoxAtr and risingOk
+
+// Breakout
+bool breakUp = boxValid and not na(boxTop) and (breakoutMode == "Close" ? close > boxTop : high > boxTop)
+bool longSignal = breakUp and volOk and trendOk and inSession and strategy.position_size == 0
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ORDERS (global scope)
+// ══════════════════════════════════════════════════════════════════════════════
+
+var bool signalBuy  = false
+var bool signalExit = false
+signalBuy  := false
+signalExit := false
+var string lastEvent = "—"
+
+if longSignal
+    entryPx     := close
+    trailStopPx := calcStop(boxTop, boxBottom, close)
+    strategy.entry("Darvas Long", strategy.long, comment="BUY")
+    if rrTarget > 0 and entryPx > trailStopPx
+        strategy.exit("Darvas Exit", "Darvas Long", stop=trailStopPx, limit=entryPx + (entryPx - trailStopPx) * rrTarget)
+    else
+        strategy.exit("Darvas Exit", "Darvas Long", stop=trailStopPx)
+    lastClosedTop := boxTop
+    lastEvent       := "BUY"
+    signalBuy       := true
+    boxTop          := na
+    boxBottom       := na
+    boxStartBar     := na
+    boxValid        := false
+    if not na(liveBox)
+        array.push(histBoxes, liveBox)
+        while array.size(histBoxes) > maxBoxesDraw
+            box.delete(array.shift(histBoxes))
+        liveBox := na
+    if not na(liveTopLn)
+        line.delete(liveTopLn)
+        liveTopLn := na
+    if not na(liveBotLn)
+        line.delete(liveBotLn)
+        liveBotLn := na
+
+// Trail stop while in trade
+if strategy.position_size > 0
+    float refTop = nz(boxTop, entryPx)
+    float refBot = nz(boxBottom, trailStopPx)
+    float newStop = calcStop(refTop, refBot, close)
+    if trailStop and not na(newStop) and (na(trailStopPx) or newStop > trailStopPx)
+        trailStopPx := newStop
+        if rrTarget > 0 and strategy.position_avg_price > trailStopPx
+            strategy.exit("Darvas Exit", "Darvas Long", stop=trailStopPx, limit=strategy.position_avg_price + (strategy.position_avg_price - trailStopPx) * rrTarget)
+        else
+            strategy.exit("Darvas Exit", "Darvas Long", stop=trailStopPx)
+
+    if close < trailStopPx
+        strategy.close("Darvas Long", comment="EXIT")
+        signalExit  := true
+        lastEvent   := "EXIT"
+        trailStopPx := na
+        entryPx     := na
+
+// ══════════════════════════════════════════════════════════════════════════════
+// VISUALS
+// ══════════════════════════════════════════════════════════════════════════════
+
+if showBoxes and boxValid and not na(boxTop) and not na(boxBottom) and not na(boxStartBar)
+    if na(liveBox)
+        color bc = color.new(color.teal, 88)
+        liveBox   := box.new(boxStartBar, boxTop, bar_index, boxBottom, border_color=color.teal, bgcolor=bc, border_width=1)
+        liveTopLn := line.new(boxStartBar, boxTop, bar_index, boxTop, color=color.teal, width=2)
+        liveBotLn := line.new(boxStartBar, boxBottom, bar_index, boxBottom, color=color.teal, width=1, style=line.style_dashed)
+    else
+        box.set_top(liveBox, boxTop)
+        box.set_bottom(liveBox, boxBottom)
+        box.set_right(liveBox, bar_index)
+        line.set_y1(liveTopLn, boxTop)
+        line.set_y2(liveTopLn, boxTop)
+        line.set_x2(liveTopLn, bar_index)
+        line.set_y1(liveBotLn, boxBottom)
+        line.set_y2(liveBotLn, boxBottom)
+        line.set_x2(liveBotLn, bar_index)
+
+plot(useTrend ? trendEma : na, "Trend EMA", color=color.new(color.orange, 0), linewidth=2)
+plot(strategy.position_size > 0 ? trailStopPx : na, "Stop", color=color.red, style=plot.style_linebr, linewidth=2)
+
+plotshape(showSignals and signalBuy,  title="BUY",  style=shape.triangleup, location=location.belowbar, color=color.lime, size=size.normal, text="BUY")
+plotshape(showSignals and signalExit, title="EXIT", style=shape.xcross,     location=location.abovebar, color=color.red,  size=size.small,  text="EXIT")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DASHBOARD
+// ══════════════════════════════════════════════════════════════════════════════
+
+var table dash = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 85), border_width=1)
+
+if showDashboard and barstate.islast
+    string stateTxt = strategy.position_size > 0 ? "IN TRADE" : boxValid ? "BOX READY" : "SCANNING"
+    float  distPct  = boxValid and not na(boxTop) ? (boxTop - close) / close * 100.0 : na
+    float  boxH     = boxValid ? boxTop - boxBottom : na
+    table.cell(dash, 0, 0, "State", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 0, stateTxt, text_color=stateTxt == "IN TRADE" ? color.lime : color.white, text_size=size.small)
+    table.cell(dash, 0, 1, "Box Top", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 1, boxValid ? str.tostring(boxTop, format.mintick) : "—", text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 2, "Box Floor", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 2, boxValid ? str.tostring(boxBottom, format.mintick) : "—", text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 3, "Height/ATR", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 3, boxValid ? str.tostring(boxH / atr, "#.##") : "—", text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 4, "To Breakout", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 4, na(distPct) ? "—" : str.tostring(distPct, "#.##") + "%", text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 5, "Trend", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 5, trendOk ? "Bullish" : "Bearish", text_color=trendOk ? color.lime : color.red, text_size=size.small)
+    table.cell(dash, 0, 6, "Trades", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 6, str.tostring(strategy.closedtrades), text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 7, "Last", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 7, lastEvent, text_color=color.white, text_size=size.small)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ALERTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(longSignal, "Darvas BUY", "Darvas Box BUY on {{ticker}} {{interval}}")
+alertcondition(signalExit, "Darvas EXIT", "Darvas Box EXIT on {{ticker}} {{interval}}")
+alertcondition(boxValid and not boxValid[1], "Darvas Box Ready", "Darvas box ready on {{ticker}} {{interval}}")

@@ -271,7 +271,8 @@ describe('advance date range for salary month', () => {
   const month = '2026-06'
 
   it('defaults range to full salary month', () => {
-    expect(defaultAdvanceRangeForPeriod('2026-06')).toEqual({ from: '2026-06-01', to: '2026-06-30' })
+    expect(defaultAdvanceRangeForPeriod('2026-06')).toEqual({ from: '2026-06-09', to: '2026-07-08' })
+    expect(defaultAdvanceRangeForPeriod('2026-12')).toEqual({ from: '2026-12-09', to: '2027-01-08' })
     expect(periodLastDate('2026-06')).toBe('2026-06-30')
   })
 
@@ -303,7 +304,7 @@ describe('advance date range for salary month', () => {
   })
 })
 
-describe('advance period — no carry to next month', () => {
+describe('advance period — cutoff day 8 → previous month salary', () => {
   const advances: StaffAdvance[] = [
     {
       id: 'a1', firm_id: 'f1', staff_id: 's1', staff_name: 'R', date: '2026-03-10', amount: 5000,
@@ -315,9 +316,17 @@ describe('advance period — no carry to next month', () => {
     },
   ]
 
-  it('only counts advances in the same payroll month', () => {
-    expect(advanceTotalForPeriod(advances, 's1', '2026-03')).toBe(5000)
-    expect(advanceTotalForPeriod(advances, 's1', '2026-04')).toBe(3000)
+  it('maps day 1–8 advances to the previous payroll month', () => {
+    expect(advancePayrollPeriod({ date: '2026-04-01' })).toBe('2026-03')
+    expect(advancePayrollPeriod({ date: '2026-04-08' })).toBe('2026-03')
+    expect(advancePayrollPeriod({ date: '2026-04-09' })).toBe('2026-04')
+    expect(advancePayrollPeriod({ date: '2026-01-05' })).toBe('2025-12')
+  })
+
+  it('only counts advances in the same payroll month (after cutoff mapping)', () => {
+    // Mar 10 → Mar; Apr 5 → Mar (≤8)
+    expect(advanceTotalForPeriod(advances, 's1', '2026-03')).toBe(8000)
+    expect(advanceTotalForPeriod(advances, 's1', '2026-04')).toBe(0)
     expect(advanceTotalForPeriod(advances, 's1', '2026-05')).toBe(0)
   })
 

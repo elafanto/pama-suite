@@ -1,0 +1,784 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © PAMA Suite — Demand & Supply Core Strategy (Sam Seiden methodology)
+// For: Sandeep | Paste into TradingView Pine Editor → Add to chart (LTF = 15m recommended)
+
+//@version=6
+strategy(
+     "Demand & Supply Core Strategy",
+     overlay=true,
+     pyramiding=0,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     commission_type=strategy.commission.percent,
+     commission_value=0.03,
+     slippage=2,
+     initial_capital=100000,
+     currency=currency.INR,
+     margin_long=100,
+     margin_short=100,
+     calc_on_every_tick=false,
+     process_orders_on_close=true)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+grpTF = "Timeframes"
+preset         = input.string("Swing", "Preset", options=["Intraday", "Swing", "Positional", "Custom"], group=grpTF)
+htfCustom      = input.timeframe("D", "HTF / Curve (Custom)", group=grpTF)
+itfCustom      = input.timeframe("75", "ITF / Trend (Custom)", group=grpTF)
+ltfCustom      = input.timeframe("15", "LTF / Zone (Custom)", group=grpTF)
+
+grpPat = "Pattern"
+maxBaseCandles = input.int(3, "Max Base Candles", minval=1, maxval=5, group=grpPat)
+legBodyPct     = input.float(0.50, "Leg Body % of Range", minval=0.1, maxval=0.95, step=0.05, group=grpPat)
+
+grpTrend = "Trend (ITF)"
+smaLen         = input.int(50, "SMA Length", minval=5, group=grpTrend)
+slopeLen       = input.int(7, "Slope Lookback Bars", minval=1, group=grpTrend)
+slopeThresh    = input.float(0.10, "Slope Threshold (ATR-norm)", minval=0.01, step=0.01, group=grpTrend)
+atrLen         = input.int(14, "ATR Length", minval=1, group=grpTrend)
+
+grpCurve = "Curve (HTF)"
+curveLookback  = input.int(100, "Fallback Lookback Bars", minval=10, group=grpCurve)
+
+grpScore = "Odd Enhancer"
+scoreType1Thresh = input.int(6, "Type-1 Score Threshold", minval=5, maxval=7, group=grpScore)
+minScore         = input.int(3, "Minimum Score to Trade", minval=0, maxval=7, group=grpScore)
+strongLegMult    = input.float(2.0, "Strong Leg-Out Multiplier", minval=1.0, step=0.1, group=grpScore)
+proxTouchPct     = input.float(0.15, "Proximal Touch Tolerance %", minval=0.0, maxval=1.0, step=0.05, group=grpScore)
+
+grpRisk = "Risk & Exit"
+rr             = input.float(2.0, "Reward:Risk Target", minval=0.5, step=0.5, group=grpRisk)
+minRR          = input.float(2.0, "Minimum RR Required", minval=0.5, step=0.5, group=grpRisk)
+riskPerTradeRs = input.float(1000, "Risk per Trade (₹)", minval=1, group=grpRisk)
+slBufferTicks  = input.int(2, "SL Buffer (ticks beyond distal)", minval=0, group=grpRisk)
+dynamicTarget  = input.bool(false, "Extend Target to Opposing Zone", group=grpRisk)
+
+grpIndia = "India-Specific"
+sessionFilter  = input.bool(false, "Session Filter (IST)", group=grpIndia)
+sessionTime    = input.session("0915-1500", "Session Window", group=grpIndia)
+gapHandling    = input.bool(true, "Gap-Up/Down = Strong Leg-Out", group=grpIndia)
+allowShort     = input.bool(false, "Allow Short (NSE cash = OFF)", group=grpIndia)
+usePctQty      = input.bool(true, "Use % of Equity Sizing (reliable backtest)", group=grpIndia)
+// Note: circuit limits & expiry rollovers are NOT auto-handled — user discretion required.
+
+grpVis = "Visuals"
+showZones      = input.bool(true, "Show Zone Boxes", group=grpVis)
+showLines      = input.bool(true, "Show Proximal / Distal Lines", group=grpVis)
+showLabels     = input.bool(true, "Show Zone Labels", group=grpVis)
+showSignals    = input.bool(true, "Show BUY / SELL Markers", group=grpVis)
+maxZones       = input.int(50, "Max Zones Stored", minval=5, maxval=200, group=grpVis)
+
+// Resolve preset → timeframes
+htf = preset == "Intraday" ? "75" : preset == "Swing" ? "D" : preset == "Positional" ? "W" : htfCustom
+itf = preset == "Intraday" ? "15" : preset == "Swing" ? "75" : preset == "Positional" ? "D" : itfCustom
+ltf = preset == "Intraday" ? "5" : preset == "Swing" ? "15" : preset == "Positional" ? "75" : ltfCustom
+
+slBuffer = slBufferTicks * syminfo.mintick
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS & ENUMS
+// ══════════════════════════════════════════════════════════════════════════════
+
+int CURVE_LOW  = 0
+int CURVE_EQ   = 1
+int CURVE_HIGH = 2
+
+int TREND_BEAR = -1
+int TREND_SIDE = 0
+int TREND_BULL = 1
+
+int ACT_NONE    = 0
+int ACT_LONG    = 1
+int ACT_SHORT   = 2
+int ACT_CONFIRM = 3
+
+int FRESH_NEW      = 0  // +2 score
+int FRESH_TESTED   = 1  // +1 score
+int FRESH_VIOLATED = 2  // reject
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CANDLE HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+cBody(int i) =>
+    math.abs(close[i] - open[i])
+
+cRange(int i) =>
+    high[i] - low[i]
+
+bodyPct(int i) =>
+    float r = cRange(i)
+    r == 0.0 ? na : cBody(i) / r
+
+isLeg(int i) =>
+    float bp = bodyPct(i)
+    not na(bp) and bp >= legBodyPct
+
+isBase(int i) =>
+    float bp = bodyPct(i)
+    not na(bp) and bp < legBodyPct
+
+isBull(int i) =>
+    close[i] > open[i]
+
+isBear(int i) =>
+    close[i] < open[i]
+
+bodyTop(int i) =>
+    math.max(open[i], close[i])
+
+bodyBot(int i) =>
+    math.min(open[i], close[i])
+
+wickLow(int i) =>
+    low[i]
+
+wickHigh(int i) =>
+    high[i]
+
+hasGapUp(int i) =>
+    gapHandling and open[i] > high[i + 1]
+
+hasGapDn(int i) =>
+    gapHandling and open[i] < low[i + 1]
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DECISION MATRIX (Slide 23 truth table)
+// curve: CURVE_LOW/EQ/HIGH | isDemand: zone type | trend: TREND_BEAR/SIDE/BULL
+// ══════════════════════════════════════════════════════════════════════════════
+
+matrixAction(int curve, bool isDemand, int trend) =>
+    int act = ACT_NONE
+    if curve == CURVE_HIGH
+        if not isDemand
+            act := trend == TREND_BULL ? ACT_CONFIRM : ACT_SHORT
+        else
+            act := trend == TREND_BULL ? ACT_CONFIRM : ACT_NONE
+    else if curve == CURVE_EQ
+        if not isDemand
+            act := trend == TREND_BULL ? ACT_NONE : ACT_SHORT
+        else
+            act := trend == TREND_BEAR ? ACT_NONE : ACT_LONG
+    else
+        if not isDemand
+            act := trend == TREND_BEAR ? ACT_CONFIRM : ACT_NONE
+        else
+            act := trend == TREND_BEAR ? ACT_CONFIRM : ACT_LONG
+    act
+
+actionLabel(int act) =>
+    act == ACT_LONG ? "L" : act == ACT_SHORT ? "S" : act == ACT_CONFIRM ? "C" : "—"
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ZONE DETECTION — reusable on any timeframe (LTF chart + HTF via security)
+// Returns [newZone, top, bot, prox, dist, isDemand, patCode, bases, legStr, gapF]
+// patCode: 0=DBR 1=RBR 2=RBD 3=DBD
+// ══════════════════════════════════════════════════════════════════════════════
+
+detectNewZone() =>
+    bool   found    = false
+    float  zTop     = na
+    float  zBot     = na
+    float  zProx    = na
+    float  zDist    = na
+    bool   zDemand  = false
+    int    zPat     = 0
+    int    zBases   = 0
+    float  zLegStr  = 0.0
+    bool   zGap     = false
+
+    if isLeg(0) and cRange(0) > 0
+        // Prefer longest valid base sequence (more bases = stronger zone)
+        for bc = maxBaseCandles to 1
+            int legInOff = bc + 1
+            if legInOff > bar_index
+                break
+            if not isLeg(legInOff) or cRange(legInOff) == 0
+                continue
+            bool allBase = true
+            for b = 1 to bc
+                if not isBase(b) or cRange(b) == 0
+                    allBase := false
+            if not allBase
+                continue
+
+            float proxVal = na
+            float distVal = na
+            bool  demand  = false
+            int   patCode = 0
+
+            // DBR — Demand reversal
+            if isBear(legInOff) and isBull(0)
+                demand  := true
+                patCode := 0
+                proxVal := bodyTop(1)
+                for b = 2 to bc
+                    proxVal := math.max(proxVal, bodyTop(b))
+                distVal := wickLow(legInOff)
+                for b = 1 to bc
+                    distVal := math.min(distVal, wickLow(b))
+
+            // RBR — Demand continuation
+            else if isBull(legInOff) and isBull(0)
+                demand  := true
+                patCode := 1
+                proxVal := bodyTop(1)
+                distVal := wickLow(1)
+                for b = 2 to bc
+                    proxVal := math.max(proxVal, bodyTop(b))
+                    distVal := math.min(distVal, wickLow(b))
+
+            // RBD — Supply reversal
+            else if isBull(legInOff) and isBear(0)
+                demand  := false
+                patCode := 2
+                proxVal := bodyBot(1)
+                for b = 2 to bc
+                    proxVal := math.min(proxVal, bodyBot(b))
+                distVal := wickHigh(legInOff)
+                for b = 1 to bc
+                    distVal := math.max(distVal, wickHigh(b))
+
+            // DBD — Supply continuation
+            else if isBear(legInOff) and isBear(0)
+                demand  := false
+                patCode := 3
+                proxVal := bodyBot(1)
+                distVal := wickHigh(1)
+                for b = 2 to bc
+                    proxVal := math.min(proxVal, bodyBot(b))
+                    distVal := math.max(distVal, wickHigh(b))
+
+            if not na(proxVal)
+                float avgBaseRange = 0.0
+                for b = 1 to bc
+                    avgBaseRange += cRange(b)
+                avgBaseRange /= bc
+                float legMult = avgBaseRange > 0 ? cBody(0) / avgBaseRange : 0.0
+                bool  gapF    = hasGapUp(0) or hasGapDn(0)
+                found   := true
+                zTop    := demand ? proxVal : distVal
+                zBot    := demand ? distVal : proxVal
+                zProx   := proxVal
+                zDist   := distVal
+                zDemand := demand
+                zPat    := patCode
+                zBases  := bc
+                zLegStr := legMult
+                zGap    := gapF
+                break
+    [found, zTop, zBot, zProx, zDist, zDemand, zPat, zBases, zLegStr, zGap]
+
+patLabel(int code) =>
+    code == 0 ? "DBR" : code == 1 ? "RBR" : code == 2 ? "RBD" : "DBD"
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ODD ENHANCER SCORE (/7)
+// ══════════════════════════════════════════════════════════════════════════════
+
+scoreFreshness(int fresh) =>
+    fresh == FRESH_NEW ? 2 : fresh == FRESH_TESTED ? 1 : 0
+
+scoreLegStrength(float legMult, bool gapF) =>
+    gapF or legMult >= strongLegMult ? 2 : legMult >= strongLegMult * 0.75 ? 1 : 0
+
+scoreTimeInZone(int bases) =>
+    bases <= 2 ? 2 : bases == 3 ? 1 : 0
+
+scoreAlignment(int action) =>
+    action == ACT_LONG or action == ACT_SHORT ? 1 : 0
+
+calcOddScore(int fresh, float legMult, bool gapF, int bases, int action) =>
+    fresh == FRESH_VIOLATED ? 0 :
+         scoreFreshness(fresh) +
+         scoreLegStrength(legMult, gapF) +
+         scoreTimeInZone(bases) +
+         scoreAlignment(action)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// LTF ZONE STORAGE (chart timeframe = LTF)
+// ══════════════════════════════════════════════════════════════════════════════
+
+var float[] zTops      = array.new_float()
+var float[] zBots      = array.new_float()
+var float[] zProx      = array.new_float()
+var float[] zDist      = array.new_float()
+var bool[]  zDemand    = array.new_bool()
+var int[]   zPat       = array.new_int()
+var int[]   zBases     = array.new_int()
+var float[] zLegStr    = array.new_float()
+var bool[]  zGap       = array.new_bool()
+var int[]   zFresh     = array.new_int()
+var int[]   zBar       = array.new_int()
+var int[]   zScore     = array.new_int()
+var int[]   zAction    = array.new_int()
+var box[]   zBoxes     = array.new_box()
+var label[] zLabels    = array.new_label()
+var line[]  zProxLines = array.new_line()
+var line[]  zDistLines = array.new_line()
+
+pushZone(float top, float bot, float prox, float dist, bool demand, int pat, int bases, float legStr, bool gapF) =>
+    array.push(zTops, top)
+    array.push(zBots, bot)
+    array.push(zProx, prox)
+    array.push(zDist, dist)
+    array.push(zDemand, demand)
+    array.push(zPat, pat)
+    array.push(zBases, bases)
+    array.push(zLegStr, legStr)
+    array.push(zGap, gapF)
+    array.push(zFresh, FRESH_NEW)
+    array.push(zBar, bar_index)
+    array.push(zScore, 0)
+    array.push(zAction, ACT_NONE)
+    if showZones
+        color bc = demand ? color.new(color.green, 85) : color.new(color.red, 85)
+        array.push(zBoxes, box.new(bar_index, top, bar_index + 20, bot, border_color=bc, bgcolor=bc, border_width=1))
+    else
+        array.push(zBoxes, box(na))
+    if showLines
+        color pc = demand ? color.green : color.red
+        array.push(zProxLines, line.new(bar_index, prox, bar_index + 20, prox, color=pc, width=1, style=line.style_solid))
+        array.push(zDistLines, line.new(bar_index, dist, bar_index + 20, dist, color=pc, width=1, style=line.style_dashed))
+    else
+        array.push(zProxLines, line(na))
+        array.push(zDistLines, line(na))
+    array.push(zLabels, label(na))
+
+trimZones(int cap) =>
+    while array.size(zTops) > cap
+        if showZones and not na(array.get(zBoxes, 0))
+            box.delete(array.get(zBoxes, 0))
+        if showLines
+            if not na(array.get(zProxLines, 0))
+                line.delete(array.get(zProxLines, 0))
+            if not na(array.get(zDistLines, 0))
+                line.delete(array.get(zDistLines, 0))
+        if showLabels and not na(array.get(zLabels, 0))
+            label.delete(array.get(zLabels, 0))
+        array.shift(zTops)
+        array.shift(zBots)
+        array.shift(zProx)
+        array.shift(zDist)
+        array.shift(zDemand)
+        array.shift(zPat)
+        array.shift(zBases)
+        array.shift(zLegStr)
+        array.shift(zGap)
+        array.shift(zFresh)
+        array.shift(zBar)
+        array.shift(zScore)
+        array.shift(zAction)
+        array.shift(zBoxes)
+        array.shift(zProxLines)
+        array.shift(zDistLines)
+        array.shift(zLabels)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HTF CURVE — zone arrays on HTF via request.security()
+// ══════════════════════════════════════════════════════════════════════════════
+
+f_htfCurve() =>
+    var float[] hTop   = array.new_float()
+    var float[] hBot   = array.new_float()
+    var float[] hProx  = array.new_float()
+    var bool[]  hDemand = array.new_bool()
+    var int[]   hFresh = array.new_int()
+
+    [nf, nt, nb, np, nd, ndm, npat, nbc, nls, ngap] = detectNewZone()
+    if nf
+        array.push(hTop, nt)
+        array.push(hBot, nb)
+        array.push(hProx, np)
+        array.push(hDemand, ndm)
+        array.push(hFresh, FRESH_NEW)
+        while array.size(hTop) > maxZones
+            array.shift(hTop)
+            array.shift(hBot)
+            array.shift(hProx)
+            array.shift(hDemand)
+            array.shift(hFresh)
+
+    int hSize = array.size(hTop)
+    if hSize > 0
+        for i = 0 to hSize - 1
+            if array.get(hFresh, i) < FRESH_VIOLATED
+                float tp = array.get(hTop, i)
+                float bt = array.get(hBot, i)
+                float px = array.get(hProx, i)
+                bool  dm = array.get(hDemand, i)
+                bool touched = low <= tp and high >= bt
+                if touched and array.get(hFresh, i) == FRESH_NEW
+                    array.set(hFresh, i, FRESH_TESTED)
+                if dm and close < px and high >= px
+                    array.set(hFresh, i, FRESH_VIOLATED)
+                if not dm and close > px and low <= px
+                    array.set(hFresh, i, FRESH_VIOLATED)
+
+    float nearSupProx = na
+    float nearDemProx = na
+    if hSize > 0
+        for i = 0 to hSize - 1
+            if array.get(hFresh, i) < FRESH_VIOLATED
+                float px = array.get(hProx, i)
+                bool  dm = array.get(hDemand, i)
+                if not dm and px > close and (na(nearSupProx) or px < nearSupProx)
+                    nearSupProx := px
+                if dm and px < close and (na(nearDemProx) or px > nearDemProx)
+                    nearDemProx := px
+
+    float rangeTop = nearSupProx
+    float rangeBot = nearDemProx
+    if na(rangeTop)
+        rangeTop := ta.highest(high, curveLookback)
+    if na(rangeBot)
+        rangeBot := ta.lowest(low, curveLookback)
+
+    float rng = rangeTop - rangeBot
+    int curve = CURVE_EQ
+    if rng > 0
+        float third = rng / 3.0
+        float lowBound = rangeBot + third
+        float hiBound  = rangeBot + 2.0 * third
+        curve := close <= lowBound ? CURVE_LOW : close >= hiBound ? CURVE_HIGH : CURVE_EQ
+    curve
+
+curveState = request.security(syminfo.tickerid, htf, f_htfCurve(), lookahead=barmerge.lookahead_off)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ITF TREND via request.security()
+// ══════════════════════════════════════════════════════════════════════════════
+
+f_itfTrend() =>
+    float sma = ta.sma(close, smaLen)
+    float atr = ta.atr(atrLen)
+    float slope = sma - sma[slopeLen]
+    float slopeNorm = atr != 0.0 ? slope / atr : 0.0
+    int tr = slopeNorm > slopeThresh ? TREND_BULL : slopeNorm < -slopeThresh ? TREND_BEAR : TREND_SIDE
+    [tr, sma]
+
+[itfTrend, itfSma] = request.security(syminfo.tickerid, itf, f_itfTrend(), lookahead=barmerge.lookahead_off)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SESSION FILTER (IST)
+// ══════════════════════════════════════════════════════════════════════════════
+
+inSession = not sessionFilter or not na(time(timeframe.period, sessionTime, "Asia/Kolkata"))
+
+// ══════════════════════════════════════════════════════════════════════════════
+// LTF CHART TF WARNING
+// ══════════════════════════════════════════════════════════════════════════════
+
+ltfMismatch = timeframe.in_seconds(timeframe.period) != timeframe.in_seconds(ltf)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DETECT NEW LTF ZONE & UPDATE FRESHNESS
+// ══════════════════════════════════════════════════════════════════════════════
+
+[zoneFound, nTop, nBot, nProx, nDist, nDemand, nPat, nBases, nLegStr, nGap] = detectNewZone()
+var bool alertNewZone = false
+alertNewZone := false
+
+if zoneFound and not barstate.isfirst
+    pushZone(nTop, nBot, nProx, nDist, nDemand, nPat, nBases, nLegStr, nGap)
+    trimZones(maxZones)
+    alertNewZone := true
+
+int zoneCount = array.size(zTops)
+
+if zoneCount > 0
+    for i = 0 to zoneCount - 1
+        if array.get(zFresh, i) < FRESH_VIOLATED
+            float tp = array.get(zTops, i)
+            float bt = array.get(zBots, i)
+            float px = array.get(zProx, i)
+            bool  dm = array.get(zDemand, i)
+            bool touched = low <= tp and high >= bt
+            if touched and array.get(zFresh, i) == FRESH_NEW
+                array.set(zFresh, i, FRESH_TESTED)
+            if dm and close < px and high >= px
+                array.set(zFresh, i, FRESH_VIOLATED)
+            if not dm and close > px and low <= px
+                array.set(zFresh, i, FRESH_VIOLATED)
+
+// Recompute scores & actions for all zones
+if zoneCount > 0
+    for i = 0 to zoneCount - 1
+        if array.get(zFresh, i) < FRESH_VIOLATED
+            int act = matrixAction(curveState, array.get(zDemand, i), itfTrend)
+            int sc  = calcOddScore(array.get(zFresh, i), array.get(zLegStr, i), array.get(zGap, i), array.get(zBases, i), act)
+            array.set(zScore, i, sc)
+            array.set(zAction, i, act)
+            if showLabels
+                string lblTxt = patLabel(array.get(zPat, i)) + " " + str.tostring(sc) + "/7 " + actionLabel(act)
+                int zbi = array.get(zBar, i)
+                float midY = (array.get(zTops, i) + array.get(zBots, i)) / 2.0
+                if na(array.get(zLabels, i))
+                    array.set(zLabels, i, label.new(zbi, midY, lblTxt, style=label.style_label_left, color=color.new(color.gray, 30), textcolor=color.white, size=size.small))
+                else
+                    label.set_text(array.get(zLabels, i), lblTxt)
+
+// Extend zone drawings to current bar
+if (showZones or showLines) and zoneCount > 0
+    for i = 0 to zoneCount - 1
+        int zbi = array.get(zBar, i)
+        if showZones and not na(array.get(zBoxes, i))
+            box.set_right(array.get(zBoxes, i), bar_index + 5)
+        if showLines
+            if not na(array.get(zProxLines, i))
+                line.set_x2(array.get(zProxLines, i), bar_index + 5)
+            if not na(array.get(zDistLines, i))
+                line.set_x2(array.get(zDistLines, i), bar_index + 5)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// NEAREST OPPOSING ZONE PROXIMAL (for dynamic target)
+// ══════════════════════════════════════════════════════════════════════════════
+
+nearestOppProx(bool forLong, float fromPrice) =>
+    float result = na
+    int n = array.size(zTops)
+    if n > 0
+        for i = 0 to n - 1
+            if array.get(zFresh, i) < FRESH_VIOLATED
+                bool dm = array.get(zDemand, i)
+                float px = array.get(zProx, i)
+                if forLong and not dm and px > fromPrice and (na(result) or px < result)
+                    result := px
+                if not forLong and dm and px < fromPrice and (na(result) or px > result)
+                    result := px
+    result
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TRADE PLANNING — no strategy.* calls here (global scope only for orders)
+// ══════════════════════════════════════════════════════════════════════════════
+
+calcQty(float risk) =>
+    risk > 0 ? math.max(1, math.floor(riskPerTradeRs / risk)) : 0.0
+
+// Returns [valid, target, qty, isLong]
+planTrade(bool isLong, float entry, float sl) =>
+    float risk = math.abs(entry - sl)
+    bool  valid = false
+    float target = na
+    float qty = 0.0
+    bool  slOk = isLong ? sl < entry : sl > entry
+    if risk > 0 and slOk and (isLong or allowShort)
+        target := isLong ? entry + risk * rr : entry - risk * rr
+        if dynamicTarget
+            float opp = nearestOppProx(isLong, entry)
+            if not na(opp)
+                float dynRR = isLong ? (opp - entry) / risk : (entry - opp) / risk
+                if dynRR >= minRR
+                    target := opp
+        float actualRR = isLong ? (target - entry) / risk : (entry - target) / risk
+        qty := calcQty(risk)
+        if usePctQty
+            valid := actualRR >= minRR
+        else
+            valid := actualRR >= minRR and qty >= 1
+    [valid, target, qty, isLong]
+
+proxTouchBand(float px) =>
+    px * proxTouchPct / 100.0
+
+// ══════════════════════════════════════════════════════════════════════════════
+// UNIFIED TRADE ENGINE — one entry per bar, best zone wins (score → proximity)
+// Type-1: high-score LONG/SHORT + proximal touch (market at close)
+// Type-2: lower score or CONFIRM action + re-cross after in-zone visit
+// CONFIRM never uses Type-1
+// ══════════════════════════════════════════════════════════════════════════════
+
+var bool alertType1 = false
+var bool alertType2 = false
+alertType1 := false
+alertType2 := false
+
+var bool signalLong  = false
+var bool signalShort = false
+signalLong  := false
+signalShort := false
+
+var string lastSignal = "—"
+
+var line entryLine = na
+var line slLine    = na
+var line tpLine    = na
+
+// Candidate selection (no orders)
+int   bestIdx      = na
+int   bestScore    = -1
+float bestDist     = na
+int   bestEntryTyp = 0
+bool  bestIsLong   = false
+
+if strategy.position_size == 0 and not barstate.isfirst and inSession and zoneCount > 0
+    for i = 0 to zoneCount - 1
+        if array.get(zFresh, i) >= FRESH_VIOLATED
+            continue
+        int sc  = array.get(zScore, i)
+        int act = array.get(zAction, i)
+        if sc < minScore or act == ACT_NONE
+            continue
+
+        bool  dm   = array.get(zDemand, i)
+        float px   = array.get(zProx, i)
+        float ds   = array.get(zDist, i)
+        float zTop = array.get(zTops, i)
+        float zBot = array.get(zBots, i)
+        float band = proxTouchBand(px)
+
+        bool dirLong  = false
+        bool dirShort = false
+        int  entryTyp = 0
+
+        if act == ACT_CONFIRM
+            // CONFIRM always uses Type-2
+            bool inZone = low <= zTop and high >= zBot
+            bool crossedUp   = ta.crossover(close, px)
+            bool crossedDown = ta.crossunder(close, px)
+            dirLong  := dm and inZone and (crossedUp or (close > px and close[1] <= px))
+            dirShort := not dm and inZone and (crossedDown or (close < px and close[1] >= px))
+            entryTyp := 2
+        else if act == ACT_LONG or act == ACT_SHORT
+            bool dirOk = (act == ACT_LONG and dm) or (act == ACT_SHORT and not dm)
+            if not dirOk
+                continue
+            if sc >= scoreType1Thresh
+                // Type-1: proximal touch with tolerance, close holds correct side
+                bool touchedProx = dm ? low <= px + band : high >= px - band
+                bool closeOk     = dm ? close >= px : close <= px
+                if touchedProx and closeOk
+                    dirLong  := dm
+                    dirShort := not dm
+                    entryTyp := 1
+            else
+                // Type-2: confirmation cross after in-zone visit
+                bool inZone = low <= zTop and high >= zBot
+                bool crossedUp   = ta.crossover(close, px)
+                bool crossedDown = ta.crossunder(close, px)
+                bool confirmLong  = dm and inZone and (crossedUp or (close > px and close[1] <= px))
+                bool confirmShort = not dm and inZone and (crossedDown or (close < px and close[1] >= px))
+                dirLong  := confirmLong
+                dirShort := confirmShort
+                entryTyp := 2
+
+        bool wantLong  = dirLong
+        bool wantShort = dirShort and allowShort
+        if not wantLong and not wantShort
+            continue
+
+        float distToProx = math.abs(close - px)
+        bool  isBetter   = na(bestIdx) or sc > bestScore or (sc == bestScore and distToProx < bestDist)
+        if isBetter
+            bestIdx      := i
+            bestScore    := sc
+            bestDist     := distToProx
+            bestEntryTyp := entryTyp
+            bestIsLong   := wantLong
+
+// Order execution at global scope only
+bool traded = false
+float tradeEntry  = na
+float tradeSl     = na
+float tradeTarget = na
+float tradeQty    = 0.0
+
+if not na(bestIdx)
+    float ds    = array.get(zDist, bestIdx)
+    tradeEntry  := close
+    tradeSl     := bestIsLong ? ds - slBuffer : ds + slBuffer
+    [valid, target, qty, isLong] = planTrade(bestIsLong, tradeEntry, tradeSl)
+    if valid
+        tradeTarget := target
+        tradeQty    := qty
+        string comment = bestEntryTyp == 1 ? "T1" : "T2"
+        if isLong
+            if usePctQty
+                strategy.entry("Long", strategy.long, comment=comment)
+            else
+                strategy.entry("Long", strategy.long, qty=qty, comment=comment)
+            strategy.exit("Long Exit", "Long", stop=tradeSl, limit=tradeTarget)
+            traded      := true
+            signalLong  := true
+            lastSignal  := "BUY " + comment
+            if bestEntryTyp == 1
+                alertType1 := true
+            else
+                alertType2 := true
+        else if allowShort
+            if usePctQty
+                strategy.entry("Short", strategy.short, comment=comment)
+            else
+                strategy.entry("Short", strategy.short, qty=qty, comment=comment)
+            strategy.exit("Short Exit", "Short", stop=tradeSl, limit=tradeTarget)
+            traded       := true
+            signalShort  := true
+            lastSignal   := "SELL " + comment
+            if bestEntryTyp == 1
+                alertType1 := true
+            else
+                alertType2 := true
+
+if traded and showLines
+    if not na(entryLine)
+        line.delete(entryLine)
+    if not na(slLine)
+        line.delete(slLine)
+    if not na(tpLine)
+        line.delete(tpLine)
+    entryLine := line.new(bar_index, tradeEntry, bar_index + 10, tradeEntry, color=color.blue, width=2)
+    slLine    := line.new(bar_index, tradeSl, bar_index + 10, tradeSl, color=color.red, width=1)
+    tpLine    := line.new(bar_index, tradeTarget, bar_index + 10, tradeTarget, color=color.green, width=1)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// VISUALS — Curve background tint & ITF SMA
+// ══════════════════════════════════════════════════════════════════════════════
+
+curveColor = curveState == CURVE_LOW ? color.new(color.green, 93) :
+     curveState == CURVE_HIGH ? color.new(color.red, 93) :
+     color.new(color.gray, 96)
+bgcolor(curveColor, title="Curve State")
+
+plot(itfSma, "ITF SMA", color=color.new(color.orange, 0), linewidth=2)
+
+plotshape(showSignals and traded and signalLong,  title="BUY Signal",  style=shape.triangleup,   location=location.belowbar, color=color.lime, size=size.normal, text="BUY")
+plotshape(showSignals and traded and signalShort, title="SELL Signal", style=shape.triangledown, location=location.abovebar, color=color.red,  size=size.normal, text="SELL")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INFO TABLE
+// ══════════════════════════════════════════════════════════════════════════════
+
+var table infoTbl = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 80), border_width=1)
+
+if barstate.islast
+    string curveTxt = curveState == CURVE_LOW ? "LOW (Buy)" : curveState == CURVE_HIGH ? "HIGH (Sell)" : "EQUILIBRIUM"
+    string trendTxt = itfTrend == TREND_BULL ? "Bullish" : itfTrend == TREND_BEAR ? "Bearish" : "Sideways"
+    string posTxt   = strategy.position_size > 0 ? "Long" : strategy.position_size < 0 ? "Short" : "Flat"
+    table.cell(infoTbl, 0, 0, "Preset", text_color=color.gray, text_size=size.small)
+    table.cell(infoTbl, 1, 0, preset, text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 0, 1, "HTF/ITF/LTF", text_color=color.gray, text_size=size.small)
+    table.cell(infoTbl, 1, 1, htf + " / " + itf + " / " + ltf, text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 0, 2, "Curve", text_color=color.gray, text_size=size.small)
+    table.cell(infoTbl, 1, 2, curveTxt, text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 0, 3, "Trend", text_color=color.gray, text_size=size.small)
+    table.cell(infoTbl, 1, 3, trendTxt, text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 0, 4, "Zones", text_color=color.gray, text_size=size.small)
+    table.cell(infoTbl, 1, 4, str.tostring(array.size(zTops)), text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 0, 5, "Trades", text_color=color.gray, text_size=size.small)
+    table.cell(infoTbl, 1, 5, str.tostring(strategy.closedtrades), text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 0, 6, "Open Pos", text_color=color.gray, text_size=size.small)
+    table.cell(infoTbl, 1, 6, posTxt, text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 0, 7, "Last Signal", text_color=color.gray, text_size=size.small)
+    table.cell(infoTbl, 1, 7, lastSignal, text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 0, 8, "LTF Match", text_color=color.gray, text_size=size.small)
+    table.cell(infoTbl, 1, 8, ltfMismatch ? "⚠ Mismatch" : "OK", text_color=ltfMismatch ? color.yellow : color.lime, text_size=size.small)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ALERTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(alertNewZone, "New Valid Zone", "Demand & Supply: new zone detected on {{ticker}} {{interval}}")
+alertcondition(alertType1, "Type-1 Proximal Entry", "Demand & Supply: Type-1 proximal entry on {{ticker}} {{interval}}")
+alertcondition(alertType2, "Type-2 Confirmation Entry", "Demand & Supply: Type-2 confirmation entry on {{ticker}} {{interval}}")
