@@ -22,6 +22,7 @@ import {
   deriveWageRates,
   emptyDay,
   formatPayrollMoney,
+  advancePayrollPeriod,
   isStaffEmployedOnDay,
   isSunday,
   lineBalanceDue,
@@ -85,11 +86,21 @@ const editingAdvanceId = ref<string | null>(null)
 const advanceForm = reactive({
   staff_id: '',
   date: new Date().toISOString().slice(0, 10),
+  payroll_period: currentPeriod(),
   amount: 0,
   mode: 'cash' as PayrollPaymentMode,
   narration: '',
   postVoucher: true,
 })
+
+watch(
+  () => advanceForm.date,
+  (date) => {
+    if (!showAdvanceModal.value) return
+    const suggested = advancePayrollPeriod({ date })
+    if (suggested) advanceForm.payroll_period = suggested
+  },
+)
 
 const showStaffPayModal = ref(false)
 const staffPayStaffId = ref('')
@@ -533,8 +544,10 @@ async function paySalary() {
 function openAdvance() {
   editingAdvanceId.value = null
   advanceForm.staff_id = periodStaff.value[0]?.id || ''
-  advanceForm.date = `${period.value}-01`
+  advanceForm.date = new Date().toISOString().slice(0, 10)
+  advanceForm.payroll_period = advancePayrollPeriod({ date: advanceForm.date }) || period.value
   advanceForm.amount = 0
+  advanceForm.mode = 'cash'
   advanceForm.narration = ''
   advanceForm.postVoucher = true
   showAdvanceModal.value = true
@@ -545,6 +558,7 @@ function openEditAdvance(a: StaffAdvance) {
   editingAdvanceId.value = a.id
   advanceForm.staff_id = a.staff_id
   advanceForm.date = a.date
+  advanceForm.payroll_period = a.payroll_period || advancePayrollPeriod(a) || period.value
   advanceForm.amount = a.amount
   advanceForm.mode = a.mode
   advanceForm.narration = a.narration
@@ -553,9 +567,13 @@ function openEditAdvance(a: StaffAdvance) {
 }
 
 async function saveAdvance() {
+  if (!advanceForm.payroll_period || advanceForm.payroll_period.length < 7) {
+    return alert('Adjustment month select karein.')
+  }
   const payload = {
     ...advanceForm,
     amount: Number(advanceForm.amount),
+    payroll_period: advanceForm.payroll_period.slice(0, 7),
   }
   const res = editingAdvanceId.value
     ? await store.updateAdvance(editingAdvanceId.value, payload, advanceForm.postVoucher)
@@ -1227,6 +1245,7 @@ onMounted(async () => {
           <thead class="bg-slate-50 text-xs text-slate-500 uppercase">
             <tr>
               <th class="px-3 py-2" :class="advanceColSort.thClass('date')" @click="advanceColSort.toggle('date', 'desc')">Date{{ advanceColSort.indicator('date') }}</th>
+              <th class="px-3 py-2">Adjust month</th>
               <th class="px-3 py-2" :class="advanceColSort.thClass('staff_name')" @click="advanceColSort.toggle('staff_name')">Staff{{ advanceColSort.indicator('staff_name') }}</th>
               <th class="px-3 py-2" :class="advanceColSort.thClass('amount', 'right')" @click="advanceColSort.toggle('amount', 'desc')">Amount{{ advanceColSort.indicator('amount') }}</th>
               <th class="px-3 py-2" :class="advanceColSort.thClass('mode')" @click="advanceColSort.toggle('mode')">Mode{{ advanceColSort.indicator('mode') }}</th>
@@ -1238,6 +1257,7 @@ onMounted(async () => {
           <tbody>
             <tr v-for="a in sortedAdvancesTable" :key="a.id" class="border-t border-slate-100">
               <td class="px-3 py-2 text-xs text-slate-500">{{ a.date }}</td>
+              <td class="px-3 py-2 text-xs font-medium text-navy">{{ periodLabel(a.payroll_period || advancePayrollPeriod(a) || '—') }}</td>
               <td class="px-3 py-2 font-semibold text-navy">{{ a.staff_name }}</td>
               <td class="px-3 py-2 text-right font-bold">₹{{ a.amount.toLocaleString('en-IN') }}</td>
               <td class="px-3 py-2 text-xs">{{ a.mode }}</td>
@@ -1633,23 +1653,32 @@ onMounted(async () => {
             <input v-model="advanceForm.date" type="date" class="pp-input" />
           </div>
           <div>
+            <label class="pp-label">Adjust in salary month *</label>
+            <input v-model="advanceForm.payroll_period" type="month" class="pp-input" />
+          </div>
+        </div>
+        <p class="text-xs text-slate-500 -mt-1">
+          Date badalne par default month auto-suggest hota hai (1–8 → pichhla month). Aap manually bhi badal sakte ho — usi month ki salary me adjust hoga.
+        </p>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
             <label class="pp-label">Amount ₹</label>
             <input v-model.number="advanceForm.amount" type="number" min="1" class="pp-input" />
           </div>
-        </div>
-        <div>
-          <label class="pp-label">Mode</label>
-          <select v-model="advanceForm.mode" class="pp-input">
-            <option value="cash">Cash</option>
-            <option value="transfer">Bank transfer</option>
-          </select>
+          <div>
+            <label class="pp-label">Mode</label>
+            <select v-model="advanceForm.mode" class="pp-input">
+              <option value="cash">Cash</option>
+              <option value="transfer">Bank transfer</option>
+            </select>
+          </div>
         </div>
         <div>
           <label class="pp-label">Note</label>
           <input v-model="advanceForm.narration" class="pp-input" placeholder="Optional" />
         </div>
         <p class="text-xs text-slate-500">
-          Date 1–8 hone par advance pichhle month ki salary me adjust hota hai; 9 tarikh ke baad isi month me.
+          Jo salary month select kiya hai, usi month Calculate par advance adjust hoga.
         </p>
         <label class="flex items-center gap-2 text-sm">
           <input v-model="advanceForm.postVoucher" type="checkbox" />
