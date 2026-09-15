@@ -2870,7 +2870,7 @@ onMounted(async () => {
                 <th class="p-2 text-right">Pack KG</th>
                 <th class="p-2 text-right">Bags *</th>
                 <th class="p-2 text-right">Total KG</th>
-                <th class="p-2 text-left">Remark</th>
+                <th class="p-2 text-left">For party/order</th>
               </tr>
             </thead>
             <tbody class="divide-y">
@@ -2903,7 +2903,7 @@ onMounted(async () => {
                   <input v-model.number="row.weight" type="number" min="0" step="0.001" class="pp-input !py-1 text-right" />
                 </td>
                 <td class="p-2">
-                  <input v-model="row.remark" class="pp-input !py-1" placeholder="Party / item" />
+                  <input v-model="row.remark" class="pp-input !py-1" placeholder="For party / order" title="Kis party ya order ke liye ye reel" />
                 </td>
               </tr>
             </tbody>

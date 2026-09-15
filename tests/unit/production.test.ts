@@ -4,6 +4,10 @@ import {
   findSameConfigActiveReels,
   filterReelLinkedMovements,
   filterReelsForDeletion,
+  extractReelUseFromMovementNotes,
+  reelConsumptionEntries,
+  formatReelConsumptionSummary,
+  buildReelConsumptionLookup,
   generateCopyReelNumbers,
   normalizeReelColor,
   proposePurchaseConsumableSpecs,
@@ -252,6 +256,71 @@ describe('filterReelsForDeletion / filterReelLinkedMovements', () => {
       { id: 'm4', stock_ref_id: 'c', is_deleted: false },
     ] as any
     expect(filterReelLinkedMovements(moves, ['a', 'b'])).toHaveLength(2)
+  })
+})
+
+describe('reel consumption party / use labels', () => {
+  it('extracts party/order from auto consume notes', () => {
+    expect(extractReelUseFromMovementNotes('Full consume selected - UK Paper order')).toBe('UK Paper order')
+    expect(
+      extractReelUseFromMovementNotes(
+        'Full consume via remaining update - Remaining set to 0 KG (was 120.000) · Acme · 3-ply',
+      ),
+    ).toBe('Acme · 3-ply')
+    expect(extractReelUseFromMovementNotes('Remaining set to 50 KG (was 120.000)')).toBe('')
+  })
+
+  it('summarizes consumption history with job and use labels', () => {
+    const moves = [
+      {
+        id: 'm1',
+        stock_ref_id: 'r1',
+        source: 'consumption',
+        is_deleted: false,
+        date: '2026-03-01',
+        created_at: '2026-03-01T10:00:00.000Z',
+        weight_out: 40,
+        notes: 'Full consume selected - Party A',
+        job_id: 'j1',
+      },
+      {
+        id: 'm2',
+        stock_ref_id: 'r1',
+        source: 'purchase',
+        is_deleted: false,
+        date: '2026-02-01',
+        weight_out: 0,
+        weight_in: 100,
+        notes: 'opening',
+      },
+      {
+        id: 'm3',
+        stock_ref_id: 'r1',
+        source: 'consumption',
+        is_deleted: false,
+        date: '2026-03-05',
+        created_at: '2026-03-05T10:00:00.000Z',
+        weight_out: 60,
+        notes: 'Partial via remaining weight - Remaining set to 0 KG (was 60.000) · Finish order',
+      },
+    ] as any
+
+    const entries = reelConsumptionEntries(moves, 'r1')
+    expect(entries).toHaveLength(2)
+    expect(entries[0].useLabel).toBe('Party A')
+    expect(entries[1].useLabel).toBe('Finish order')
+
+    const summary = formatReelConsumptionSummary(entries, {
+      jobLabel: (id) => (id === 'j1' ? 'JOB-9 - Party A' : id),
+    })
+    expect(summary.count).toBe(2)
+    expect(summary.short).toContain('JOB-9 - Party A')
+    expect(summary.short).toContain('Finish order')
+    expect(summary.detail.split('\n')).toHaveLength(2)
+
+    const lookup = buildReelConsumptionLookup(moves, ['r1', 'missing'])
+    expect(lookup.get('r1')?.count).toBe(2)
+    expect(lookup.get('missing')?.short).toBe('—')
   })
 })
 

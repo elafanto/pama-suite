@@ -23,6 +23,7 @@ function deckleOf(reel: ReelStock): string {
 }
 
 export interface ReelWisePdfRow {
+  id: string
   reelNo: string
   paperType: string
   mill: string
@@ -65,6 +66,7 @@ export function buildReelWisePdfRows(reels: ReelStock[]): ReelWisePdfRow[] {
   return [...reels]
     .sort((a, b) => (a.reel_no || '').localeCompare(b.reel_no || '', undefined, { numeric: true }))
     .map((r) => ({
+      id: r.id,
       reelNo: r.reel_no || '—',
       paperType: normalizePaperType(r.paper_type),
       mill: r.supplier_name || '—',
@@ -363,11 +365,20 @@ export function downloadReelPhysicalVerificationPdf(opts: {
 export function downloadReelWiseCsv(opts: {
   reels: ReelStock[]
   filename?: string
+  /** Optional: reelId → consumed-on summary text. */
+  consumedOnByReelId?: Record<string, string> | Map<string, string>
 }): { file: string; rows: number } {
   const rows = buildReelWisePdfRows(opts.reels)
+  const consumedLookup = opts.consumedOnByReelId
+  const consumedOf = (reelId: string) => {
+    if (!consumedLookup) return '—'
+    if (consumedLookup instanceof Map) return consumedLookup.get(reelId) || '—'
+    return consumedLookup[reelId] || '—'
+  }
   const headers = [
     'S.No', 'Reel No', 'Type', 'Mill', 'Deckle', 'GSM', 'BF', 'Color', 'Condition',
-    'Opening KG', 'Current KG', 'Status', 'In Date', 'Purchase Bill', 'Remark',
+    'Opening KG', 'Current KG', 'Status', 'In Date', 'Purchase Bill',
+    'For party/order', 'Consumed on',
     'Found (Y/N)', 'Physical KG', 'Notes',
   ]
   const lines = [
@@ -388,6 +399,7 @@ export function downloadReelWiseCsv(opts: {
       r.date,
       r.billNo,
       r.remark,
+      consumedOf(r.id),
       '',
       '',
       '',

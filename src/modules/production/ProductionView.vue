@@ -5,7 +5,7 @@ import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useProductionStore } from '@/stores/production'
-import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveRemainingWeightUpdate, resolveDecklePair, deckleFromMm, deckleFromInch, formatDeckleDisplay, estimateReelWeightKg, REEL_CORE_DIA_MM, filterReelsForDeletion, filterReelLinkedMovements, STAGE_LABELS, STOCK_LABELS, CONSUMABLE_TYPES, consumableLotTotals, findDuplicateReelNosInList, findReelNosAlreadyInStock, normalizeInkColor, INK_COLOR_SUGGESTIONS, type ConsumableStockType, type ReelIntakeCondition, type ReelInventoryBreakdownRow } from '@/services/production'
+import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveRemainingWeightUpdate, resolveDecklePair, deckleFromMm, deckleFromInch, formatDeckleDisplay, estimateReelWeightKg, REEL_CORE_DIA_MM, filterReelsForDeletion, filterReelLinkedMovements, buildReelConsumptionLookup, extractReelUseFromMovementNotes, STAGE_LABELS, STOCK_LABELS, CONSUMABLE_TYPES, consumableLotTotals, findDuplicateReelNosInList, findReelNosAlreadyInStock, normalizeInkColor, INK_COLOR_SUGGESTIONS, type ConsumableStockType, type ReelIntakeCondition, type ReelInventoryBreakdownRow } from '@/services/production'
 import { downloadReelAbstractStockPdf, downloadReelLowStockPdf, downloadReelPhysicalVerificationPdf, downloadReelWiseCsv, downloadReelWiseStockPdf } from '@/services/reelStockPdf'
 import { useTableSort } from '@/composables/useTableSort'
 import type { ConsumableLot, PaperType, ProductionStage, ProductionStockType, ReelStock } from '@/types/models'
@@ -443,7 +443,34 @@ const recentReelMoves = computed(() => {
   return production.movements
     .filter((m) => m.stock_type === 'raw_reel')
     .slice(0, 12)
+    .map((move) => {
+      const reel = move.stock_ref_id
+        ? production.reels.find((r) => r.id === move.stock_ref_id)
+        : undefined
+      return {
+        ...move,
+        reelNo: reel?.reel_no || '',
+        forParty: (reel?.remark || '').trim(),
+        consumeOn: move.source === 'consumption'
+          ? (move.job_id ? jobLabel(move.job_id) : '') || extractReelUseFromMovementNotes(move.notes)
+          : '',
+      }
+    })
 })
+
+/** Per-reel: kis pe consume hui (date · KG · party/job). */
+const reelConsumeById = computed(() =>
+  buildReelConsumptionLookup(
+    production.movements,
+    production.reels.map((r) => r.id),
+    { jobLabel },
+  ),
+)
+
+function reelConsumeInfo(reelId: string) {
+  return reelConsumeById.value.get(reelId) || { short: '—', detail: '', count: 0 }
+}
+
 const reelInventory = computed(() => reelInventorySummary(production.reels, production.movements))
 /** Zero-stock breakdown rows hidden unless toggled. */
 const showBreakdownZeroStock = ref(false)
@@ -513,7 +540,14 @@ function downloadPhysicalVerificationPdf() {
 }
 
 function downloadReelDetailCsv() {
-  const res = downloadReelWiseCsv({ reels: filteredReels.value })
+  const consumedMap = new Map<string, string>()
+  for (const [id, info] of reelConsumeById.value) {
+    consumedMap.set(id, info.short)
+  }
+  const res = downloadReelWiseCsv({
+    reels: filteredReels.value,
+    consumedOnByReelId: consumedMap,
+  })
   alert(`CSV saved: ${res.file}\n${res.rows} reel row(s) with reel numbers.`)
 }
 
@@ -1505,8 +1539,8 @@ onMounted(async () => {
             <input
               v-model="consumeRemarkDraft"
               class="pp-input !py-1.5 !text-xs min-w-[12rem] max-w-xs"
-              placeholder="Consume remark (party / job)"
-              title="Full consume pe ye remark lag jayega"
+              placeholder="Consume on — party / order / job"
+              title="Full consume pe ye remark Consumed on column me dikhega"
             />
             <button
               type="button"
@@ -1602,7 +1636,8 @@ onMounted(async () => {
               <th class="p-3" :class="reelSort.thClass('gsm')" @click="reelSort.toggle('gsm')">GSM{{ reelSort.indicator('gsm') }}</th>
               <th class="p-3" :class="reelSort.thClass('bf')" @click="reelSort.toggle('bf')">BF{{ reelSort.indicator('bf') }}</th>
               <th class="p-3" :class="reelSort.thClass('color')" @click="reelSort.toggle('color')">Color{{ reelSort.indicator('color') }}</th>
-              <th class="p-3">Remark</th>
+              <th class="p-3" title="Add / Edit pe jo remark — kis party ya order ke liye reel rakhi">For (party/order)</th>
+              <th class="p-3" title="Consume pe likha remark / job — kab aur kis pe use hui">Consumed on</th>
               <th class="p-3" :class="reelSort.thClass('opening', 'right')" @click="reelSort.toggle('opening', 'desc')">Opening KG{{ reelSort.indicator('opening') }}</th>
               <th class="p-3" :class="reelSort.thClass('current', 'right')" @click="reelSort.toggle('current', 'desc')">Qty left{{ reelSort.indicator('current') }}</th>
               <th class="p-3 text-right">Remaining (KG / Dia)</th>
@@ -1640,7 +1675,15 @@ onMounted(async () => {
               <td class="p-3">{{ reel.gsm }}</td>
               <td class="p-3">{{ reel.bf }}</td>
               <td class="p-3">{{ normalizeReelColor(reel.color) }}</td>
-              <td class="p-3 text-xs text-slate-600 max-w-[10rem] truncate" :title="reel.remark || ''">{{ reel.remark || '—' }}</td>
+              <td class="p-3 text-xs text-slate-700 max-w-[11rem]">
+                <span class="line-clamp-2" :title="reel.remark || ''">{{ reel.remark || '—' }}</span>
+              </td>
+              <td class="p-3 text-xs text-slate-600 max-w-[14rem]">
+                <span
+                  class="line-clamp-3"
+                  :title="reelConsumeInfo(reel.id).detail || reelConsumeInfo(reel.id).short"
+                >{{ reelConsumeInfo(reel.id).short }}</span>
+              </td>
               <td class="p-3 text-right font-mono">{{ n2(reel.opening_weight) }}</td>
               <td
                 class="p-3 text-right font-mono"
@@ -1701,8 +1744,8 @@ onMounted(async () => {
                     v-if="reel.status === 'active' && reel.current_weight > 0"
                     v-model="remainingRemarkDrafts[reel.id]"
                     class="pp-input !py-1 !text-xs w-full"
-                    placeholder="Use remark"
-                    title="Kis party / job me use hui"
+                    placeholder="Consume pe — kis party/order"
+                    title="Kis party / order / job pe use hui (Consumed on column me dikhega)"
                   />
                   <div class="inline-flex flex-wrap items-center justify-end gap-1">
                   <button
@@ -1735,12 +1778,13 @@ onMounted(async () => {
               </td>
             </tr>
             <tr v-if="filteredReels.length === 0">
-              <td colspan="14" class="p-8 text-center text-slate-500">
+              <td colspan="15" class="p-8 text-center text-slate-500">
                 <p class="font-semibold text-navy mb-1">Abhi list khali hai</p>
                 <p class="text-sm">
                   Right side <b>Add Reel (stock)</b> se mill/GSM/BF/deckle set karke
                   Reel No + Opening KG rows add karo.
-                  Baad me Remaining <b>KG</b> ya <b>Dia</b> se update kar sakte ho.
+                  <b>For (party/order)</b> remark me party/item likho; consume pe
+                  <b>Use remark</b> se dikhega kis pe use hui.
                 </p>
               </td>
             </tr>
@@ -1892,7 +1936,7 @@ onMounted(async () => {
               <input v-model="manualReelForm.date" type="date" class="pp-input" />
             </div>
             <div class="col-span-2">
-              <label class="pp-label">Remark</label>
+              <label class="pp-label">For party / order</label>
               <input
                 v-model="manualReelForm.remark"
                 class="pp-input"
@@ -1955,10 +1999,17 @@ onMounted(async () => {
                 <span class="font-semibold capitalize">{{ move.source }}</span>
                 <span class="text-slate-500">{{ move.date }}</span>
               </div>
+              <div v-if="move.reelNo" class="font-mono text-xs text-slate-700 mt-0.5">
+                Reel {{ move.reelNo }}
+                <span v-if="move.forParty" class="text-slate-500 font-sans"> · For: {{ move.forParty }}</span>
+              </div>
               <div class="font-mono text-slate-700">
                 In {{ n2(move.weight_in) }} KG / Out {{ n2(move.weight_out) }} KG
               </div>
-              <div class="text-slate-500">{{ move.notes }}</div>
+              <div v-if="move.consumeOn" class="text-emerald-800 text-xs mt-0.5">
+                Consumed on: {{ move.consumeOn }}
+              </div>
+              <div class="text-slate-500 text-xs mt-0.5">{{ move.notes }}</div>
             </div>
             <div v-if="recentReelMoves.length === 0" class="text-sm text-slate-400">No reel movements yet.</div>
           </div>
@@ -2429,8 +2480,12 @@ onMounted(async () => {
           </div>
         </div>
         <div class="col-span-2">
-          <label class="pp-label">Remark</label>
-          <input v-model="editReelForm.remark" class="pp-input" placeholder="Optional" />
+          <label class="pp-label">For party / order</label>
+          <input
+            v-model="editReelForm.remark"
+            class="pp-input"
+            placeholder="e.g. UK Paper · 3-ply / Job note"
+          />
         </div>
       </div>
       <div class="flex justify-end gap-2 pt-2 border-t">
