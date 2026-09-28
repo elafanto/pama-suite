@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --navy: #0f2444;
+  --bg: #f0f4f8;
+}
+
+html, body, #app { height: 100%; }
+body {
+  margin: 0;
+  font-family: system-ui, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: #0f172a;
+}
+
+@layer components {
+  .pp-btn {
+    @apply inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-sm font-semibold transition disabled:opacity-50;
+  }
+  .pp-btn-primary { @apply bg-accent text-white hover:bg-accent-dk; }
+  .pp-btn-ghost   { @apply bg-slate-100 text-slate-700 hover:bg-slate-200; }
+  .pp-btn-danger  { @apply bg-danger text-white hover:brightness-95; }
+  .pp-card { @apply bg-white rounded-xl border border-slate-200 shadow-card; }
+  .pp-input {
+    @apply w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-accent focus:ring-1 focus:ring-accent;
+  }
+  .pp-label { @apply block text-xs font-semibold text-slate-500 mb-1; }
+  .pp-badge { @apply inline-block text-xs font-bold px-2 py-0.5 rounded-full; }
+}
