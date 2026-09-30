@@ -1138,7 +1138,9 @@ async function saveManualReel() {
       `${lines.length} reels add karenge?\n\n`
       + `Mill: ${manualReelForm.supplier_name}\n`
       + `GSM ${manualReelForm.gsm} / BF ${manualReelForm.bf} / ${deckle.deckle_size}\n`
-      + `Condition: ${manualReelForm.intake_condition}\n\n`
+      + `Condition: ${manualReelForm.intake_condition}\n`
+      + (Number(manualReelForm.rate) > 0 ? `Rate: ₹${n2(Number(manualReelForm.rate))}/KG\n` : '')
+      + `\n`
       + lines.map((l) => `${l.reel_no}: ${l.opening_weight} KG`).join('\n'),
     )
     if (!ok) return
