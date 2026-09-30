@@ -354,8 +354,8 @@ export const usePayrollStore = defineStore('payroll', () => {
     const amount = patch.amount !== undefined ? Math.max(0, Number(patch.amount) || 0) : existing.amount
     if (amount <= 0) return { error: 'Amount required' }
     const date = patch.date ?? existing.date
-    const payroll_period = (patch.payroll_period
-      || advancePayrollPeriod({ date, payroll_period: patch.payroll_period ?? existing.payroll_period })).slice(0, 7)
+    // Re-derive salary month from date (day ≤8 → previous month) unless explicitly overridden.
+    const payroll_period = (patch.payroll_period || advancePayrollPeriod({ date })).slice(0, 7)
 
     const updated = await advanceRepo.update(id, { ...patch, amount, date, payroll_period })
     if (postVoucher && updated) {

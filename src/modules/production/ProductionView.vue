@@ -5,7 +5,7 @@ import { useFirmStore } from '@/stores/firm'
 import { usePartyStore } from '@/stores/parties'
 import { useItemStore } from '@/stores/items'
 import { useProductionStore } from '@/stores/production'
-import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveRemainingWeightUpdate, resolveDecklePair, deckleFromMm, deckleFromInch, formatDeckleDisplay, estimateReelWeightKg, REEL_CORE_DIA_MM, filterReelsForDeletion, filterReelLinkedMovements, STAGE_LABELS, STOCK_LABELS, CONSUMABLE_TYPES, consumableLotTotals, findDuplicateReelNosInList, findReelNosAlreadyInStock, normalizeInkColor, INK_COLOR_SUGGESTIONS, type ConsumableStockType, type ReelIntakeCondition, type ReelInventoryBreakdownRow } from '@/services/production'
+import { normalizePaperType, normalizeReelColor, productionBalance, REEL_LOW_STOCK_KG, reelColorLabel, reelInventorySummary, resolveConsumableFeed, resolveRemainingWeightUpdate, resolveDecklePair, deckleFromMm, deckleFromInch, formatDeckleDisplay, estimateReelWeightKg, REEL_CORE_DIA_MM, filterReelsForDeletion, filterReelLinkedMovements, buildReelConsumptionLookup, extractReelUseFromMovementNotes, STAGE_LABELS, STOCK_LABELS, CONSUMABLE_TYPES, consumableLotTotals, findDuplicateReelNosInList, findReelNosAlreadyInStock, normalizeInkColor, INK_COLOR_SUGGESTIONS, type ConsumableStockType, type ReelIntakeCondition, type ReelInventoryBreakdownRow } from '@/services/production'
 import { downloadReelAbstractStockPdf, downloadReelLowStockPdf, downloadReelPhysicalVerificationPdf, downloadReelWiseCsv, downloadReelWiseStockPdf } from '@/services/reelStockPdf'
 import { useTableSort } from '@/composables/useTableSort'
 import type { ConsumableLot, PaperType, ProductionStage, ProductionStockType, ReelStock } from '@/types/models'
@@ -150,6 +150,7 @@ const editReelForm = reactive({
   color: 'NS',
   intake_condition: 'fresh' as ReelIntakeCondition,
   remark: '',
+  rate: 0,
 })
 
 function openEditReel(reel: ReelStock) {
@@ -169,6 +170,7 @@ function openEditReel(reel: ReelStock) {
   editReelForm.color = normalizeReelColor(reel.color)
   editReelForm.intake_condition = reel.intake_condition === 'partial' ? 'partial' : 'fresh'
   editReelForm.remark = reel.remark || ''
+  editReelForm.rate = Number(reel.rate) || 0
 }
 
 function closeEditReel() {
@@ -212,6 +214,7 @@ async function saveEditReel() {
       color: normalizeReelColor(editReelForm.color),
       intake_condition: editReelForm.intake_condition,
       remark: editReelForm.remark.trim() || undefined,
+      rate: Number(editReelForm.rate) || 0,
     })
     closeEditReel()
   } catch (err: any) {
@@ -290,6 +293,7 @@ type ReelSortKey =
   | 'gsm'
   | 'bf'
   | 'color'
+  | 'rate'
   | 'opening'
   | 'current'
   | 'status'
@@ -303,10 +307,16 @@ const filteredReels = reelSort.sortedFrom(filteredReelsBase, {
   gsm: (r) => Number(r.gsm) || r.gsm,
   bf: (r) => Number(r.bf) || r.bf,
   color: (r) => normalizeReelColor(r.color),
+  rate: (r) => Number(r.rate) || 0,
   opening: (r) => r.opening_weight,
   current: (r) => r.current_weight,
   status: (r) => r.status,
 })
+
+function formatReelRate(rate: unknown): string {
+  const n = Number(rate) || 0
+  return n > 0 ? n2(n) : '—'
+}
 
 function deckleLabel(reel: ReelStock): string {
   if (reel.deckle_mm || reel.deckle_inch) {
@@ -443,7 +453,34 @@ const recentReelMoves = computed(() => {
   return production.movements
     .filter((m) => m.stock_type === 'raw_reel')
     .slice(0, 12)
+    .map((move) => {
+      const reel = move.stock_ref_id
+        ? production.reels.find((r) => r.id === move.stock_ref_id)
+        : undefined
+      return {
+        ...move,
+        reelNo: reel?.reel_no || '',
+        forParty: (reel?.remark || '').trim(),
+        consumeOn: move.source === 'consumption'
+          ? (move.job_id ? jobLabel(move.job_id) : '') || extractReelUseFromMovementNotes(move.notes)
+          : '',
+      }
+    })
 })
+
+/** Per-reel: kis pe consume hui (date · KG · party/job). */
+const reelConsumeById = computed(() =>
+  buildReelConsumptionLookup(
+    production.movements,
+    production.reels.map((r) => r.id),
+    { jobLabel },
+  ),
+)
+
+function reelConsumeInfo(reelId: string) {
+  return reelConsumeById.value.get(reelId) || { short: '—', detail: '', count: 0 }
+}
+
 const reelInventory = computed(() => reelInventorySummary(production.reels, production.movements))
 /** Zero-stock breakdown rows hidden unless toggled. */
 const showBreakdownZeroStock = ref(false)
@@ -513,7 +550,14 @@ function downloadPhysicalVerificationPdf() {
 }
 
 function downloadReelDetailCsv() {
-  const res = downloadReelWiseCsv({ reels: filteredReels.value })
+  const consumedMap = new Map<string, string>()
+  for (const [id, info] of reelConsumeById.value) {
+    consumedMap.set(id, info.short)
+  }
+  const res = downloadReelWiseCsv({
+    reels: filteredReels.value,
+    consumedOnByReelId: consumedMap,
+  })
   alert(`CSV saved: ${res.file}\n${res.rows} reel row(s) with reel numbers.`)
 }
 
@@ -1094,7 +1138,9 @@ async function saveManualReel() {
       `${lines.length} reels add karenge?\n\n`
       + `Mill: ${manualReelForm.supplier_name}\n`
       + `GSM ${manualReelForm.gsm} / BF ${manualReelForm.bf} / ${deckle.deckle_size}\n`
-      + `Condition: ${manualReelForm.intake_condition}\n\n`
+      + `Condition: ${manualReelForm.intake_condition}\n`
+      + (Number(manualReelForm.rate) > 0 ? `Rate: ₹${n2(Number(manualReelForm.rate))}/KG\n` : '')
+      + `\n`
       + lines.map((l) => `${l.reel_no}: ${l.opening_weight} KG`).join('\n'),
     )
     if (!ok) return
@@ -1346,7 +1392,7 @@ onMounted(async () => {
           <p class="text-xs text-slate-500">Firm-scoped totals from reel stock and movement ledger (Kraft / Duplex, GSM, BF, deckle, color).</p>
         </div>
 
-        <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-3">
           <div class="pp-card p-4">
             <div class="text-xs font-semibold text-slate-500 uppercase">Total Reels</div>
             <div class="text-2xl font-bold text-navy mt-1">{{ reelInventory.totalReels }}</div>
@@ -1364,6 +1410,15 @@ onMounted(async () => {
           <div class="pp-card p-4 border-l-4 border-blue-400">
             <div class="text-xs font-semibold text-slate-500 uppercase">Opening KG</div>
             <div class="text-2xl font-bold text-blue-800 mt-1 font-mono">{{ n2(reelInventory.openingWeight) }}</div>
+          </div>
+          <div class="pp-card p-4 border-l-4 border-teal-400">
+            <div class="text-xs font-semibold text-slate-500 uppercase">Avg Rate ₹/KG</div>
+            <div class="text-2xl font-bold text-teal-800 mt-1 font-mono">
+              {{ reelInventory.averageRate == null ? '—' : n2(reelInventory.averageRate) }}
+            </div>
+            <div class="text-xs text-slate-500 mt-1">
+              {{ reelInventory.ratedReels }} reel{{ reelInventory.ratedReels === 1 ? '' : 's' }} with rate
+            </div>
           </div>
           <div class="pp-card p-4 border-l-4 border-amber-400">
             <div class="text-xs font-semibold text-slate-500 uppercase">Low Stock</div>
@@ -1505,8 +1560,8 @@ onMounted(async () => {
             <input
               v-model="consumeRemarkDraft"
               class="pp-input !py-1.5 !text-xs min-w-[12rem] max-w-xs"
-              placeholder="Consume remark (party / job)"
-              title="Full consume pe ye remark lag jayega"
+              placeholder="Consume on — party / order / job"
+              title="Full consume pe ye remark Consumed on column me dikhega"
             />
             <button
               type="button"
@@ -1602,7 +1657,9 @@ onMounted(async () => {
               <th class="p-3" :class="reelSort.thClass('gsm')" @click="reelSort.toggle('gsm')">GSM{{ reelSort.indicator('gsm') }}</th>
               <th class="p-3" :class="reelSort.thClass('bf')" @click="reelSort.toggle('bf')">BF{{ reelSort.indicator('bf') }}</th>
               <th class="p-3" :class="reelSort.thClass('color')" @click="reelSort.toggle('color')">Color{{ reelSort.indicator('color') }}</th>
-              <th class="p-3">Remark</th>
+              <th class="p-3" :class="reelSort.thClass('rate', 'right')" @click="reelSort.toggle('rate', 'desc')" title="₹ per KG">Rate ₹/KG{{ reelSort.indicator('rate') }}</th>
+              <th class="p-3" title="Add / Edit pe jo remark — kis party ya order ke liye reel rakhi">For (party/order)</th>
+              <th class="p-3" title="Consume pe likha remark / job — kab aur kis pe use hui">Consumed on</th>
               <th class="p-3" :class="reelSort.thClass('opening', 'right')" @click="reelSort.toggle('opening', 'desc')">Opening KG{{ reelSort.indicator('opening') }}</th>
               <th class="p-3" :class="reelSort.thClass('current', 'right')" @click="reelSort.toggle('current', 'desc')">Qty left{{ reelSort.indicator('current') }}</th>
               <th class="p-3 text-right">Remaining (KG / Dia)</th>
@@ -1640,7 +1697,18 @@ onMounted(async () => {
               <td class="p-3">{{ reel.gsm }}</td>
               <td class="p-3">{{ reel.bf }}</td>
               <td class="p-3">{{ normalizeReelColor(reel.color) }}</td>
-              <td class="p-3 text-xs text-slate-600 max-w-[10rem] truncate" :title="reel.remark || ''">{{ reel.remark || '—' }}</td>
+              <td class="p-3 text-right font-mono" :class="(Number(reel.rate) || 0) > 0 ? 'text-slate-800' : 'text-slate-400'">
+                {{ formatReelRate(reel.rate) }}
+              </td>
+              <td class="p-3 text-xs text-slate-700 max-w-[11rem]">
+                <span class="line-clamp-2" :title="reel.remark || ''">{{ reel.remark || '—' }}</span>
+              </td>
+              <td class="p-3 text-xs text-slate-600 max-w-[14rem]">
+                <span
+                  class="line-clamp-3"
+                  :title="reelConsumeInfo(reel.id).detail || reelConsumeInfo(reel.id).short"
+                >{{ reelConsumeInfo(reel.id).short }}</span>
+              </td>
               <td class="p-3 text-right font-mono">{{ n2(reel.opening_weight) }}</td>
               <td
                 class="p-3 text-right font-mono"
@@ -1701,8 +1769,8 @@ onMounted(async () => {
                     v-if="reel.status === 'active' && reel.current_weight > 0"
                     v-model="remainingRemarkDrafts[reel.id]"
                     class="pp-input !py-1 !text-xs w-full"
-                    placeholder="Use remark"
-                    title="Kis party / job me use hui"
+                    placeholder="Consume pe — kis party/order"
+                    title="Kis party / order / job pe use hui (Consumed on column me dikhega)"
                   />
                   <div class="inline-flex flex-wrap items-center justify-end gap-1">
                   <button
@@ -1735,12 +1803,13 @@ onMounted(async () => {
               </td>
             </tr>
             <tr v-if="filteredReels.length === 0">
-              <td colspan="14" class="p-8 text-center text-slate-500">
+              <td colspan="16" class="p-8 text-center text-slate-500">
                 <p class="font-semibold text-navy mb-1">Abhi list khali hai</p>
                 <p class="text-sm">
                   Right side <b>Add Reel (stock)</b> se mill/GSM/BF/deckle set karke
                   Reel No + Opening KG rows add karo.
-                  Baad me Remaining <b>KG</b> ya <b>Dia</b> se update kar sakte ho.
+                  <b>For (party/order)</b> remark me party/item likho; consume pe
+                  <b>Use remark</b> se dikhega kis pe use hui.
                 </p>
               </td>
             </tr>
@@ -1891,8 +1960,20 @@ onMounted(async () => {
               <label class="pp-label">Date</label>
               <input v-model="manualReelForm.date" type="date" class="pp-input" />
             </div>
+            <div>
+              <label class="pp-label">Rate ₹/KG</label>
+              <input
+                v-model.number="manualReelForm.rate"
+                type="number"
+                min="0"
+                step="0.01"
+                class="pp-input text-right font-mono"
+                placeholder="Optional"
+                title="Blank / 0 = rate nahi — average me count nahi hoga"
+              />
+            </div>
             <div class="col-span-2">
-              <label class="pp-label">Remark</label>
+              <label class="pp-label">For party / order</label>
               <input
                 v-model="manualReelForm.remark"
                 class="pp-input"
@@ -1955,10 +2036,17 @@ onMounted(async () => {
                 <span class="font-semibold capitalize">{{ move.source }}</span>
                 <span class="text-slate-500">{{ move.date }}</span>
               </div>
+              <div v-if="move.reelNo" class="font-mono text-xs text-slate-700 mt-0.5">
+                Reel {{ move.reelNo }}
+                <span v-if="move.forParty" class="text-slate-500 font-sans"> · For: {{ move.forParty }}</span>
+              </div>
               <div class="font-mono text-slate-700">
                 In {{ n2(move.weight_in) }} KG / Out {{ n2(move.weight_out) }} KG
               </div>
-              <div class="text-slate-500">{{ move.notes }}</div>
+              <div v-if="move.consumeOn" class="text-emerald-800 text-xs mt-0.5">
+                Consumed on: {{ move.consumeOn }}
+              </div>
+              <div class="text-slate-500 text-xs mt-0.5">{{ move.notes }}</div>
             </div>
             <div v-if="recentReelMoves.length === 0" class="text-sm text-slate-400">No reel movements yet.</div>
           </div>
@@ -2428,9 +2516,24 @@ onMounted(async () => {
             </label>
           </div>
         </div>
+        <div>
+          <label class="pp-label">Rate ₹/KG</label>
+          <input
+            v-model.number="editReelForm.rate"
+            type="number"
+            min="0"
+            step="0.01"
+            class="pp-input text-right font-mono"
+            placeholder="0 = no rate"
+          />
+        </div>
         <div class="col-span-2">
-          <label class="pp-label">Remark</label>
-          <input v-model="editReelForm.remark" class="pp-input" placeholder="Optional" />
+          <label class="pp-label">For party / order</label>
+          <input
+            v-model="editReelForm.remark"
+            class="pp-input"
+            placeholder="e.g. UK Paper · 3-ply / Job note"
+          />
         </div>
       </div>
       <div class="flex justify-end gap-2 pt-2 border-t">

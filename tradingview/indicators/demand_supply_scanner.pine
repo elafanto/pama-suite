@@ -1,0 +1,519 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © PAMA Suite — Demand & Supply Multi-Symbol Scanner (lightweight, free-plan friendly)
+// For: Sandeep | Paste into TradingView Pine Editor → Add to chart → set 40 symbols → Add alert
+
+//@version=6
+indicator("D&S Multi-Symbol Scanner", overlay=false, max_labels_count=0, max_lines_count=0, max_boxes_count=0)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+grpSym = "Symbols (up to 40)"
+sym01  = input.symbol("NSE:RELIANCE",   "Symbol 01",  group=grpSym)
+sym02  = input.symbol("NSE:TCS",        "Symbol 02",  group=grpSym)
+sym03  = input.symbol("NSE:HDFCBANK",   "Symbol 03",  group=grpSym)
+sym04  = input.symbol("NSE:INFY",       "Symbol 04",  group=grpSym)
+sym05  = input.symbol("NSE:ICICIBANK",  "Symbol 05",  group=grpSym)
+sym06  = input.symbol("NSE:HINDUNILVR", "Symbol 06",  group=grpSym)
+sym07  = input.symbol("NSE:ITC",        "Symbol 07",  group=grpSym)
+sym08  = input.symbol("NSE:SBIN",       "Symbol 08",  group=grpSym)
+sym09  = input.symbol("NSE:BHARTIARTL", "Symbol 09",  group=grpSym)
+sym10  = input.symbol("NSE:KOTAKBANK",  "Symbol 10",  group=grpSym)
+sym11  = input.symbol("NSE:LT",         "Symbol 11",  group=grpSym)
+sym12  = input.symbol("NSE:AXISBANK",   "Symbol 12",  group=grpSym)
+sym13  = input.symbol("NSE:ASIANPAINT", "Symbol 13",  group=grpSym)
+sym14  = input.symbol("NSE:MARUTI",     "Symbol 14",  group=grpSym)
+sym15  = input.symbol("NSE:TITAN",      "Symbol 15",  group=grpSym)
+sym16  = input.symbol("NSE:SUNPHARMA",  "Symbol 16",  group=grpSym)
+sym17  = input.symbol("NSE:BAJFINANCE", "Symbol 17",  group=grpSym)
+sym18  = input.symbol("NSE:WIPRO",      "Symbol 18",  group=grpSym)
+sym19  = input.symbol("NSE:ULTRACEMCO", "Symbol 19",  group=grpSym)
+sym20  = input.symbol("NSE:NESTLEIND",  "Symbol 20",  group=grpSym)
+sym21  = input.symbol("NSE:HCLTECH",    "Symbol 21",  group=grpSym)
+sym22  = input.symbol("NSE:POWERGRID",  "Symbol 22",  group=grpSym)
+sym23  = input.symbol("NSE:NTPC",       "Symbol 23",  group=grpSym)
+sym24  = input.symbol("NSE:TATAMOTORS", "Symbol 24",  group=grpSym)
+sym25  = input.symbol("NSE:M&M",        "Symbol 25",  group=grpSym)
+sym26  = input.symbol("NSE:BAJAJFINSV", "Symbol 26",  group=grpSym)
+sym27  = input.symbol("NSE:ADANIENT",   "Symbol 27",  group=grpSym)
+sym28  = input.symbol("NSE:JSWSTEEL",   "Symbol 28",  group=grpSym)
+sym29  = input.symbol("NSE:ONGC",       "Symbol 29",  group=grpSym)
+sym30  = input.symbol("NSE:COALINDIA",  "Symbol 30",  group=grpSym)
+sym31  = input.symbol("NSE:TECHM",      "Symbol 31",  group=grpSym)
+sym32  = input.symbol("NSE:INDUSINDBK", "Symbol 32",  group=grpSym)
+sym33  = input.symbol("NSE:CIPLA",      "Symbol 33",  group=grpSym)
+sym34  = input.symbol("NSE:DRREDDY",    "Symbol 34",  group=grpSym)
+sym35  = input.symbol("NSE:APOLLOHOSP", "Symbol 35",  group=grpSym)
+sym36  = input.symbol("NSE:EICHERMOT",  "Symbol 36",  group=grpSym)
+sym37  = input.symbol("NSE:HEROMOTOCO", "Symbol 37",  group=grpSym)
+sym38  = input.symbol("NSE:BRITANNIA",  "Symbol 38",  group=grpSym)
+sym39  = input.symbol("NSE:DIVISLAB",   "Symbol 39",  group=grpSym)
+sym40  = input.symbol("NSE:GRASIM",     "Symbol 40",  group=grpSym)
+
+grpScan = "Scanner"
+scanTF         = input.timeframe("15", "Zone Timeframe (scanTF)", group=grpScan)
+trendTF        = input.timeframe("D", "Trend Timeframe", group=grpScan)
+proxBufferPct  = input.float(0.3, "Proximal Buffer %", minval=0.05, step=0.05, group=grpScan)
+minScore       = input.int(4, "Minimum Score (/5)", minval=1, maxval=5, group=grpScan)
+maxBaseCandles = input.int(3, "Max Base Candles", minval=1, maxval=5, group=grpScan)
+legBodyPct     = input.float(0.50, "Leg Body % of Range", minval=0.1, maxval=0.95, step=0.05, group=grpScan)
+strongLegMult  = input.float(2.0, "Strong Leg-Out Multiplier", minval=1.0, step=0.1, group=grpScan)
+gapHandling    = input.bool(true, "Gap-Up/Down = Strong Leg-Out", group=grpScan)
+
+grpTrend = "Trend Filter"
+smaLen   = input.int(50, "SMA Length", minval=5, group=grpTrend)
+slopeLen = input.int(7, "Slope Lookback Bars", minval=1, group=grpTrend)
+
+grpOut = "Output"
+showTable      = input.bool(true, "Show Results Table", group=grpOut)
+alertOnNewOnly = input.bool(true, "Alert Only on New Signals", group=grpOut)
+maxZonesStored = input.int(20, "Max Zones per Symbol", minval=5, maxval=50, group=grpOut)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+int SIG_NONE = 0
+int SIG_BUY  = 1
+int SIG_SELL = 2
+
+int FRESH_OK       = 0
+int FRESH_VIOLATED = 1
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CANDLE HELPERS (scanTF series inside request.security)
+// ══════════════════════════════════════════════════════════════════════════════
+
+cBody(int i) =>
+    math.abs(close[i] - open[i])
+
+cRange(int i) =>
+    high[i] - low[i]
+
+bodyPct(int i) =>
+    float r = cRange(i)
+    r == 0.0 ? na : cBody(i) / r
+
+isLeg(int i) =>
+    float bp = bodyPct(i)
+    not na(bp) and bp >= legBodyPct
+
+isBase(int i) =>
+    float bp = bodyPct(i)
+    not na(bp) and bp < legBodyPct
+
+isBull(int i) =>
+    close[i] > open[i]
+
+isBear(int i) =>
+    close[i] < open[i]
+
+bodyTop(int i) =>
+    math.max(open[i], close[i])
+
+bodyBot(int i) =>
+    math.min(open[i], close[i])
+
+hasGapUp(int i) =>
+    gapHandling and open[i] > high[i + 1]
+
+hasGapDn(int i) =>
+    gapHandling and open[i] < low[i + 1]
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ZONE DETECTION — DBR / RBR / RBD / DBD (same rules as full strategy)
+// ══════════════════════════════════════════════════════════════════════════════
+
+detectNewZone() =>
+    bool  found   = false
+    float zProx   = na
+    bool  zDemand = false
+    int   zBases  = 0
+    float zLegStr = 0.0
+    bool  zGap    = false
+
+    if isLeg(0) and cRange(0) > 0
+        for bc = maxBaseCandles to 1
+            int legInOff = bc + 1
+            if legInOff > bar_index
+                break
+            if not isLeg(legInOff) or cRange(legInOff) == 0
+                continue
+            bool allBase = true
+            for b = 1 to bc
+                if not isBase(b) or cRange(b) == 0
+                    allBase := false
+            if not allBase
+                continue
+
+            float proxVal = na
+            bool  demand  = false
+
+            if isBear(legInOff) and isBull(0)
+                demand  := true
+                proxVal := bodyTop(1)
+                for b = 2 to bc
+                    proxVal := math.max(proxVal, bodyTop(b))
+            else if isBull(legInOff) and isBull(0)
+                demand  := true
+                proxVal := bodyTop(1)
+                for b = 2 to bc
+                    proxVal := math.max(proxVal, bodyTop(b))
+            else if isBull(legInOff) and isBear(0)
+                demand  := false
+                proxVal := bodyBot(1)
+                for b = 2 to bc
+                    proxVal := math.min(proxVal, bodyBot(b))
+            else if isBear(legInOff) and isBear(0)
+                demand  := false
+                proxVal := bodyBot(1)
+                for b = 2 to bc
+                    proxVal := math.min(proxVal, bodyBot(b))
+
+            if not na(proxVal)
+                float avgBaseRange = 0.0
+                for b = 1 to bc
+                    avgBaseRange += cRange(b)
+                avgBaseRange /= bc
+                float legMult = avgBaseRange > 0 ? cBody(0) / avgBaseRange : 0.0
+                found   := true
+                zProx   := proxVal
+                zDemand := demand
+                zBases  := bc
+                zLegStr := legMult
+                zGap    := hasGapUp(0) or hasGapDn(0)
+                break
+    [found, zProx, zDemand, zBases, zLegStr, zGap]
+
+quickScore(float legMult, bool gapF, int bases) =>
+    int s = 2
+    s += gapF or legMult >= strongLegMult ? 2 : 0
+    s += bases <= 3 ? 1 : 0
+    s
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ZONE ENGINE — runs on scanTF inside request.security (1 call per symbol)
+// Returns [signal, score, distPct] before trend filter
+// ══════════════════════════════════════════════════════════════════════════════
+
+f_zoneScan() =>
+    var float[] zProx   = array.new_float()
+    var bool[]  zDemand = array.new_bool()
+    var int[]   zBases  = array.new_int()
+    var float[] zLegStr = array.new_float()
+    var bool[]  zGap    = array.new_bool()
+    var int[]   zFresh  = array.new_int()
+    var int[]   zBar    = array.new_int()
+
+    [nf, np, ndm, nbc, nls, ngap] = detectNewZone()
+    if nf and not barstate.isfirst
+        array.push(zProx, np)
+        array.push(zDemand, ndm)
+        array.push(zBases, nbc)
+        array.push(zLegStr, nls)
+        array.push(zGap, ngap)
+        array.push(zFresh, FRESH_OK)
+        array.push(zBar, bar_index)
+        while array.size(zProx) > maxZonesStored
+            array.shift(zProx)
+            array.shift(zDemand)
+            array.shift(zBases)
+            array.shift(zLegStr)
+            array.shift(zGap)
+            array.shift(zFresh)
+            array.shift(zBar)
+
+    int zSize = array.size(zProx)
+    if zSize > 0
+        for i = 0 to zSize - 1
+            if array.get(zFresh, i) == FRESH_OK
+                float px = array.get(zProx, i)
+                bool  dm = array.get(zDemand, i)
+                if dm and close < px
+                    array.set(zFresh, i, FRESH_VIOLATED)
+                if not dm and close > px
+                    array.set(zFresh, i, FRESH_VIOLATED)
+
+    int   demIdx = na
+    int   supIdx = na
+    int   demBar = -1
+    int   supBar = -1
+    if zSize > 0
+        for i = 0 to zSize - 1
+            if array.get(zFresh, i) == FRESH_OK
+                int zb = array.get(zBar, i)
+                if array.get(zDemand, i) and zb > demBar
+                    demBar := zb
+                    demIdx := i
+                if not array.get(zDemand, i) and zb > supBar
+                    supBar := zb
+                    supIdx := i
+
+    float dProx = na(demIdx) ? na : array.get(zProx, demIdx)
+    float sProx = na(supIdx) ? na : array.get(zProx, supIdx)
+    int   dSc   = na(demIdx) ? 0 : quickScore(array.get(zLegStr, demIdx), array.get(zGap, demIdx), array.get(zBases, demIdx))
+    int   sSc   = na(supIdx) ? 0 : quickScore(array.get(zLegStr, supIdx), array.get(zGap, supIdx), array.get(zBases, supIdx))
+
+    bool nearD = not na(dProx) and dProx > 0 and math.abs(close - dProx) / dProx * 100.0 <= proxBufferPct and dSc >= minScore
+    bool nearS = not na(sProx) and sProx > 0 and math.abs(close - sProx) / sProx * 100.0 <= proxBufferPct and sSc >= minScore
+
+    int   signal  = SIG_NONE
+    int   score   = 0
+    float distPct = na
+
+    if nearD and nearS
+        if dSc > sSc
+            signal  := SIG_BUY
+            score   := dSc
+            distPct := math.abs(close - dProx) / dProx * 100.0
+        else if sSc > dSc
+            signal  := SIG_SELL
+            score   := sSc
+            distPct := math.abs(close - sProx) / sProx * 100.0
+        else if math.abs(close - dProx) <= math.abs(close - sProx)
+            signal  := SIG_BUY
+            score   := dSc
+            distPct := math.abs(close - dProx) / dProx * 100.0
+        else
+            signal  := SIG_SELL
+            score   := sSc
+            distPct := math.abs(close - sProx) / sProx * 100.0
+    else if nearD
+        signal  := SIG_BUY
+        score   := dSc
+        distPct := math.abs(close - dProx) / dProx * 100.0
+    else if nearS
+        signal  := SIG_SELL
+        score   := sSc
+        distPct := math.abs(close - sProx) / sProx * 100.0
+
+    [signal, score, distPct]
+
+// Trend bias on trendTF (2nd security call per symbol)
+f_trendBias() =>
+    float sma = ta.sma(close, smaLen)
+    float slope = sma - sma[slopeLen]
+    slope > 0 ? 1 : slope < 0 ? -1 : 0
+
+// Apply trend gate: BUY if not bearish, SELL if not bullish
+applyTrend(int sig, int sc, float dist, int trend) =>
+    int   outSig  = sig
+    int   outSc   = sc
+    float outDist = dist
+    if sig == SIG_BUY and trend < 0
+        outSig  := SIG_NONE
+        outSc   := 0
+        outDist := na
+    if sig == SIG_SELL and trend > 0
+        outSig  := SIG_NONE
+        outSc   := 0
+        outDist := na
+    [outSig, outSc, outDist]
+
+scanSymbol(string sym) =>
+    [rawSig, rawSc, rawDist] = request.security(sym, scanTF, f_zoneScan(), lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+    int trend = request.security(sym, trendTF, f_trendBias(), lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+    applyTrend(rawSig, rawSc, rawDist, trend)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SCAN ALL 40 SYMBOLS
+// ══════════════════════════════════════════════════════════════════════════════
+
+[s01, sc01, d01] = scanSymbol(sym01)
+[s02, sc02, d02] = scanSymbol(sym02)
+[s03, sc03, d03] = scanSymbol(sym03)
+[s04, sc04, d04] = scanSymbol(sym04)
+[s05, sc05, d05] = scanSymbol(sym05)
+[s06, sc06, d06] = scanSymbol(sym06)
+[s07, sc07, d07] = scanSymbol(sym07)
+[s08, sc08, d08] = scanSymbol(sym08)
+[s09, sc09, d09] = scanSymbol(sym09)
+[s10, sc10, d10] = scanSymbol(sym10)
+[s11, sc11, d11] = scanSymbol(sym11)
+[s12, sc12, d12] = scanSymbol(sym12)
+[s13, sc13, d13] = scanSymbol(sym13)
+[s14, sc14, d14] = scanSymbol(sym14)
+[s15, sc15, d15] = scanSymbol(sym15)
+[s16, sc16, d16] = scanSymbol(sym16)
+[s17, sc17, d17] = scanSymbol(sym17)
+[s18, sc18, d18] = scanSymbol(sym18)
+[s19, sc19, d19] = scanSymbol(sym19)
+[s20, sc20, d20] = scanSymbol(sym20)
+[s21, sc21, d21] = scanSymbol(sym21)
+[s22, sc22, d22] = scanSymbol(sym22)
+[s23, sc23, d23] = scanSymbol(sym23)
+[s24, sc24, d24] = scanSymbol(sym24)
+[s25, sc25, d25] = scanSymbol(sym25)
+[s26, sc26, d26] = scanSymbol(sym26)
+[s27, sc27, d27] = scanSymbol(sym27)
+[s28, sc28, d28] = scanSymbol(sym28)
+[s29, sc29, d29] = scanSymbol(sym29)
+[s30, sc30, d30] = scanSymbol(sym30)
+[s31, sc31, d31] = scanSymbol(sym31)
+[s32, sc32, d32] = scanSymbol(sym32)
+[s33, sc33, d33] = scanSymbol(sym33)
+[s34, sc34, d34] = scanSymbol(sym34)
+[s35, sc35, d35] = scanSymbol(sym35)
+[s36, sc36, d36] = scanSymbol(sym36)
+[s37, sc37, d37] = scanSymbol(sym37)
+[s38, sc38, d38] = scanSymbol(sym38)
+[s39, sc39, d39] = scanSymbol(sym39)
+[s40, sc40, d40] = scanSymbol(sym40)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DISPLAY HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+symShort(string sym) =>
+    int c = str.pos(sym, ":")
+    c >= 0 ? str.substring(sym, c + 1) : sym
+
+sigLabel(int sig) =>
+    sig == SIG_BUY ? "BUY" : sig == SIG_SELL ? "SELL" : "—"
+
+sigColor(int sig) =>
+    sig == SIG_BUY ? color.lime : sig == SIG_SELL ? color.red : color.gray
+
+rowText(string sym, int sig, int sc) =>
+    sig != SIG_NONE ? symShort(sym) + ":" + sigLabel(sig) + "(" + str.tostring(sc) + ")" : ""
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RESULTS TABLE
+// ══════════════════════════════════════════════════════════════════════════════
+
+var table resTbl = table.new(position.bottom_right, 4, 41, bgcolor=color.new(color.black, 85), border_width=1)
+
+if showTable and barstate.islast
+    table.cell(resTbl, 0, 0, "Symbol", text_color=color.gray, text_size=size.small)
+    table.cell(resTbl, 1, 0, "Signal", text_color=color.gray, text_size=size.small)
+    table.cell(resTbl, 2, 0, "Score", text_color=color.gray, text_size=size.small)
+    table.cell(resTbl, 3, 0, "Dist%", text_color=color.gray, text_size=size.small)
+
+    string[] syms  = array.from(sym01, sym02, sym03, sym04, sym05, sym06, sym07, sym08, sym09, sym10, sym11, sym12, sym13, sym14, sym15, sym16, sym17, sym18, sym19, sym20, sym21, sym22, sym23, sym24, sym25, sym26, sym27, sym28, sym29, sym30, sym31, sym32, sym33, sym34, sym35, sym36, sym37, sym38, sym39, sym40)
+    int[]    sigs  = array.from(s01, s02, s03, s04, s05, s06, s07, s08, s09, s10, s11, s12, s13, s14, s15, s16, s17, s18, s19, s20, s21, s22, s23, s24, s25, s26, s27, s28, s29, s30, s31, s32, s33, s34, s35, s36, s37, s38, s39, s40)
+    int[]    scs   = array.from(sc01, sc02, sc03, sc04, sc05, sc06, sc07, sc08, sc09, sc10, sc11, sc12, sc13, sc14, sc15, sc16, sc17, sc18, sc19, sc20, sc21, sc22, sc23, sc24, sc25, sc26, sc27, sc28, sc29, sc30, sc31, sc32, sc33, sc34, sc35, sc36, sc37, sc38, sc39, sc40)
+    float[]  dists = array.from(d01, d02, d03, d04, d05, d06, d07, d08, d09, d10, d11, d12, d13, d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d25, d26, d27, d28, d29, d30, d31, d32, d33, d34, d35, d36, d37, d38, d39, d40)
+
+    int row = 1
+    for i = 0 to 39
+        int sg = array.get(sigs, i)
+        if sg != SIG_NONE
+            table.cell(resTbl, 0, row, symShort(array.get(syms, i)), text_color=color.white, text_size=size.small)
+            table.cell(resTbl, 1, row, sigLabel(sg), text_color=sigColor(sg), text_size=size.small)
+            table.cell(resTbl, 2, row, str.tostring(array.get(scs, i)) + "/5", text_color=color.white, text_size=size.small)
+            float dv = array.get(dists, i)
+            table.cell(resTbl, 3, row, na(dv) ? "—" : str.tostring(dv, "#.##") + "%", text_color=color.white, text_size=size.small)
+            row += 1
+
+    if row == 1
+        table.cell(resTbl, 0, 1, "—", text_color=color.gray, text_size=size.small)
+        table.cell(resTbl, 1, 1, "No signals", text_color=color.gray, text_size=size.small)
+        table.cell(resTbl, 2, 1, "", text_size=size.small)
+        table.cell(resTbl, 3, 1, "", text_size=size.small)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONSOLIDATED ALERT — 1 free-plan alert covers all symbols
+// ══════════════════════════════════════════════════════════════════════════════
+
+var string prevAlertMsg = ""
+
+parts = array.new_string()
+if s01 != SIG_NONE
+    array.push(parts, rowText(sym01, s01, sc01))
+if s02 != SIG_NONE
+    array.push(parts, rowText(sym02, s02, sc02))
+if s03 != SIG_NONE
+    array.push(parts, rowText(sym03, s03, sc03))
+if s04 != SIG_NONE
+    array.push(parts, rowText(sym04, s04, sc04))
+if s05 != SIG_NONE
+    array.push(parts, rowText(sym05, s05, sc05))
+if s06 != SIG_NONE
+    array.push(parts, rowText(sym06, s06, sc06))
+if s07 != SIG_NONE
+    array.push(parts, rowText(sym07, s07, sc07))
+if s08 != SIG_NONE
+    array.push(parts, rowText(sym08, s08, sc08))
+if s09 != SIG_NONE
+    array.push(parts, rowText(sym09, s09, sc09))
+if s10 != SIG_NONE
+    array.push(parts, rowText(sym10, s10, sc10))
+if s11 != SIG_NONE
+    array.push(parts, rowText(sym11, s11, sc11))
+if s12 != SIG_NONE
+    array.push(parts, rowText(sym12, s12, sc12))
+if s13 != SIG_NONE
+    array.push(parts, rowText(sym13, s13, sc13))
+if s14 != SIG_NONE
+    array.push(parts, rowText(sym14, s14, sc14))
+if s15 != SIG_NONE
+    array.push(parts, rowText(sym15, s15, sc15))
+if s16 != SIG_NONE
+    array.push(parts, rowText(sym16, s16, sc16))
+if s17 != SIG_NONE
+    array.push(parts, rowText(sym17, s17, sc17))
+if s18 != SIG_NONE
+    array.push(parts, rowText(sym18, s18, sc18))
+if s19 != SIG_NONE
+    array.push(parts, rowText(sym19, s19, sc19))
+if s20 != SIG_NONE
+    array.push(parts, rowText(sym20, s20, sc20))
+if s21 != SIG_NONE
+    array.push(parts, rowText(sym21, s21, sc21))
+if s22 != SIG_NONE
+    array.push(parts, rowText(sym22, s22, sc22))
+if s23 != SIG_NONE
+    array.push(parts, rowText(sym23, s23, sc23))
+if s24 != SIG_NONE
+    array.push(parts, rowText(sym24, s24, sc24))
+if s25 != SIG_NONE
+    array.push(parts, rowText(sym25, s25, sc25))
+if s26 != SIG_NONE
+    array.push(parts, rowText(sym26, s26, sc26))
+if s27 != SIG_NONE
+    array.push(parts, rowText(sym27, s27, sc27))
+if s28 != SIG_NONE
+    array.push(parts, rowText(sym28, s28, sc28))
+if s29 != SIG_NONE
+    array.push(parts, rowText(sym29, s29, sc29))
+if s30 != SIG_NONE
+    array.push(parts, rowText(sym30, s30, sc30))
+if s31 != SIG_NONE
+    array.push(parts, rowText(sym31, s31, sc31))
+if s32 != SIG_NONE
+    array.push(parts, rowText(sym32, s32, sc32))
+if s33 != SIG_NONE
+    array.push(parts, rowText(sym33, s33, sc33))
+if s34 != SIG_NONE
+    array.push(parts, rowText(sym34, s34, sc34))
+if s35 != SIG_NONE
+    array.push(parts, rowText(sym35, s35, sc35))
+if s36 != SIG_NONE
+    array.push(parts, rowText(sym36, s36, sc36))
+if s37 != SIG_NONE
+    array.push(parts, rowText(sym37, s37, sc37))
+if s38 != SIG_NONE
+    array.push(parts, rowText(sym38, s38, sc38))
+if s39 != SIG_NONE
+    array.push(parts, rowText(sym39, s39, sc39))
+if s40 != SIG_NONE
+    array.push(parts, rowText(sym40, s40, sc40))
+
+consolidated = array.size(parts) > 0 ? array.join(parts, " | ") : ""
+
+if consolidated != "" and (not alertOnNewOnly or consolidated != prevAlertMsg) and barstate.isconfirmed
+    alert("D&S Scanner: " + consolidated, alert.freq_once_per_bar_close)
+
+if barstate.isconfirmed
+    prevAlertMsg := consolidated
+
+alertcondition(consolidated != "", "D&S Scanner — Any Signal", "D&S Scanner: signals active on one or more symbols")
+
+// Pane summary: green bars = BUY count, red bars = SELL count
+buyCount  = (s01 == SIG_BUY ? 1 : 0) + (s02 == SIG_BUY ? 1 : 0) + (s03 == SIG_BUY ? 1 : 0) + (s04 == SIG_BUY ? 1 : 0) + (s05 == SIG_BUY ? 1 : 0) + (s06 == SIG_BUY ? 1 : 0) + (s07 == SIG_BUY ? 1 : 0) + (s08 == SIG_BUY ? 1 : 0) + (s09 == SIG_BUY ? 1 : 0) + (s10 == SIG_BUY ? 1 : 0) + (s11 == SIG_BUY ? 1 : 0) + (s12 == SIG_BUY ? 1 : 0) + (s13 == SIG_BUY ? 1 : 0) + (s14 == SIG_BUY ? 1 : 0) + (s15 == SIG_BUY ? 1 : 0) + (s16 == SIG_BUY ? 1 : 0) + (s17 == SIG_BUY ? 1 : 0) + (s18 == SIG_BUY ? 1 : 0) + (s19 == SIG_BUY ? 1 : 0) + (s20 == SIG_BUY ? 1 : 0) + (s21 == SIG_BUY ? 1 : 0) + (s22 == SIG_BUY ? 1 : 0) + (s23 == SIG_BUY ? 1 : 0) + (s24 == SIG_BUY ? 1 : 0) + (s25 == SIG_BUY ? 1 : 0) + (s26 == SIG_BUY ? 1 : 0) + (s27 == SIG_BUY ? 1 : 0) + (s28 == SIG_BUY ? 1 : 0) + (s29 == SIG_BUY ? 1 : 0) + (s30 == SIG_BUY ? 1 : 0) + (s31 == SIG_BUY ? 1 : 0) + (s32 == SIG_BUY ? 1 : 0) + (s33 == SIG_BUY ? 1 : 0) + (s34 == SIG_BUY ? 1 : 0) + (s35 == SIG_BUY ? 1 : 0) + (s36 == SIG_BUY ? 1 : 0) + (s37 == SIG_BUY ? 1 : 0) + (s38 == SIG_BUY ? 1 : 0) + (s39 == SIG_BUY ? 1 : 0) + (s40 == SIG_BUY ? 1 : 0)
+sellCount = (s01 == SIG_SELL ? 1 : 0) + (s02 == SIG_SELL ? 1 : 0) + (s03 == SIG_SELL ? 1 : 0) + (s04 == SIG_SELL ? 1 : 0) + (s05 == SIG_SELL ? 1 : 0) + (s06 == SIG_SELL ? 1 : 0) + (s07 == SIG_SELL ? 1 : 0) + (s08 == SIG_SELL ? 1 : 0) + (s09 == SIG_SELL ? 1 : 0) + (s10 == SIG_SELL ? 1 : 0) + (s11 == SIG_SELL ? 1 : 0) + (s12 == SIG_SELL ? 1 : 0) + (s13 == SIG_SELL ? 1 : 0) + (s14 == SIG_SELL ? 1 : 0) + (s15 == SIG_SELL ? 1 : 0) + (s16 == SIG_SELL ? 1 : 0) + (s17 == SIG_SELL ? 1 : 0) + (s18 == SIG_SELL ? 1 : 0) + (s19 == SIG_SELL ? 1 : 0) + (s20 == SIG_SELL ? 1 : 0) + (s21 == SIG_SELL ? 1 : 0) + (s22 == SIG_SELL ? 1 : 0) + (s23 == SIG_SELL ? 1 : 0) + (s24 == SIG_SELL ? 1 : 0) + (s25 == SIG_SELL ? 1 : 0) + (s26 == SIG_SELL ? 1 : 0) + (s27 == SIG_SELL ? 1 : 0) + (s28 == SIG_SELL ? 1 : 0) + (s29 == SIG_SELL ? 1 : 0) + (s30 == SIG_SELL ? 1 : 0) + (s31 == SIG_SELL ? 1 : 0) + (s32 == SIG_SELL ? 1 : 0) + (s33 == SIG_SELL ? 1 : 0) + (s34 == SIG_SELL ? 1 : 0) + (s35 == SIG_SELL ? 1 : 0) + (s36 == SIG_SELL ? 1 : 0) + (s37 == SIG_SELL ? 1 : 0) + (s38 == SIG_SELL ? 1 : 0) + (s39 == SIG_SELL ? 1 : 0) + (s40 == SIG_SELL ? 1 : 0)
+
+plot(buyCount, "BUY Count", color=color.new(color.lime, 0), style=plot.style_columns)
+plot(-sellCount, "SELL Count", color=color.new(color.red, 0), style=plot.style_columns)
+hline(0, "Zero", color=color.gray, linestyle=hline.style_dotted)

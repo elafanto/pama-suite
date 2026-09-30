@@ -1590,10 +1590,10 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- Transport accordian collapse -->
-          <details class="border-t border-slate-100 pt-4 group">
+          <!-- Transport — open by default -->
+          <details open class="border-t border-slate-100 pt-4 group">
             <summary class="flex justify-between items-center text-sm font-bold text-slate-600 cursor-pointer list-none select-none">
-              <span>🚚 Dispatch &amp; Transport Details</span>
+              <span>Dispatch &amp; Transport Details</span>
               <span class="transition-transform group-open:rotate-180">▼</span>
             </summary>
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">

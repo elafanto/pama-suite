@@ -4,6 +4,7 @@ import {
   getCaliper,
   getPapersForRole,
   DEFAULT_CONVERSION_SLABS,
+  bsContributionFactor,
   type ConversionSlab,
 } from '@/services/calculator'
 import { loadBoxSheetSettings, type BoxSheetSettings } from '@/services/boxSheetSettings'
@@ -281,19 +282,14 @@ export function computePlainSheetWeight(form: BoxCalcForm) {
   const totalGm = paperGm + starchGm
   const boardGSM = areaM2 > 0 ? totalGm / areaM2 : 0
 
-  let bsWeighted = 0
-  let bfWeighted = 0
-  let gsmForBf = 0
+  let combinedBS = 0
+  let combinedGsm = 0
   for (const l of form.layers) {
     const gsm = parseFloat(String(l.gsm)) || 0
-    const takeUp = parseFloat(String(l.takeUp)) || 1
-    const effectiveGsm = gsm * takeUp
-    bsWeighted += getLayerBS(l) * effectiveGsm
-    bfWeighted += (parseFloat(String(l.bf)) || 0) * effectiveGsm
-    gsmForBf += effectiveGsm
+    combinedBS += getLayerBS(l) * bsContributionFactor(l.name)
+    combinedGsm += gsm
   }
-  const combinedBS = gsmForBf > 0 ? bsWeighted / gsmForBf : 0
-  const combinedBF = gsmForBf > 0 ? bfWeighted / gsmForBf : 0
+  const combinedBF = combinedGsm > 0 ? (combinedBS * 1000) / combinedGsm : 0
 
   const paperCost = layerWeights.reduce((sum, l) => sum + (l.weightGm / 1000) * l.rate, 0)
   const starchCost = (starchGm / 1000) * (parseFloat(String(form.starchRate)) || 45)

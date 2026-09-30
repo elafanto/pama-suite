@@ -219,11 +219,37 @@ export function currentPeriod(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
-/** YYYY-MM from advance date or explicit payroll_period. */
+/** Advances dated on or before this day belong to the previous payroll month. */
+export const ADVANCE_SALARY_CUTOFF_DAY = 8
+
+export function previousPayrollPeriod(period: string): string {
+  const [y, m] = period.split('-').map(Number)
+  if (!y || !m) return period
+  if (m <= 1) return `${y - 1}-12`
+  return `${y}-${String(m - 1).padStart(2, '0')}`
+}
+
+export function nextPayrollPeriod(period: string): string {
+  const [y, m] = period.split('-').map(Number)
+  if (!y || !m) return period
+  if (m >= 12) return `${y + 1}-01`
+  return `${y}-${String(m + 1).padStart(2, '0')}`
+}
+
+/**
+ * Map advance date → salary month.
+ * Day 1–8 → previous month; day 9+ → same calendar month.
+ * Explicit payroll_period on the record still wins.
+ */
 export function advancePayrollPeriod(advance: Pick<StaffAdvance, 'date' | 'payroll_period'>): string {
   if (advance.payroll_period && advance.payroll_period.length >= 7) return advance.payroll_period.slice(0, 7)
   if (!advance.date || advance.date.length < 7) return ''
-  return advance.date.slice(0, 7)
+  const period = advance.date.slice(0, 7)
+  if (advance.date.length < 10) return period
+  const day = Number(advance.date.slice(8, 10))
+  if (!Number.isFinite(day) || day <= 0) return period
+  if (day <= ADVANCE_SALARY_CUTOFF_DAY) return previousPayrollPeriod(period)
+  return period
 }
 
 type AdvanceCalcRow = Pick<StaffAdvance, 'id' | 'staff_id' | 'date' | 'payroll_period' | 'amount' | 'applied_period' | 'narration'>
@@ -257,8 +283,16 @@ export function periodLastDate(period: string): string {
   return `${y}-${String(m).padStart(2, '0')}-${String(last).padStart(2, '0')}`
 }
 
+/**
+ * Default advance date window for a salary month:
+ * from that month's day 9 through next month's day 8 (cutoff inclusive).
+ */
 export function defaultAdvanceRangeForPeriod(period: string): { from: string; to: string } {
-  return { from: `${period}-01`, to: periodLastDate(period) }
+  const next = nextPayrollPeriod(period)
+  return {
+    from: `${period}-${String(ADVANCE_SALARY_CUTOFF_DAY + 1).padStart(2, '0')}`,
+    to: `${next}-${String(ADVANCE_SALARY_CUTOFF_DAY).padStart(2, '0')}`,
+  }
 }
 
 export function resolveRunAdvanceRange(

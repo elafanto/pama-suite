@@ -883,6 +883,102 @@ export function filterReelLinkedMovements(movements: StockMovement[], reelIds: I
 }
 
 /**
+ * Pull the human “used on / party / order” bit out of auto-generated consumption notes.
+ * Typical forms:
+ * - `Full consume selected - UK Paper order`
+ * - `Full consume via remaining update - Remaining set to 0 KG (was 120.000) · Acme · 3-ply`
+ */
+export function extractReelUseFromMovementNotes(notes?: string): string {
+  const raw = String(notes || '').trim()
+  if (!raw) return ''
+
+  const afterRemaining = raw.match(
+    /Remaining set to [\d.]+ KG \(was [\d.]+\)\s*[·•\-–—]\s*(.+)$/i,
+  )
+  if (afterRemaining) return afterRemaining[1].trim()
+
+  let s = raw.replace(
+    /^(?:Manual reel consumption|Full consume via remaining update|Partial via remaining weight|Full consume selected)\s*[-–—]\s*/i,
+    '',
+  ).trim()
+  if (/^Remaining set to [\d.]+ KG \(was [\d.]+\)\s*$/i.test(s)) return ''
+  s = s.replace(/^Remaining set to [\d.]+ KG \(was [\d.]+\)(?:\s*[-–—]\s*)?/i, '').trim()
+  return s
+}
+
+export interface ReelConsumptionEntry {
+  date: string
+  weightKg: number
+  notes: string
+  /** Party / order / use remark extracted from notes (may be empty). */
+  useLabel: string
+  jobId?: string
+}
+
+/** Consumption movements for one reel, oldest → newest. */
+export function reelConsumptionEntries(
+  movements: StockMovement[],
+  reelId: string,
+): ReelConsumptionEntry[] {
+  if (!reelId) return []
+  return filterReelLinkedMovements(movements, [reelId])
+    .filter((m) => m.source === 'consumption' && (Number(m.weight_out) || 0) > 0)
+    .slice()
+    .sort((a, b) => {
+      const d = String(a.date || '').localeCompare(String(b.date || ''))
+      if (d) return d
+      return String(a.created_at || '').localeCompare(String(b.created_at || ''))
+    })
+    .map((m) => ({
+      date: String(m.date || '').slice(0, 10),
+      weightKg: Math.round((Number(m.weight_out) || 0) * 1000) / 1000,
+      notes: String(m.notes || '').trim(),
+      useLabel: extractReelUseFromMovementNotes(m.notes),
+      jobId: m.job_id || undefined,
+    }))
+}
+
+export function formatReelConsumptionSummary(
+  entries: ReelConsumptionEntry[],
+  opts?: {
+    jobLabel?: (jobId: string) => string
+    /** How many newest lines to show in `short` (default 2). */
+    maxEntries?: number
+  },
+): { short: string; detail: string; count: number } {
+  if (!entries.length) return { short: '—', detail: '', count: 0 }
+
+  const lines = entries.map((e) => {
+    const parts = [e.date, `${e.weightKg.toFixed(2)} KG`]
+    const jobBit = e.jobId && opts?.jobLabel ? opts.jobLabel(e.jobId) : ''
+    const who = [jobBit, e.useLabel].filter(Boolean).join(' · ')
+    if (who) parts.push(who)
+    return parts.join(' · ')
+  })
+
+  const max = opts?.maxEntries ?? 2
+  const short = lines.length <= max
+    ? lines.join('; ')
+    : `${lines.slice(-max).join('; ')} (+${lines.length - max} more)`
+
+  return { short, detail: lines.join('\n'), count: lines.length }
+}
+
+/** Map of reelId → consumption summary (built once for list views). */
+export function buildReelConsumptionLookup(
+  movements: StockMovement[],
+  reelIds: Iterable<string>,
+  opts?: { jobLabel?: (jobId: string) => string; maxEntries?: number },
+): Map<string, { short: string; detail: string; count: number }> {
+  const map = new Map<string, { short: string; detail: string; count: number }>()
+  for (const id of reelIds) {
+    if (!id || map.has(id)) continue
+    map.set(id, formatReelConsumptionSummary(reelConsumptionEntries(movements, id), opts))
+  }
+  return map
+}
+
+/**
  * Select reels for cleanup / bulk soft-delete.
  * - consumedOnly: status === 'consumed'
  * - beforeDate (YYYY-MM-DD): reel created_at date on or before this day
@@ -992,6 +1088,8 @@ export async function updateReelSpecification(data: {
   color: string
   intake_condition?: ReelIntakeCondition
   remark?: string
+  /** ₹/KG — 0 / empty = no rate (excluded from average). */
+  rate?: number
 }) {
   if (!data.reel_id) throw new Error('Reel select karo')
   const reel = await db.reel_stocks.get(data.reel_id)
@@ -1022,6 +1120,7 @@ export async function updateReelSpecification(data: {
   const intake_condition: ReelIntakeCondition =
     data.intake_condition === 'partial' ? 'partial' : 'fresh'
   const remark = String(data.remark || '').trim()
+  const rate = Math.max(0, Number(data.rate) || 0)
   const now = nowISO()
 
   const updated = plain({
@@ -1037,6 +1136,7 @@ export async function updateReelSpecification(data: {
     color: normalizeReelColor(data.color),
     intake_condition,
     remark: remark || undefined,
+    rate,
     updated_at: now,
     _dirty: true,
   }) as ReelStock
@@ -1702,8 +1802,17 @@ export interface ReelInventorySummary {
   currentWeight: number
   consumedWeight: number
   movementConsumed: number
+  /** Reels with rate &gt; 0 (missing/zero rate excluded from average). */
+  ratedReels: number
+  /** Simple mean ₹/KG of reels that have a rate; null when none. */
+  averageRate: number | null
   byPaperType: ReelPaperTypeTotals[]
   breakdown: ReelInventoryBreakdownRow[]
+}
+
+/** True when reel has a usable purchase/entry rate (₹/KG). */
+export function reelHasRate(rate: unknown): boolean {
+  return (Number(rate) || 0) > 0
 }
 
 function reelBreakdownStockStatus(currentWeight: number, openingWeight: number, activeReels: number): ReelBreakdownStockStatus {
@@ -1746,6 +1855,8 @@ export function reelInventorySummary(reels: ReelStock[], movements: StockMovemen
   let lowStockReels = 0
   let openingWeight = 0
   let currentWeight = 0
+  let ratedReels = 0
+  let rateSum = 0
 
   for (const reel of reels) {
     const paper_type = normalizePaperType(reel.paper_type)
@@ -1754,10 +1865,16 @@ export function reelInventorySummary(reels: ReelStock[], movements: StockMovemen
     const consumed = Math.max(0, open - cur)
     const isActive = reel.status === 'active'
     const hasStock = isActive && cur > 0
+    const rate = Number(reel.rate) || 0
 
     totalReels += 1
     openingWeight += open
     currentWeight += cur
+    // Missing / zero rate must not pull the average down
+    if (reelHasRate(rate)) {
+      ratedReels += 1
+      rateSum += rate
+    }
 
     const typeRow = ensureType(paper_type)
     typeRow.reels += 1
@@ -1839,6 +1956,8 @@ export function reelInventorySummary(reels: ReelStock[], movements: StockMovemen
     currentWeight,
     consumedWeight: Math.max(0, openingWeight - currentWeight),
     movementConsumed,
+    ratedReels,
+    averageRate: ratedReels > 0 ? Math.round((rateSum / ratedReels) * 100) / 100 : null,
     byPaperType: byPaperType.length ? byPaperType : paperTypes.map((paper_type) => ({
       paper_type,
       reels: 0,

@@ -1,5 +1,5 @@
 import { jsPDF } from 'jspdf'
-import { formatDeckleDisplay, normalizePaperType, normalizeReelColor, resolveDecklePair, type ReelInventoryBreakdownRow } from '@/services/production'
+import { formatDeckleDisplay, normalizePaperType, normalizeReelColor, resolveDecklePair, type ReelInventoryBreakdownRow } from '@/services/reel'
 import type { ReelStock } from '@/types/models'
 
 function n2(v: number): string {

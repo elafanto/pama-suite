@@ -1,0 +1,8 @@
+Run,Pattern,Symbol,Timeframe,From Date,To Date,Trades,Win %,Profit Factor,Net Profit,Max DD %,Avg Trade,Volume Filter,EMA Filter,Notes
+1,Hammer,,15m,,,,,,,,,ON,ON,
+2,Bullish Engulfing,,15m,,,,,,,,,ON,ON,
+3,Morning Star,,15m,,,,,,,,,ON,ON,
+4,Bearish Engulfing,,15m,,,,,,,,,ON,ON,
+5,Evening Star,,15m,,,,,,,,,ON,ON,
+6,Three White Soldiers,,15m,,,,,,,,,ON,ON,
+7,Three Black Crows,,15m,,,,,,,,,ON,ON,
