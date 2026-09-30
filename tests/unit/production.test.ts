@@ -82,6 +82,26 @@ describe('reelInventorySummary — colour grouping', () => {
   })
 })
 
+describe('reelInventorySummary — average rate', () => {
+  it('averages only reels that have rate > 0', () => {
+    const reels = [
+      reel({ id: 'a', rate: 40 }),
+      reel({ id: 'b', rate: 50 }),
+      reel({ id: 'c', rate: 0 }),
+      reel({ id: 'd' }), // missing rate
+    ]
+    const summary = reelInventorySummary(reels, [])
+    expect(summary.ratedReels).toBe(2)
+    expect(summary.averageRate).toBe(45)
+  })
+
+  it('returns null average when no reel has a rate', () => {
+    const summary = reelInventorySummary([reel({ rate: 0 }), reel()], [])
+    expect(summary.ratedReels).toBe(0)
+    expect(summary.averageRate).toBeNull()
+  })
+})
+
 describe('resolveReelFeedWeight', () => {
   it('uses full available weight for full mode', () => {
     expect(resolveReelFeedWeight('full', 125.5)).toBe(125.5)

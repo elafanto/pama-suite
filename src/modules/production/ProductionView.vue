@@ -150,6 +150,7 @@ const editReelForm = reactive({
   color: 'NS',
   intake_condition: 'fresh' as ReelIntakeCondition,
   remark: '',
+  rate: 0,
 })
 
 function openEditReel(reel: ReelStock) {
@@ -169,6 +170,7 @@ function openEditReel(reel: ReelStock) {
   editReelForm.color = normalizeReelColor(reel.color)
   editReelForm.intake_condition = reel.intake_condition === 'partial' ? 'partial' : 'fresh'
   editReelForm.remark = reel.remark || ''
+  editReelForm.rate = Number(reel.rate) || 0
 }
 
 function closeEditReel() {
@@ -212,6 +214,7 @@ async function saveEditReel() {
       color: normalizeReelColor(editReelForm.color),
       intake_condition: editReelForm.intake_condition,
       remark: editReelForm.remark.trim() || undefined,
+      rate: Number(editReelForm.rate) || 0,
     })
     closeEditReel()
   } catch (err: any) {
@@ -290,6 +293,7 @@ type ReelSortKey =
   | 'gsm'
   | 'bf'
   | 'color'
+  | 'rate'
   | 'opening'
   | 'current'
   | 'status'
@@ -303,10 +307,16 @@ const filteredReels = reelSort.sortedFrom(filteredReelsBase, {
   gsm: (r) => Number(r.gsm) || r.gsm,
   bf: (r) => Number(r.bf) || r.bf,
   color: (r) => normalizeReelColor(r.color),
+  rate: (r) => Number(r.rate) || 0,
   opening: (r) => r.opening_weight,
   current: (r) => r.current_weight,
   status: (r) => r.status,
 })
+
+function formatReelRate(rate: unknown): string {
+  const n = Number(rate) || 0
+  return n > 0 ? n2(n) : '—'
+}
 
 function deckleLabel(reel: ReelStock): string {
   if (reel.deckle_mm || reel.deckle_inch) {
@@ -1380,7 +1390,7 @@ onMounted(async () => {
           <p class="text-xs text-slate-500">Firm-scoped totals from reel stock and movement ledger (Kraft / Duplex, GSM, BF, deckle, color).</p>
         </div>
 
-        <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-3">
           <div class="pp-card p-4">
             <div class="text-xs font-semibold text-slate-500 uppercase">Total Reels</div>
             <div class="text-2xl font-bold text-navy mt-1">{{ reelInventory.totalReels }}</div>
@@ -1398,6 +1408,15 @@ onMounted(async () => {
           <div class="pp-card p-4 border-l-4 border-blue-400">
             <div class="text-xs font-semibold text-slate-500 uppercase">Opening KG</div>
             <div class="text-2xl font-bold text-blue-800 mt-1 font-mono">{{ n2(reelInventory.openingWeight) }}</div>
+          </div>
+          <div class="pp-card p-4 border-l-4 border-teal-400">
+            <div class="text-xs font-semibold text-slate-500 uppercase">Avg Rate ₹/KG</div>
+            <div class="text-2xl font-bold text-teal-800 mt-1 font-mono">
+              {{ reelInventory.averageRate == null ? '—' : n2(reelInventory.averageRate) }}
+            </div>
+            <div class="text-xs text-slate-500 mt-1">
+              {{ reelInventory.ratedReels }} reel{{ reelInventory.ratedReels === 1 ? '' : 's' }} with rate
+            </div>
           </div>
           <div class="pp-card p-4 border-l-4 border-amber-400">
             <div class="text-xs font-semibold text-slate-500 uppercase">Low Stock</div>
@@ -1636,6 +1655,7 @@ onMounted(async () => {
               <th class="p-3" :class="reelSort.thClass('gsm')" @click="reelSort.toggle('gsm')">GSM{{ reelSort.indicator('gsm') }}</th>
               <th class="p-3" :class="reelSort.thClass('bf')" @click="reelSort.toggle('bf')">BF{{ reelSort.indicator('bf') }}</th>
               <th class="p-3" :class="reelSort.thClass('color')" @click="reelSort.toggle('color')">Color{{ reelSort.indicator('color') }}</th>
+              <th class="p-3" :class="reelSort.thClass('rate', 'right')" @click="reelSort.toggle('rate', 'desc')" title="₹ per KG">Rate ₹/KG{{ reelSort.indicator('rate') }}</th>
               <th class="p-3" title="Add / Edit pe jo remark — kis party ya order ke liye reel rakhi">For (party/order)</th>
               <th class="p-3" title="Consume pe likha remark / job — kab aur kis pe use hui">Consumed on</th>
               <th class="p-3" :class="reelSort.thClass('opening', 'right')" @click="reelSort.toggle('opening', 'desc')">Opening KG{{ reelSort.indicator('opening') }}</th>
@@ -1675,6 +1695,9 @@ onMounted(async () => {
               <td class="p-3">{{ reel.gsm }}</td>
               <td class="p-3">{{ reel.bf }}</td>
               <td class="p-3">{{ normalizeReelColor(reel.color) }}</td>
+              <td class="p-3 text-right font-mono" :class="(Number(reel.rate) || 0) > 0 ? 'text-slate-800' : 'text-slate-400'">
+                {{ formatReelRate(reel.rate) }}
+              </td>
               <td class="p-3 text-xs text-slate-700 max-w-[11rem]">
                 <span class="line-clamp-2" :title="reel.remark || ''">{{ reel.remark || '—' }}</span>
               </td>
@@ -1778,7 +1801,7 @@ onMounted(async () => {
               </td>
             </tr>
             <tr v-if="filteredReels.length === 0">
-              <td colspan="15" class="p-8 text-center text-slate-500">
+              <td colspan="16" class="p-8 text-center text-slate-500">
                 <p class="font-semibold text-navy mb-1">Abhi list khali hai</p>
                 <p class="text-sm">
                   Right side <b>Add Reel (stock)</b> se mill/GSM/BF/deckle set karke
@@ -1934,6 +1957,18 @@ onMounted(async () => {
             <div>
               <label class="pp-label">Date</label>
               <input v-model="manualReelForm.date" type="date" class="pp-input" />
+            </div>
+            <div>
+              <label class="pp-label">Rate ₹/KG</label>
+              <input
+                v-model.number="manualReelForm.rate"
+                type="number"
+                min="0"
+                step="0.01"
+                class="pp-input text-right font-mono"
+                placeholder="Optional"
+                title="Blank / 0 = rate nahi — average me count nahi hoga"
+              />
             </div>
             <div class="col-span-2">
               <label class="pp-label">For party / order</label>
@@ -2478,6 +2513,17 @@ onMounted(async () => {
               Partial used
             </label>
           </div>
+        </div>
+        <div>
+          <label class="pp-label">Rate ₹/KG</label>
+          <input
+            v-model.number="editReelForm.rate"
+            type="number"
+            min="0"
+            step="0.01"
+            class="pp-input text-right font-mono"
+            placeholder="0 = no rate"
+          />
         </div>
         <div class="col-span-2">
           <label class="pp-label">For party / order</label>

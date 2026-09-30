@@ -1088,6 +1088,8 @@ export async function updateReelSpecification(data: {
   color: string
   intake_condition?: ReelIntakeCondition
   remark?: string
+  /** ₹/KG — 0 / empty = no rate (excluded from average). */
+  rate?: number
 }) {
   if (!data.reel_id) throw new Error('Reel select karo')
   const reel = await db.reel_stocks.get(data.reel_id)
@@ -1118,6 +1120,7 @@ export async function updateReelSpecification(data: {
   const intake_condition: ReelIntakeCondition =
     data.intake_condition === 'partial' ? 'partial' : 'fresh'
   const remark = String(data.remark || '').trim()
+  const rate = Math.max(0, Number(data.rate) || 0)
   const now = nowISO()
 
   const updated = plain({
@@ -1133,6 +1136,7 @@ export async function updateReelSpecification(data: {
     color: normalizeReelColor(data.color),
     intake_condition,
     remark: remark || undefined,
+    rate,
     updated_at: now,
     _dirty: true,
   }) as ReelStock
@@ -1798,8 +1802,17 @@ export interface ReelInventorySummary {
   currentWeight: number
   consumedWeight: number
   movementConsumed: number
+  /** Reels with rate &gt; 0 (missing/zero rate excluded from average). */
+  ratedReels: number
+  /** Simple mean ₹/KG of reels that have a rate; null when none. */
+  averageRate: number | null
   byPaperType: ReelPaperTypeTotals[]
   breakdown: ReelInventoryBreakdownRow[]
+}
+
+/** True when reel has a usable purchase/entry rate (₹/KG). */
+export function reelHasRate(rate: unknown): boolean {
+  return (Number(rate) || 0) > 0
 }
 
 function reelBreakdownStockStatus(currentWeight: number, openingWeight: number, activeReels: number): ReelBreakdownStockStatus {
@@ -1842,6 +1855,8 @@ export function reelInventorySummary(reels: ReelStock[], movements: StockMovemen
   let lowStockReels = 0
   let openingWeight = 0
   let currentWeight = 0
+  let ratedReels = 0
+  let rateSum = 0
 
   for (const reel of reels) {
     const paper_type = normalizePaperType(reel.paper_type)
@@ -1850,10 +1865,16 @@ export function reelInventorySummary(reels: ReelStock[], movements: StockMovemen
     const consumed = Math.max(0, open - cur)
     const isActive = reel.status === 'active'
     const hasStock = isActive && cur > 0
+    const rate = Number(reel.rate) || 0
 
     totalReels += 1
     openingWeight += open
     currentWeight += cur
+    // Missing / zero rate must not pull the average down
+    if (reelHasRate(rate)) {
+      ratedReels += 1
+      rateSum += rate
+    }
 
     const typeRow = ensureType(paper_type)
     typeRow.reels += 1
@@ -1935,6 +1956,8 @@ export function reelInventorySummary(reels: ReelStock[], movements: StockMovemen
     currentWeight,
     consumedWeight: Math.max(0, openingWeight - currentWeight),
     movementConsumed,
+    ratedReels,
+    averageRate: ratedReels > 0 ? Math.round((rateSum / ratedReels) * 100) / 100 : null,
     byPaperType: byPaperType.length ? byPaperType : paperTypes.map((paper_type) => ({
       paper_type,
       reels: 0,

@@ -328,6 +328,7 @@ export const useProductionStore = defineStore('production', () => {
     color: string
     intake_condition?: 'fresh' | 'partial'
     remark?: string
+    rate?: number
   }) {
     const firm = useFirmStore()
     const rec = await updateReelSpecification({
