@@ -302,6 +302,26 @@ function payStatusFromOutstanding(docAmount: number, outstanding: number) {
   return 'UNPAID'
 }
 
+/** Bills raise FIFO remaining; receipts/payments/write-offs/open advances reduce it. */
+function applyRowToFifo(fifo: FifoAllocState, row: Pick<PartyLedgerRow, 'id' | 'mode' | 'debit' | 'credit'>) {
+  const isBillRow = row.id.endsWith(':bill')
+  const isCreditRow = row.id.endsWith(':paid') || row.id.endsWith(':writeoff') || row.id.endsWith(':adv')
+
+  if (isBillRow) {
+    if (row.mode === 'customer') {
+      if (row.debit > 0) addBillToFifo(fifo, row.id, row.debit)
+      else if (row.credit > 0) addCreditToFifo(fifo, row.credit)
+    } else if (row.credit > 0) {
+      addBillToFifo(fifo, row.id, row.credit)
+    }
+    return
+  }
+
+  if (isCreditRow) {
+    addCreditToFifo(fifo, row.mode === 'customer' ? row.credit : row.debit)
+  }
+}
+
 function enrichRowsWithBalanceAndOutstanding(
   rows: Omit<PartyLedgerRow, 'balance'>[],
   filters: PartyLedgerFilters,
@@ -310,7 +330,7 @@ function enrichRowsWithBalanceAndOutstanding(
   const balanceByGroup = new Map<string, number>()
   const fifoByGroup = new Map<string, FifoAllocState>()
 
-  return rows.map((row) => {
+  const walked = rows.map((row) => {
     const groupKey = partyGroupKey(row)
     let balance: number | null = null
 
@@ -329,17 +349,7 @@ function enrichRowsWithBalanceAndOutstanding(
     const isBillRow = row.id.endsWith(':bill')
     const isPaymentRow = row.id.endsWith(':paid') || row.id.endsWith(':writeoff')
 
-    if (isBillRow) {
-      if (row.mode === 'customer') {
-        if (row.debit > 0) addBillToFifo(fifo, row.id, row.debit)
-        else if (row.credit > 0) addCreditToFifo(fifo, row.credit)
-      } else if (row.credit > 0) {
-        addBillToFifo(fifo, row.id, row.credit)
-      }
-    } else if (isPaymentRow) {
-      const paymentAmount = row.mode === 'customer' ? row.credit : row.debit
-      addCreditToFifo(fifo, paymentAmount)
-    }
+    applyRowToFifo(fifo, row)
 
     let outstanding = row.outstanding
     let payStatus = row.payStatus
@@ -351,8 +361,22 @@ function enrichRowsWithBalanceAndOutstanding(
       outstanding = partyOutstandingFromFifo(fifo)
       payStatus = outstanding <= 0.01 ? 'PAID' : 'PARTIAL'
     }
+    // Advance rows keep remaining-as-outstanding from build; they still feed FIFO above.
 
     return { ...row, balance, outstanding, payStatus }
+  })
+
+  // Recompute bill outstanding from final FIFO so later receipts/advances update earlier bills.
+  return walked.map((row) => {
+    if (!row.id.endsWith(':bill')) return row
+    const fifo = fifoByGroup.get(partyGroupKey(row))
+    if (!fifo) return row
+    const outstanding = billOutstandingFromFifo(fifo, row.id)
+    return {
+      ...row,
+      outstanding,
+      payStatus: payStatusFromOutstanding(row.amount, outstanding),
+    }
   })
 }
 
@@ -814,19 +838,7 @@ export function buildPartyLedger(
     for (const row of enriched) {
       const groupKey = partyGroupKey(row)
       if (!fifoByGroup.has(groupKey)) fifoByGroup.set(groupKey, createFifoState())
-      const fifo = fifoByGroup.get(groupKey)!
-      const isBillRow = row.id.endsWith(':bill')
-      const isPaymentRow = row.id.endsWith(':paid') || row.id.endsWith(':writeoff')
-      if (isBillRow) {
-        if (row.mode === 'customer') {
-          if (row.debit > 0) addBillToFifo(fifo, row.id, row.debit)
-          else if (row.credit > 0) addCreditToFifo(fifo, row.credit)
-        } else if (row.credit > 0) {
-          addBillToFifo(fifo, row.id, row.credit)
-        }
-      } else if (isPaymentRow) {
-        addCreditToFifo(fifo, row.mode === 'customer' ? row.credit : row.debit)
-      }
+      applyRowToFifo(fifoByGroup.get(groupKey)!, row)
     }
     totals.outstanding = round2(
       [...fifoByGroup.values()].reduce((sum, state) => sum + partyOutstandingFromFifo(state), 0),
