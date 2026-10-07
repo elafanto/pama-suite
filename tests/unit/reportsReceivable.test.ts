@@ -51,4 +51,21 @@ describe('dashboard receivable / payable with lump sum', () => {
     ])
     expect(payable).toBe(8000)
   })
+
+  it('excludes job-work delivery challans from receivable aging', () => {
+    const rows = outstandingAging([
+      invoice({ id: 'inv-1', bill_no: 'INV-0001', date: '2026-07-10', grand_total: 10000 }),
+      invoice({
+        id: 'dc-1',
+        bill_no: 'DC-0001',
+        date: '2026-07-11',
+        grand_total: 50000,
+        doc_type: 'DELIVERY_CHALLAN',
+        pay_status: 'UNPAID',
+      }),
+    ])
+    expect(rows).toHaveLength(1)
+    expect(rows[0].total).toBe(10000)
+    expect(rows[0].billCount).toBe(1)
+  })
 })

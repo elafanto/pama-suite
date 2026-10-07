@@ -20,6 +20,7 @@ import {
 import { downloadSalesPurchaseExcel } from '@/services/salesPurchaseExcel'
 import { recentActivity } from '@/services/activityLog'
 import { displayGstinForInvoice } from '@/services/invoiceDisplay'
+import { isDeliveryChallan } from '@/services/invoiceDoc'
 import type { ActivityLog } from '@/types/models'
 import type { Invoice } from '@/types/models'
 
@@ -222,6 +223,8 @@ const hsnRows = computed(() => gstrHsnSummary(filtered.value))
 const itemRows = computed(() => itemSalesReport(filtered.value))
 const receivableDocs = computed(() => invoiceStore.list.filter((i) => {
   if (i.firm_id !== firmStore.activeFirmId || i.is_deleted || i.cancelled_at) return false
+  // Job-work delivery challans are not receivables
+  if (isDeliveryChallan(i)) return false
   if (from.value && i.date < from.value) return false
   if (to.value && i.date > to.value) return false
   return true

@@ -94,7 +94,7 @@ const stats = computed(() => {
 
 const topCustomers = computed(() => {
   const firmId = firmStore.activeFirmId
-  const bills = invoiceStore.list.filter(b => b.firm_id === firmId && isInvoiceActive(b))
+  const bills = invoiceStore.list.filter(b => b.firm_id === firmId && isInvoiceActive(b) && !isDeliveryChallan(b))
   return outstandingAging(bills).slice(0, 5)
 })
 
