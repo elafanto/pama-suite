@@ -791,18 +791,13 @@ export function calcEarnedFromHours(
 
 /** Salary expense for one staff on one day (paid hours × hourly wage). */
 export function calcDaySalaryExpense(
-  staff: Pick<Staff, 'hourly_wage' | 'joining_date' | 'leaving_date'>,
+  staff: Pick<Staff, 'hourly_wage'>,
   day: DayAttendance | undefined,
-  dayHours?: Record<string, DayAttendance>,
-  year?: number,
-  month?: number,
+  opts?: { grantPaidOffs?: boolean },
 ): number {
   if (!day || day.duty_hours === null) return 0
   const hourly = Math.max(0, staff.hourly_wage)
-  const grantPaidOffs =
-    dayHours && year && month
-      ? hasCompleteWorkingDuty(dayHours, year, month, staff)
-      : true
+  const grantPaidOffs = opts?.grantPaidOffs !== false
   const paidHours = breakdownDay(day, { grantPaidOffs }).paid
   if (paidHours <= 0) return 0
   return ceilRupee(paidHours * hourly)
@@ -813,15 +808,15 @@ export function sumDaySalaryExpense(
   dayKey: string,
   staffList: Staff[],
   lines: PayrollLine[] | undefined,
-  year?: number,
-  month?: number,
 ): number {
   const lineByStaff = new Map((lines ?? []).map((l) => [l.staff_id, l]))
   let total = 0
   for (const staff of staffList) {
     const line = lineByStaff.get(staff.id)
     const dayHours = line ? normalizeDayHours(line) : {}
-    total += calcDaySalaryExpense(staff, dayHours[dayKey], dayHours, year, month)
+    total += calcDaySalaryExpense(staff, dayHours[dayKey], {
+      grantPaidOffs: line?.grant_paid_offs !== false,
+    })
   }
   return total
 }
@@ -834,7 +829,10 @@ export function buildPayrollLine(
   month: number,
   advanceDeduction: number,
   otherDeduction: number,
-  existing?: Pick<PayrollLine, 'payments' | 'paid_amount' | 'pay_status' | 'payment_date' | 'payment_mode'>,
+  existing?: Pick<
+    PayrollLine,
+    'payments' | 'paid_amount' | 'pay_status' | 'payment_date' | 'payment_mode' | 'grant_paid_offs'
+  >,
   advanceItems: PayrollAdvanceItem[] = [],
 ): PayrollLine {
   const dim = daysInMonth(year, month)
@@ -845,7 +843,9 @@ export function buildPayrollLine(
   const day_hours = filterDayHoursToEmployment(rawHours, staff, year, month)
 
   const duty_complete = hasCompleteWorkingDuty(day_hours, year, month, staff)
-  const summary = summarizeDayHours(day_hours, dim, { grantPaidOffs: duty_complete })
+  // Manual toggle (default ON). Not auto-gated by duty_complete.
+  const grant_paid_offs = existing?.grant_paid_offs !== false
+  const summary = summarizeDayHours(day_hours, dim, { grantPaidOffs: grant_paid_offs })
   const outsideDays = unpaidDaysOutsideEmployment(staff, year, month)
   const summaryForPay =
     outsideDays > 0 && staff.pay_type === 'monthly'
@@ -887,6 +887,7 @@ export function buildPayrollLine(
     total_ot_hours: summary.total_ot_hours,
     total_paid_hours: summary.total_paid_hours,
     duty_complete,
+    grant_paid_offs,
     earned,
     advance_deduction: adv,
     advance_items: advanceItems,

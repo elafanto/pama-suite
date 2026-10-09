@@ -599,7 +599,7 @@ describe('Sunday/holiday pay only when duty complete', () => {
     expect(summary.total_paid_hours).toBe(10)
   })
 
-  it('buildPayrollLine grants Sunday rest only when duty complete', () => {
+  it('buildPayrollLine grants Sunday rest by default; toggle grant_paid_offs to deny', () => {
     const staff: Staff = {
       id: 's1',
       firm_id: 'f1',
@@ -621,12 +621,36 @@ describe('Sunday/holiday pay only when duty complete', () => {
     }
     const complete = buildPayrollLine(staff, fullMonthWithSundays(), undefined, year, month, 0, 0)
     expect(complete.duty_complete).toBe(true)
+    expect(complete.grant_paid_offs).toBe(true)
     // 26 work days × 8 + 4 Sundays × 8 = 240 paid hours
     expect(complete.total_paid_hours).toBe(240)
 
-    const incomplete = buildPayrollLine(staff, fullMonthWithSundays('10'), undefined, year, month, 0, 0)
-    expect(incomplete.duty_complete).toBe(false)
-    // 25 work × 8 + 0 Sunday rest + 1 absent = 200 paid hours
-    expect(incomplete.total_paid_hours).toBe(200)
+    const withAbsentStillGranted = buildPayrollLine(
+      staff,
+      fullMonthWithSundays('10'),
+      undefined,
+      year,
+      month,
+      0,
+      0,
+    )
+    expect(withAbsentStillGranted.duty_complete).toBe(false)
+    expect(withAbsentStillGranted.grant_paid_offs).toBe(true)
+    // 25 work × 8 + 4 Sunday rest = 232 (absent day unpaid)
+    expect(withAbsentStillGranted.total_paid_hours).toBe(232)
+
+    const denied = buildPayrollLine(
+      staff,
+      fullMonthWithSundays('10'),
+      undefined,
+      year,
+      month,
+      0,
+      0,
+      { grant_paid_offs: false, payments: [], paid_amount: 0, pay_status: 'pending' },
+    )
+    expect(denied.grant_paid_offs).toBe(false)
+    // 25 work × 8, Sundays denied = 200
+    expect(denied.total_paid_hours).toBe(200)
   })
 })

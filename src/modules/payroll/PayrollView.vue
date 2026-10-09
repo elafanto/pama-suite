@@ -166,13 +166,7 @@ const selectedBulkCount = computed(() => selectedBulkDays.value.size)
 const daySalaryExpense = computed(() => {
   const map: Record<string, number> = {}
   for (const d of dayCols.value) {
-    map[d] = sumDaySalaryExpense(
-      d,
-      periodStaff.value,
-      currentRun.value?.lines,
-      selYear.value,
-      selMonth.value,
-    )
+    map[d] = sumDaySalaryExpense(d, periodStaff.value, currentRun.value?.lines)
   }
   return map
 })
@@ -529,6 +523,22 @@ async function clearDayModal() {
 async function setOtherDeduction(staffId: string, amount: number) {
   if (currentRun.value?.status === 'paid') return
   await store.updateRunLine(period.value, staffId, { other_deduction: Math.max(0, amount) })
+}
+
+async function setGrantPaidOffs(staffId: string, grant: boolean) {
+  if (currentRun.value?.status === 'paid') return
+  const res = await store.updateRunLine(period.value, staffId, { grant_paid_offs: grant })
+  if (res && 'error' in res) alert(res.error)
+}
+
+async function setGrantPaidOffsAll(grant: boolean) {
+  if (currentRun.value?.status === 'paid') return alert('Month already paid.')
+  const res = await store.setGrantPaidOffsBulk(period.value, grant)
+  if (res && 'error' in res) alert(res.error)
+}
+
+function lineGrantsPaidOffs(line: { grant_paid_offs?: boolean }) {
+  return line.grant_paid_offs !== false
 }
 
 async function calculateSalary() {
@@ -1149,7 +1159,7 @@ onMounted(async () => {
         <span class="font-bold text-emerald-900">₹{{ attendanceSalaryExpenseTotal.toLocaleString('en-IN') }}</span>
       </div>
       <p v-if="periodStaff.length > 0" class="text-[10px] text-slate-400 px-1">
-        Daily = monthly ÷ month days. Sunday/holiday rest pay sirf unko jinki working-day duty poori (8h) hai.
+        Daily = monthly ÷ month days. Sunday/holiday rest pay Salary tab se staff-wise ON/OFF.
         Holiday/Sunday mark pe pehle se fed duty/OT disturb nahi hota. Weekly off pe kaam = full daily + OT. Blank = 0 pay.
       </p>
     </section>
@@ -1205,19 +1215,40 @@ onMounted(async () => {
 
         <div class="pp-card p-3 space-y-2">
           <div class="flex flex-wrap items-center justify-between gap-2">
-            <h3 class="text-sm font-bold text-navy">Duty hours summary</h3>
-            <span class="text-[11px] text-slate-500">
-              Sunday/Holiday rest pay → sirf duty poori (har working day 8h)
-            </span>
+            <div>
+              <h3 class="text-sm font-bold text-navy">Duty hours summary</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5">
+                Sun/Hol pay checkbox se decide karein — kise dena hai, kise nahi. Duty-complete sirf hint hai.
+              </p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <button
+                type="button"
+                class="pp-btn pp-btn-ghost !py-1 !text-xs border-emerald-200 text-emerald-800"
+                :disabled="currentRun.status === 'paid'"
+                @click="setGrantPaidOffsAll(true)"
+              >
+                Sab Sun/Hol ON
+              </button>
+              <button
+                type="button"
+                class="pp-btn pp-btn-ghost !py-1 !text-xs border-rose-200 text-rose-700"
+                :disabled="currentRun.status === 'paid'"
+                @click="setGrantPaidOffsAll(false)"
+              >
+                Sab Sun/Hol OFF
+              </button>
+            </div>
           </div>
           <div class="overflow-x-auto">
-            <table class="w-full text-sm min-w-[420px]">
+            <table class="w-full text-sm min-w-[480px]">
               <thead class="bg-slate-50 text-xs text-slate-500 uppercase">
                 <tr>
                   <th class="text-left px-2 py-1.5">Staff</th>
                   <th class="text-right px-2 py-1.5">Duty h</th>
                   <th class="text-right px-2 py-1.5">OT h</th>
                   <th class="text-right px-2 py-1.5">Paid h</th>
+                  <th class="text-center px-2 py-1.5">Duty full?</th>
                   <th class="text-center px-2 py-1.5">Sun/Hol pay</th>
                 </tr>
               </thead>
@@ -1234,10 +1265,28 @@ onMounted(async () => {
                   <td class="px-2 py-1.5 text-center">
                     <span
                       class="text-[10px] font-bold px-1.5 py-0.5 rounded"
-                      :class="line.duty_complete ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-50 text-rose-700'"
+                      :class="line.duty_complete ? 'bg-sky-50 text-sky-800' : 'bg-slate-100 text-slate-500'"
+                      :title="line.duty_complete ? 'Har working day 8h' : 'Kuch din incomplete / blank / absent'"
                     >
                       {{ line.duty_complete ? 'Yes' : 'No' }}
                     </span>
+                  </td>
+                  <td class="px-2 py-1.5 text-center">
+                    <label class="inline-flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        class="w-4 h-4"
+                        :checked="lineGrantsPaidOffs(line)"
+                        :disabled="currentRun.status === 'paid'"
+                        @change="setGrantPaidOffs(line.staff_id, ($event.target as HTMLInputElement).checked)"
+                      />
+                      <span
+                        class="text-[10px] font-bold"
+                        :class="lineGrantsPaidOffs(line) ? 'text-emerald-700' : 'text-rose-600'"
+                      >
+                        {{ lineGrantsPaidOffs(line) ? 'ON' : 'OFF' }}
+                      </span>
+                    </label>
                   </td>
                 </tr>
               </tbody>
@@ -1255,6 +1304,9 @@ onMounted(async () => {
                   </td>
                   <td class="px-2 py-1.5 text-center text-xs text-slate-600">
                     {{ sortedSalaryLines.filter((l) => l.duty_complete).length }}/{{ sortedSalaryLines.length }}
+                  </td>
+                  <td class="px-2 py-1.5 text-center text-xs text-slate-600">
+                    {{ sortedSalaryLines.filter((l) => lineGrantsPaidOffs(l)).length }}/{{ sortedSalaryLines.length }}
                   </td>
                 </tr>
               </tfoot>
