@@ -133,6 +133,14 @@ const dayModalOffHours = computed(() => {
   return calcOffDutyHours(dayForm.duty_hours)
 })
 
+/** Sunday / Holiday days: normal duty nahi — sirf OT. */
+const dayModalOtOnly = computed(() => {
+  const day = dayModalDay.value
+  if (!day) return false
+  if (isSunday(selYear.value, selMonth.value, day)) return true
+  return dayForm.kind === 'holiday' || dayForm.kind === 'sunday'
+})
+
 const wagePreview = computed(() =>
   deriveWageRates(staffForm.monthly_amount, periodCalendarDays(period.value || currentPeriod())),
 )
@@ -502,12 +510,31 @@ function applyDayPreset(preset: 'full' | 'half' | 'absent' | 'leave') {
 async function saveDayModal() {
   const line = lineFor(dayModalStaffId.value)
   const hours = line ? { ...normalizeDayHours(line) } : {}
-  const duty = dayForm.duty_hours === null ? null : Math.max(0, Number(dayForm.duty_hours) || 0)
-  hours[dayModalDay.value] = {
-    duty_hours: duty,
-    off_paid: dayForm.off_paid,
-    ot_hours: Math.max(0, Number(dayForm.ot_hours) || 0),
-    kind: duty === null ? undefined : duty >= PAYROLL_HOURS_PER_DAY && !dayForm.ot_hours ? 'work' : 'work',
+  const ot = Math.max(0, Number(dayForm.ot_hours) || 0)
+  const dayKey = dayModalDay.value
+  const sunday = isSunday(selYear.value, selMonth.value, dayKey)
+  const otOnly = dayModalOtOnly.value
+
+  if (otOnly) {
+    hours[dayKey] = {
+      duty_hours: 0,
+      off_paid: true,
+      ot_hours: ot,
+      kind: sunday || dayForm.kind === 'sunday' ? 'sunday' : 'holiday',
+    }
+  } else {
+    const duty = dayForm.duty_hours === null ? null : Math.max(0, Number(dayForm.duty_hours) || 0)
+    hours[dayKey] = {
+      duty_hours: duty,
+      off_paid: dayForm.off_paid,
+      ot_hours: ot,
+      kind:
+        duty === null
+          ? undefined
+          : duty === 0 && !dayForm.off_paid
+            ? 'absent'
+            : 'work',
+    }
   }
   const res = await store.updateRunLine(period.value, dayModalStaffId.value, { day_hours: hours })
   if (res && 'error' in res) return alert(res.error)
@@ -1672,6 +1699,7 @@ onMounted(async () => {
             <thead class="bg-slate-50 text-slate-500">
               <tr>
                 <th class="text-left py-1 px-1">Date</th>
+                <th class="text-left py-1 px-1">Sun/Hol</th>
                 <th class="text-left py-1 px-1">Status</th>
                 <th class="text-right py-1 px-1">Duty</th>
                 <th class="text-right py-1 px-1">Off</th>
@@ -1683,6 +1711,12 @@ onMounted(async () => {
             <tbody>
               <tr v-for="row in payslipDayRows" :key="row.dayKey" class="border-t border-slate-100">
                 <td class="py-1 px-1">{{ row.dayKey }} {{ row.weekday }}</td>
+                <td
+                  class="py-1 px-1 font-semibold"
+                  :class="row.sunHol === 'Holiday' ? 'text-violet-700' : row.sunHol === 'Sunday' ? 'text-indigo-700' : 'text-slate-400'"
+                >
+                  {{ row.sunHol }}
+                </td>
                 <td class="py-1 px-1">{{ row.status }}</td>
                 <td class="py-1 px-1 text-right">{{ row.duty }}</td>
                 <td class="py-1 px-1 text-right text-rose-600">{{ row.offUnpaid || '—' }}</td>
@@ -1819,21 +1853,34 @@ onMounted(async () => {
     >
       <p class="text-xs text-slate-500 mb-3">Kya mark karna hai? Har option par confirm aayega.</p>
       <div class="grid grid-cols-1 gap-2">
-        <button type="button" class="pp-btn pp-btn-primary w-full justify-center" @click="applyStaffDayPreset('full')">
-          ✓ Present — 8 hr duty
-        </button>
-        <button type="button" class="pp-btn pp-btn-ghost w-full justify-center border-rose-200 text-rose-700" @click="applyStaffDayPreset('absent')">
-          ✗ Absent
-        </button>
-        <button type="button" class="pp-btn pp-btn-ghost w-full justify-center border-violet-200 text-violet-800" @click="applyStaffDayPreset('holiday')">
-          🏭 Holiday (paid)
-        </button>
-        <button type="button" class="pp-btn pp-btn-ghost w-full justify-center border-indigo-200 text-indigo-800" @click="applyStaffDayPreset('sunday')">
-          ☀ Weekly off (paid)
-        </button>
-        <button type="button" class="pp-btn pp-btn-ghost w-full justify-center" @click="openPartialFromActionMenu">
-          ⏱ Partial duty / OT…
-        </button>
+        <template v-if="isSunday(selYear, selMonth, dayActionDay) || dayFor(dayActionStaffId, dayActionDay)?.kind === 'holiday'">
+          <p class="text-xs text-indigo-800 bg-indigo-50 border border-indigo-100 rounded-lg px-2 py-1.5">
+            Sunday / Holiday — normal duty nahi. Rest mark karo ya sirf OT daalo.
+          </p>
+          <button type="button" class="pp-btn pp-btn-ghost w-full justify-center border-indigo-200 text-indigo-800" @click="applyStaffDayPreset(isSunday(selYear, selMonth, dayActionDay) ? 'sunday' : 'holiday')">
+            ☀ Rest (paid off)
+          </button>
+          <button type="button" class="pp-btn pp-btn-primary w-full justify-center" @click="openPartialFromActionMenu">
+            ⏱ OT only…
+          </button>
+        </template>
+        <template v-else>
+          <button type="button" class="pp-btn pp-btn-primary w-full justify-center" @click="applyStaffDayPreset('full')">
+            ✓ Present — 8 hr duty
+          </button>
+          <button type="button" class="pp-btn pp-btn-ghost w-full justify-center border-rose-200 text-rose-700" @click="applyStaffDayPreset('absent')">
+            ✗ Absent
+          </button>
+          <button type="button" class="pp-btn pp-btn-ghost w-full justify-center border-violet-200 text-violet-800" @click="applyStaffDayPreset('holiday')">
+            🏭 Holiday (paid)
+          </button>
+          <button type="button" class="pp-btn pp-btn-ghost w-full justify-center border-indigo-200 text-indigo-800" @click="applyStaffDayPreset('sunday')">
+            ☀ Weekly off (paid)
+          </button>
+          <button type="button" class="pp-btn pp-btn-ghost w-full justify-center" @click="openPartialFromActionMenu">
+            ⏱ Partial duty / OT…
+          </button>
+        </template>
         <button type="button" class="pp-btn pp-btn-danger w-full justify-center !py-2" @click="applyStaffDayPreset('clear')">
           Clear this day
         </button>
@@ -1847,15 +1894,18 @@ onMounted(async () => {
       @close="showDayModal = false"
     >
       <div class="space-y-4">
-        <div class="flex flex-wrap gap-2">
+        <p v-if="dayModalOtOnly" class="text-xs text-indigo-800 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">
+          Sunday / Holiday — normal duty band. Sirf OT daalo (rest pay + OT).
+        </p>
+        <div v-if="!dayModalOtOnly" class="flex flex-wrap gap-2">
           <button type="button" class="pp-btn pp-btn-ghost !py-1.5 text-xs" @click="applyDayPreset('full')">Full 8h</button>
           <button type="button" class="pp-btn pp-btn-ghost !py-1.5 text-xs" @click="applyDayPreset('half')">Half 4h</button>
           <button type="button" class="pp-btn pp-btn-ghost !py-1.5 text-xs" @click="applyDayPreset('absent')">Absent</button>
           <button type="button" class="pp-btn pp-btn-ghost !py-1.5 text-xs" @click="applyDayPreset('leave')">Leave (paid)</button>
         </div>
 
-        <div>
-          <label class="pp-label">Duty hours (0–{{ PAYROLL_HOURS_PER_DAY }}+)</label>
+        <div v-if="!dayModalOtOnly">
+          <label class="pp-label">Duty hours (0–{{ PAYROLL_HOURS_PER_DAY }}+ / A=Absent)</label>
           <input
             v-model.number="dayForm.duty_hours"
             type="number"
@@ -1865,11 +1915,11 @@ onMounted(async () => {
             class="pp-input text-lg font-bold"
             placeholder="e.g. 6"
           />
-          <p class="text-xs text-slate-500 mt-1">8 ghante standard din — jitni duty, utna yahan.</p>
+          <p class="text-xs text-slate-500 mt-1">8 ghante standard din — jitni duty, utna yahan. Keyboard feed me A = Absent.</p>
         </div>
 
         <div
-          v-if="dayForm.duty_hours !== null && dayModalOffHours > 0"
+          v-if="!dayModalOtOnly && dayForm.duty_hours !== null && dayModalOffHours > 0"
           class="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2"
         >
           <div class="text-sm">
@@ -1887,14 +1937,14 @@ onMounted(async () => {
         </div>
 
         <div>
-          <label class="pp-label">Overtime (OT) hours</label>
+          <label class="pp-label">{{ dayModalOtOnly ? 'OT hours (Sunday/Holiday)' : 'Overtime (OT) hours' }}</label>
           <input
             v-model.number="dayForm.ot_hours"
             type="number"
             min="0"
             step="0.5"
             class="pp-input"
-            placeholder="Extra beyond 8 hr day"
+            :placeholder="dayModalOtOnly ? 'Sirf OT' : 'Extra beyond 8 hr day'"
           />
           <p class="text-xs text-emerald-700 mt-1">OT hamesha paid — hourly rate se.</p>
         </div>

@@ -40,7 +40,16 @@ describe('buildPayslipDayRows', () => {
     })
     const rows = buildPayslipDayRows(line, 2026, 8)
     expect(rows).toHaveLength(3)
-    expect(rows[0]).toMatchObject({ dayKey: '01', status: 'Full', duty: 8, offUnpaid: 0, ot: 0, paid: 8, dayPay: 1000 })
+    expect(rows[0]).toMatchObject({
+      dayKey: '01',
+      sunHol: '—', // 1 Aug 2026 = Saturday
+      status: 'Full',
+      duty: 8,
+      offUnpaid: 0,
+      ot: 0,
+      paid: 8,
+      dayPay: 1000,
+    })
     expect(rows[1]).toMatchObject({
       dayKey: '02',
       duty: 6,
@@ -50,6 +59,19 @@ describe('buildPayslipDayRows', () => {
       dayPay: 1000,
     })
     expect(rows[2]).toMatchObject({ dayKey: '03', status: 'Absent', duty: 0, paid: 0, dayPay: 0 })
+  })
+
+  it('marks Sunday and Holiday in sunHol column', () => {
+    // Sept 2026: 06 = Sunday
+    const line = baseLine({
+      '05': dayFromPreset('full'),
+      '06': dayFromPreset('sunday'),
+      '15': dayFromPreset('holiday'),
+    })
+    const rows = buildPayslipDayRows(line, 2026, 9)
+    expect(rows.find((r) => r.dayKey === '05')).toMatchObject({ sunHol: '—', status: 'Full' })
+    expect(rows.find((r) => r.dayKey === '06')).toMatchObject({ sunHol: 'Sunday', status: 'Weekly off' })
+    expect(rows.find((r) => r.dayKey === '15')).toMatchObject({ sunHol: 'Holiday', status: 'Holiday rest' })
   })
 
   it('returns empty when no days marked', () => {

@@ -67,6 +67,13 @@ function lineFor(staffId: string) {
   return props.lines.find((l) => l.staff_id === staffId)
 }
 
+function isOtOnlyDay(dayKey: string): boolean {
+  if (isSunday(props.year, props.month, dayKey)) return true
+  const line = feedStaffId.value ? lineFor(feedStaffId.value) : undefined
+  const existing = line ? normalizeDayHours(line)[dayKey] : undefined
+  return existing?.kind === 'holiday'
+}
+
 function loadDraft(staffId: string) {
   for (const key of Object.keys(draft)) delete draft[key]
   const line = lineFor(staffId)
@@ -75,6 +82,16 @@ function loadDraft(staffId: string) {
     const day = hours[d]
     if (!day || day.duty_hours === null) {
       draft[d] = { duty: '', ot: '' }
+    } else if (
+      day.kind === 'absent'
+      || (day.duty_hours === 0 && !day.off_paid && !(day.ot_hours > 0) && day.kind !== 'sunday' && day.kind !== 'holiday')
+    ) {
+      draft[d] = { duty: 'A', ot: '' }
+    } else if (isOtOnlyDay(d) || day.kind === 'sunday' || day.kind === 'holiday') {
+      draft[d] = {
+        duty: day.duty_hours === 0 ? '0' : String(day.duty_hours),
+        ot: day.ot_hours > 0 ? String(day.ot_hours) : '',
+      }
     } else {
       draft[d] = {
         duty: String(day.duty_hours),
@@ -128,7 +145,11 @@ watch(
 
 function selectStaff(id: string) {
   feedStaffId.value = id
-  nextTick(() => focusCell(props.dayCols[0], 'duty'))
+  nextTick(async () => {
+    const first = props.dayCols.find((d) => employed(d))
+    if (!first) return
+    await focusCell(first, isOtOnlyDay(first) ? 'ot' : 'duty')
+  })
 }
 
 function inputId(day: string, field: 'duty' | 'ot') {
@@ -180,28 +201,45 @@ function cellText(value: unknown): string {
 function buildDayAttendance(day: string): DayAttendance | null {
   const row = draft[day] || { duty: '', ot: '' }
   const dutyRaw = cellText(row.duty)
-  if (dutyRaw === '') return null
-  const duty = Math.max(0, Number(dutyRaw) || 0)
   const ot = Math.max(0, Number(cellText(row.ot)) || 0)
   const sunday = isSunday(props.year, props.month, day)
+  const otOnly = isOtOnlyDay(day)
+
+  // Sunday / Holiday: normal duty nahi — sirf OT (ya rest mark).
+  if (otOnly) {
+    if (dutyRaw === '' && ot === 0) return null
+    if (ot === 0) return sunday ? { ...dayFromPreset('sunday') } : { ...dayFromPreset('holiday') }
+    return {
+      duty_hours: 0,
+      off_paid: true,
+      ot_hours: ot,
+      kind: sunday ? 'sunday' : 'holiday',
+    }
+  }
+
+  // Working day: "A" / "a" = Absent
+  if (/^a$/i.test(dutyRaw)) {
+    return { ...dayFromPreset('absent') }
+  }
+
+  if (dutyRaw === '') return null
+  const duty = Math.max(0, Number(dutyRaw) || 0)
   if (duty === 0 && ot === 0) {
-    return sunday
-      ? { ...dayFromPreset('sunday') }
-      : { duty_hours: 0, off_paid: false, ot_hours: 0, kind: 'absent' }
+    return { duty_hours: 0, off_paid: false, ot_hours: 0, kind: 'absent' }
   }
   if (duty === 0 && ot > 0) {
     return {
       duty_hours: 0,
-      off_paid: sunday,
+      off_paid: false,
       ot_hours: ot,
-      kind: sunday ? 'sunday' : 'work',
+      kind: 'work',
     }
   }
   return {
     duty_hours: duty,
     off_paid: false,
     ot_hours: ot,
-    kind: sunday ? 'sunday' : 'work',
+    kind: 'work',
   }
 }
 
@@ -237,7 +275,16 @@ function prevEmployedDay(fromDay: string): string | null {
   return null
 }
 
+async function focusDayField(day: string, prefer: 'duty' | 'ot' = 'duty') {
+  if (prefer === 'duty' && isOtOnlyDay(day)) {
+    await focusCell(day, 'ot')
+    return
+  }
+  await focusCell(day, prefer)
+}
+
 async function onDutyKeydown(day: string, e: KeyboardEvent) {
+  if (isOtOnlyDay(day)) return
   if (e.key === 'Tab' && !e.shiftKey) {
     e.preventDefault()
     await withKeyboardNav(async () => {
@@ -261,7 +308,7 @@ async function onOtKeydown(day: string, e: KeyboardEvent) {
     await withKeyboardNav(async () => {
       await commitStaffHours()
       const next = nextEmployedDay(day)
-      if (next) await focusCell(next, 'duty')
+      if (next) await focusDayField(next, 'duty')
       else {
         const list = groupStaff.value
         const i = list.findIndex((s) => s.id === feedStaffId.value)
@@ -275,7 +322,11 @@ async function onOtKeydown(day: string, e: KeyboardEvent) {
   if (e.key === 'Tab' && e.shiftKey) {
     e.preventDefault()
     await withKeyboardNav(async () => {
-      await focusCell(day, 'duty')
+      if (!isOtOnlyDay(day)) await focusCell(day, 'duty')
+      else {
+        const prev = prevEmployedDay(day)
+        if (prev) await focusCell(prev, 'ot')
+      }
     })
     return
   }
@@ -284,7 +335,7 @@ async function onOtKeydown(day: string, e: KeyboardEvent) {
     await withKeyboardNav(async () => {
       await commitStaffHours()
       const next = nextEmployedDay(day)
-      if (next) await focusCell(next, 'duty')
+      if (next) await focusDayField(next, 'duty')
     })
   }
 }
@@ -338,10 +389,11 @@ function quickFill(preset: 'full' | 'sunday' | 'holiday' | 'absent' | 'clear') {
       draft[d] = { duty: '', ot: '' }
       continue
     }
+    if (isOtOnlyDay(d)) continue // Sunday/Holiday: normal duty fill nahi
     if (preset === 'full') {
       draft[d] = { duty: String(PAYROLL_HOURS_PER_DAY), ot: draft[d]?.ot || '' }
     } else if (preset === 'absent') {
-      draft[d] = { duty: '0', ot: '' }
+      draft[d] = { duty: 'A', ot: '' }
     }
   }
   void commitStaffHours()
@@ -357,7 +409,8 @@ function clearAllStaffOnDay(day: string) {
   <div ref="rootEl" class="space-y-3">
     <p class="text-xs text-slate-600 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">
       <strong>{{ payTypeLabel }} — keyboard feed:</strong> Duty → Tab → OT → Tab = next day (auto-save).
-      Blank duty = unmarked (0 pay). Weekly off pe duty/OT = full daily + OT.
+      Working day pe <strong>A</strong> = Absent. Sunday/Holiday pe sirf <strong>OT</strong> (normal duty nahi).
+      Blank = unmarked (0 pay). Sunday/Holiday pe OT = rest pay + OT.
     </p>
 
     <div v-if="showClearDayTools && editable" class="pp-card p-3 flex flex-wrap items-end gap-2">
@@ -434,6 +487,7 @@ function clearAllStaffOnDay(day: string) {
                 class="border-b border-slate-100"
                 :class="[
                   isSunday(year, month, d) ? 'bg-indigo-50/60' : '',
+                  isOtOnlyDay(d) && !isSunday(year, month, d) ? 'bg-violet-50/60' : '',
                   !employed(d) ? 'bg-slate-100 opacity-60' : '',
                 ]"
               >
@@ -441,6 +495,7 @@ function clearAllStaffOnDay(day: string) {
                   <div class="flex items-center gap-1">
                     <span>{{ Number(d) }}</span>
                     <span v-if="isSunday(year, month, d)" class="text-[10px] text-indigo-700">Sun</span>
+                    <span v-else-if="isOtOnlyDay(d)" class="text-[10px] text-violet-700">Hol</span>
                     <button
                       v-if="editable && showClearDayTools"
                       type="button"
@@ -454,17 +509,25 @@ function clearAllStaffOnDay(day: string) {
                 </td>
                 <td class="px-2 py-1">
                   <input
-                    v-if="employed(d) && editable && draft[d]"
+                    v-if="employed(d) && editable && draft[d] && !isOtOnlyDay(d)"
                     :id="inputId(d, 'duty')"
                     :ref="(el) => setInputRef(d, 'duty', el)"
                     v-model="draft[d].duty"
                     type="text"
-                    inputmode="decimal"
+                    inputmode="text"
                     class="pp-input !py-1.5 !text-sm font-mono w-full"
-                    placeholder="—"
+                    placeholder="h / A"
+                    title="Hours ya A = Absent"
                     @keydown="onDutyKeydown(d, $event); onDutyKeydownShiftTab(d, $event)"
                     @blur="commitStaffHours"
                   />
+                  <span
+                    v-else-if="employed(d) && isOtOnlyDay(d)"
+                    class="text-xs font-semibold px-2"
+                    :class="isSunday(year, month, d) ? 'text-indigo-700' : 'text-violet-700'"
+                  >
+                    off
+                  </span>
                   <span v-else class="text-slate-400 px-2">{{ employed(d) ? (draft[d]?.duty || '—') : '—' }}</span>
                 </td>
                 <td class="px-2 py-1">
@@ -476,7 +539,7 @@ function clearAllStaffOnDay(day: string) {
                     type="text"
                     inputmode="decimal"
                     class="pp-input !py-1.5 !text-sm font-mono w-full"
-                    placeholder="0"
+                    :placeholder="isOtOnlyDay(d) ? 'OT only' : '0'"
                     @keydown="onOtKeydown(d, $event)"
                     @blur="commitStaffHours"
                   />
@@ -484,7 +547,10 @@ function clearAllStaffOnDay(day: string) {
                 </td>
                 <td class="px-3 py-1.5 text-xs text-slate-500">
                   <template v-if="!employed(d)">Outside join/leave</template>
-                  <template v-else-if="isSunday(year, month, d) && cellText(draft[d]?.duty) === '0'">Sunday paid off</template>
+                  <template v-else-if="isOtOnlyDay(d) && cellText(draft[d]?.ot)">{{ isSunday(year, month, d) ? 'Sunday' : 'Holiday' }} + OT</template>
+                  <template v-else-if="isOtOnlyDay(d) && cellText(draft[d]?.duty) === '0'">{{ isSunday(year, month, d) ? 'Sunday' : 'Holiday' }} rest</template>
+                  <template v-else-if="isOtOnlyDay(d)">{{ isSunday(year, month, d) ? 'Sunday' : 'Holiday' }} — OT only</template>
+                  <template v-else-if="/^a$/i.test(cellText(draft[d]?.duty))">Absent</template>
                   <template v-else-if="cellText(draft[d]?.duty) === ''">Unmarked</template>
                   <template v-else>Work</template>
                 </td>

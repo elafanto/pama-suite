@@ -24,6 +24,7 @@ import {
   filterStaffForPeriod,
   filterDayHoursToEmployment,
   isStaffEmployedOnDay,
+  isSunday,
   lineBalanceDue,
   lineHasRecordedPayment,
   normalizeDayHours,
@@ -508,6 +509,13 @@ export const usePayrollStore = defineStore('payroll', () => {
         const day_hours = { ...normalizeDayHours(line) }
         for (const d of days) {
           if (!isStaffEmployedOnDay(staff, run.year, run.month, d)) continue
+          // Present (full) never stamps normal duty on Sunday / already-holiday days.
+          if (preset === 'full') {
+            const existing = day_hours[d]
+            if (isSunday(run.year, run.month, d) || existing?.kind === 'holiday' || existing?.kind === 'sunday') {
+              continue
+            }
+          }
           day_hours[d] = preserveHours
             ? applyDayPresetPreservingHours(day_hours[d], preset)
             : { ...dayFromPreset(preset) }

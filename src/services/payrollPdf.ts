@@ -6,6 +6,7 @@ import {
   calcDaySalaryExpense,
   ceilRupee,
   daysInMonth,
+  isSunday,
   lineBalanceDue,
   normalizeDayHours,
   periodLabel,
@@ -42,6 +43,8 @@ function weekdayShort(year: number, month: number, dayKey: string): string {
 export interface PayslipDayRow {
   dayKey: string
   weekday: string
+  /** Dedicated Sunday / Holiday flag so it is not confused with Status. */
+  sunHol: string
   status: string
   duty: number
   offUnpaid: number
@@ -67,8 +70,8 @@ export function buildPayslipDayRows(line: PayrollLine, year: number, month: numb
 }
 
 function dayStatusLabel(day: DayAttendance, b: ReturnType<typeof breakdownDay>): string {
-  if (day.kind === 'holiday') return 'Holiday'
-  if (day.kind === 'sunday') return day.duty_hours === 0 ? 'Sunday off' : 'Sunday work'
+  if (day.kind === 'holiday') return day.duty_hours === 0 && !day.ot_hours ? 'Holiday rest' : 'Holiday work'
+  if (day.kind === 'sunday') return day.duty_hours === 0 && !day.ot_hours ? 'Weekly off' : 'Sunday work'
   if (day.kind === 'leave') return 'Leave'
   if (day.duty_hours === 0 && !day.off_paid) return 'Absent'
   if (day.duty_hours === 0 && day.off_paid) return 'Paid off'
@@ -78,6 +81,18 @@ function dayStatusLabel(day: DayAttendance, b: ReturnType<typeof breakdownDay>):
   return 'Work'
 }
 
+/** Clear Holiday / Sunday marker for the dedicated PDF column. */
+export function sunHolLabel(
+  day: DayAttendance,
+  year: number,
+  month: number,
+  dayKey: string,
+): string {
+  if (day.kind === 'holiday') return 'Holiday'
+  if (day.kind === 'sunday' || isSunday(year, month, dayKey)) return 'Sunday'
+  return '—'
+}
+
 function buildOneDayRow(
   dayKey: string,
   day: DayAttendance,
@@ -85,10 +100,11 @@ function buildOneDayRow(
   month: number,
   staffWage: { hourly_wage: number },
 ): PayslipDayRow {
-  const b = breakdownDay(day)
+  const b = breakdownDay(day, { grantPaidOffs: true })
   return {
     dayKey,
     weekday: weekdayShort(year, month, dayKey),
+    sunHol: sunHolLabel(day, year, month, dayKey),
     status: dayStatusLabel(day, b),
     duty: b.duty,
     offUnpaid: b.unpaid,
@@ -241,17 +257,18 @@ function addPayslipPage(
   y += 4
   pdf.setFont('helvetica', 'normal').setFontSize(7)
   pdf.setTextColor(100)
-  pdf.text('Off unpaid = baki hours. Day Rs = paid hours x hourly (approx). Gross earned monthly formula se.', L, y)
+  pdf.text('Sun/Hol = Sunday ya Holiday. Off unpaid = baki hours. Day Rs = paid hours x hourly (approx).', L, y)
   pdf.setTextColor(0)
   y += 5
 
   const cols = {
     date: L,
-    status: L + 22,
-    duty: L + 52,
-    off: L + 68,
-    ot: L + 90,
-    paid: L + 108,
+    sunHol: L + 22,
+    status: L + 40,
+    duty: L + 68,
+    off: L + 84,
+    ot: L + 104,
+    paid: L + 122,
     pay: R,
   }
   const headH = 6
@@ -264,6 +281,7 @@ function addPayslipPage(
     pdf.rect(L, atY, W, headH)
     pdf.setFont('helvetica', 'bold').setFontSize(7)
     pdf.text('Date', cols.date + 1, atY + 4)
+    pdf.text('Sun/Hol', cols.sunHol, atY + 4)
     pdf.text('Status', cols.status, atY + 4)
     pdf.text('Duty', cols.duty, atY + 4, { align: 'right' })
     pdf.text('Off unpaid', cols.off, atY + 4, { align: 'right' })
@@ -302,6 +320,13 @@ function addPayslipPage(
       pdf.line(L, y + bodyH, R, y + bodyH)
       pdf.setFont('helvetica', 'normal').setFontSize(7)
       pdf.text(`${row.dayKey} ${row.weekday}`, cols.date + 1, y + 3.6)
+      if (row.sunHol !== '—') {
+        pdf.setFont('helvetica', 'bold')
+        pdf.setTextColor(row.sunHol === 'Holiday' ? 109 : 67, row.sunHol === 'Holiday' ? 40 : 56, row.sunHol === 'Holiday' ? 217 : 202)
+      }
+      pdf.text(row.sunHol, cols.sunHol, y + 3.6)
+      pdf.setTextColor(0)
+      pdf.setFont('helvetica', 'normal')
       pdf.text(row.status, cols.status, y + 3.6)
       pdf.text(String(row.duty), cols.duty, y + 3.6, { align: 'right' })
       pdf.text(row.offUnpaid ? String(row.offUnpaid) : '—', cols.off, y + 3.6, { align: 'right' })
