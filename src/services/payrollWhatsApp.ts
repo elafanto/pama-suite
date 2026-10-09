@@ -42,7 +42,7 @@ export function hasMarkedAttendance(line: PayrollLine | undefined): boolean {
 
 export function generateStaffHoursMessage(
   firmName: string,
-  staff: Pick<Staff, 'name' | 'pay_type' | 'monthly_amount'>,
+  staff: Pick<Staff, 'name' | 'pay_type' | 'monthly_amount' | 'employee_code'>,
   line: PayrollLine,
   year: number,
   month: number,
