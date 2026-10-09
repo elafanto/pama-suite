@@ -37,6 +37,10 @@ const emit = defineEmits<{
 
 const clearDayPick = ref('')
 const feedStaffId = ref('')
+const rootEl = ref<HTMLElement | null>(null)
+const inputRefs = new Map<string, HTMLInputElement>()
+/** Skip lines→draft reload while Tab/Enter moves focus inside this feed. */
+const keyboardNav = ref(false)
 
 const idPrefix = computed(() => props.inputIdPrefix || `feed-${props.payType}-`)
 
@@ -94,11 +98,31 @@ watch(
 )
 
 watch(
-  () => [feedStaffId.value, props.lines, props.dayCols.join(',')] as const,
+  feedStaffId,
+  (id) => {
+    if (id) loadDraft(id)
+  },
+  { immediate: true },
+)
+
+watch(
+  () => props.dayCols.join(','),
   () => {
     if (feedStaffId.value) loadDraft(feedStaffId.value)
   },
-  { immediate: true },
+)
+
+/** External edits (grid / bulk) sync in; skip while this feed has keyboard focus. */
+watch(
+  () => props.lines,
+  () => {
+    if (!feedStaffId.value || keyboardNav.value) return
+    const root = rootEl.value
+    const active = document.activeElement
+    if (root && active && root.contains(active)) return
+    loadDraft(feedStaffId.value)
+  },
+  { deep: true },
 )
 
 function selectStaff(id: string) {
@@ -110,11 +134,34 @@ function inputId(day: string, field: 'duty' | 'ot') {
   return `${idPrefix.value}${day}-${field}`
 }
 
-function focusCell(day: string, field: 'duty' | 'ot') {
-  const el = document.getElementById(inputId(day, field)) as HTMLInputElement | null
+function refKey(day: string, field: 'duty' | 'ot') {
+  return `${day}-${field}`
+}
+
+function setInputRef(day: string, field: 'duty' | 'ot', el: unknown) {
+  const key = refKey(day, field)
+  if (el instanceof HTMLInputElement) inputRefs.set(key, el)
+  else inputRefs.delete(key)
+}
+
+async function focusCell(day: string, field: 'duty' | 'ot') {
+  await nextTick()
+  const el =
+    inputRefs.get(refKey(day, field))
+    ?? (document.getElementById(inputId(day, field)) as HTMLInputElement | null)
   if (!el || el.disabled) return
   el.focus()
   el.select()
+}
+
+async function withKeyboardNav(run: () => void | Promise<void>) {
+  keyboardNav.value = true
+  try {
+    await run()
+  } finally {
+    await nextTick()
+    keyboardNav.value = false
+  }
 }
 
 function employed(day: string) {
@@ -186,50 +233,62 @@ function prevEmployedDay(fromDay: string): string | null {
 async function onDutyKeydown(day: string, e: KeyboardEvent) {
   if (e.key === 'Tab' && !e.shiftKey) {
     e.preventDefault()
-    await commitStaffHours()
-    focusCell(day, 'ot')
+    await withKeyboardNav(async () => {
+      await commitStaffHours()
+      await focusCell(day, 'ot')
+    })
     return
   }
   if (e.key === 'Enter') {
     e.preventDefault()
-    await commitStaffHours()
-    focusCell(day, 'ot')
+    await withKeyboardNav(async () => {
+      await commitStaffHours()
+      await focusCell(day, 'ot')
+    })
   }
 }
 
 async function onOtKeydown(day: string, e: KeyboardEvent) {
   if (e.key === 'Tab' && !e.shiftKey) {
     e.preventDefault()
-    await commitStaffHours()
-    const next = nextEmployedDay(day)
-    if (next) focusCell(next, 'duty')
-    else {
-      const list = groupStaff.value
-      const i = list.findIndex((s) => s.id === feedStaffId.value)
-      if (i >= 0 && i < list.length - 1) {
-        selectStaff(list[i + 1].id)
+    await withKeyboardNav(async () => {
+      await commitStaffHours()
+      const next = nextEmployedDay(day)
+      if (next) await focusCell(next, 'duty')
+      else {
+        const list = groupStaff.value
+        const i = list.findIndex((s) => s.id === feedStaffId.value)
+        if (i >= 0 && i < list.length - 1) {
+          selectStaff(list[i + 1].id)
+        }
       }
-    }
+    })
     return
   }
   if (e.key === 'Tab' && e.shiftKey) {
     e.preventDefault()
-    focusCell(day, 'duty')
+    await withKeyboardNav(async () => {
+      await focusCell(day, 'duty')
+    })
     return
   }
   if (e.key === 'Enter') {
     e.preventDefault()
-    await commitStaffHours()
-    const next = nextEmployedDay(day)
-    if (next) focusCell(next, 'duty')
+    await withKeyboardNav(async () => {
+      await commitStaffHours()
+      const next = nextEmployedDay(day)
+      if (next) await focusCell(next, 'duty')
+    })
   }
 }
 
 async function onDutyKeydownShiftTab(day: string, e: KeyboardEvent) {
   if (e.key === 'Tab' && e.shiftKey) {
     e.preventDefault()
-    const prev = prevEmployedDay(day)
-    if (prev) focusCell(prev, 'ot')
+    await withKeyboardNav(async () => {
+      const prev = prevEmployedDay(day)
+      if (prev) await focusCell(prev, 'ot')
+    })
   }
 }
 
@@ -260,7 +319,7 @@ function clearAllStaffOnDay(day: string) {
 </script>
 
 <template>
-  <div class="space-y-3">
+  <div ref="rootEl" class="space-y-3">
     <p class="text-xs text-slate-600 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">
       <strong>{{ payTypeLabel }} — keyboard feed:</strong> Duty → Tab → OT → Tab = next day (auto-save).
       Blank duty = unmarked (0 pay). Weekly off pe duty/OT = full daily + OT.
@@ -362,6 +421,7 @@ function clearAllStaffOnDay(day: string) {
                   <input
                     v-if="employed(d) && editable"
                     :id="inputId(d, 'duty')"
+                    :ref="(el) => setInputRef(d, 'duty', el)"
                     v-model="draft[d].duty"
                     type="number"
                     min="0"
@@ -378,6 +438,7 @@ function clearAllStaffOnDay(day: string) {
                   <input
                     v-if="employed(d) && editable"
                     :id="inputId(d, 'ot')"
+                    :ref="(el) => setInputRef(d, 'ot', el)"
                     v-model="draft[d].ot"
                     type="number"
                     min="0"
