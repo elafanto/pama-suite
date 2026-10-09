@@ -170,12 +170,18 @@ function employed(day: string) {
   return isStaffEmployedOnDay(staff, props.year, props.month, day)
 }
 
+function cellText(value: unknown): string {
+  // type="number" v-model can store a number; empty field can be '' | null.
+  if (value === '' || value === null || value === undefined) return ''
+  return String(value).trim()
+}
+
 function buildDayAttendance(day: string): DayAttendance | null {
   const row = draft[day] || { duty: '', ot: '' }
-  const dutyRaw = row.duty.trim()
+  const dutyRaw = cellText(row.duty)
   if (dutyRaw === '') return null
   const duty = Math.max(0, Number(dutyRaw) || 0)
-  const ot = Math.max(0, Number(row.ot) || 0)
+  const ot = Math.max(0, Number(cellText(row.ot)) || 0)
   const sunday = isSunday(props.year, props.month, day)
   if (duty === 0 && ot === 0) {
     return sunday
@@ -419,13 +425,11 @@ function clearAllStaffOnDay(day: string) {
                 </td>
                 <td class="px-2 py-1">
                   <input
-                    v-if="employed(d) && editable"
+                    v-if="employed(d) && editable && draft[d]"
                     :id="inputId(d, 'duty')"
                     :ref="(el) => setInputRef(d, 'duty', el)"
                     v-model="draft[d].duty"
-                    type="number"
-                    min="0"
-                    step="0.5"
+                    type="text"
                     inputmode="decimal"
                     class="pp-input !py-1.5 !text-sm font-mono w-full"
                     placeholder="—"
@@ -436,13 +440,11 @@ function clearAllStaffOnDay(day: string) {
                 </td>
                 <td class="px-2 py-1">
                   <input
-                    v-if="employed(d) && editable"
+                    v-if="employed(d) && editable && draft[d]"
                     :id="inputId(d, 'ot')"
                     :ref="(el) => setInputRef(d, 'ot', el)"
                     v-model="draft[d].ot"
-                    type="number"
-                    min="0"
-                    step="0.5"
+                    type="text"
                     inputmode="decimal"
                     class="pp-input !py-1.5 !text-sm font-mono w-full"
                     placeholder="0"
@@ -453,8 +455,8 @@ function clearAllStaffOnDay(day: string) {
                 </td>
                 <td class="px-3 py-1.5 text-xs text-slate-500">
                   <template v-if="!employed(d)">Outside join/leave</template>
-                  <template v-else-if="isSunday(year, month, d) && draft[d]?.duty === '0'">Sunday paid off</template>
-                  <template v-else-if="draft[d]?.duty === ''">Unmarked</template>
+                  <template v-else-if="isSunday(year, month, d) && cellText(draft[d]?.duty) === '0'">Sunday paid off</template>
+                  <template v-else-if="cellText(draft[d]?.duty) === ''">Unmarked</template>
                   <template v-else>Work</template>
                 </td>
               </tr>
