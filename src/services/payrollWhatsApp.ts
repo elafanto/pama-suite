@@ -57,12 +57,14 @@ export function generateStaffHoursMessage(
     if (row) dayLines.push(row)
   }
 
-  const payLabel = staff.pay_type === 'monthly' ? 'Monthly salary' : 'Daily wage (÷26)'
+  const payLabel = staff.pay_type === 'monthly' ? 'Monthly salary' : 'Daily wage (÷ month days)'
+  const empLine = staff.employee_code ? `ID: ${staff.employee_code}` : ''
   const lines: string[] = [
     `*${firmName}*`,
     `Work hours — ${periodLabel(`${year}-${String(month).padStart(2, '0')}`)}`,
     '',
     `*${staff.name}*`,
+    ...(empLine ? [empLine] : []),
     payLabel,
     '',
   ]

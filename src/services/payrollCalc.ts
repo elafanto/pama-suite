@@ -11,21 +11,88 @@ import type {
   StaffSalaryEntry,
 } from '@/types/models'
 
-export const PAYROLL_WORKING_DAYS = 26
 export const PAYROLL_HOURS_PER_DAY = 8
 export const MAX_STAFF = 50
+/** Calendar-day wage model starts from this payroll month (YYYY-MM). */
+export const PAYROLL_CALENDAR_WAGE_FROM = '2026-09'
 
 export function ceilRupee(n: number): number {
   if (!Number.isFinite(n) || n <= 0) return 0
   return Math.ceil(n)
 }
 
-/** Monthly amount ÷ 26 rounded up → daily; daily ÷ 8 rounded up → hourly. */
-export function deriveWageRates(monthlyAmount: number): { daily_wage: number; hourly_wage: number } {
+export function periodCalendarDays(period: string): number {
+  const [y, m] = period.split('-').map(Number)
+  if (!y || !m) return 30
+  return daysInMonth(y, m)
+}
+
+/** Monthly ÷ calendar days (30/31/28/29) → daily; daily ÷ 8 → hourly. Both ceil to ₹. */
+export function deriveWageRates(
+  monthlyAmount: number,
+  calendarDays: number,
+): { daily_wage: number; hourly_wage: number } {
   const monthly = Math.max(0, Number(monthlyAmount) || 0)
-  const daily_wage = monthly > 0 ? ceilRupee(monthly / PAYROLL_WORKING_DAYS) : 0
+  const days = Math.max(1, Math.floor(Number(calendarDays) || 30))
+  const daily_wage = monthly > 0 ? ceilRupee(monthly / days) : 0
   const hourly_wage = daily_wage > 0 ? ceilRupee(daily_wage / PAYROLL_HOURS_PER_DAY) : 0
   return { daily_wage, hourly_wage }
+}
+
+/** Employee code from joining date: EMP-YYYYMMDD-NN (NN = same-day sequence). */
+export function formatEmployeeCode(joiningDate: string, sequence: number): string {
+  const digits = String(joiningDate || '').replace(/\D/g, '').slice(0, 8)
+  const datePart = digits.length === 8 ? digits : '00000000'
+  const seq = Math.max(1, Math.floor(Number(sequence) || 1))
+  return `EMP-${datePart}-${String(seq).padStart(2, '0')}`
+}
+
+export function nextEmployeeSequence(
+  existing: Array<Pick<Staff, 'employee_code'>>,
+  joiningDate: string,
+): number {
+  const prefix = `EMP-${String(joiningDate || '').replace(/\D/g, '').slice(0, 8) || '00000000'}-`
+  let max = 0
+  for (const s of existing) {
+    const code = String(s.employee_code || '')
+    if (!code.startsWith(prefix)) continue
+    const n = Number(code.slice(prefix.length))
+    if (Number.isFinite(n) && n > max) max = n
+  }
+  return max + 1
+}
+
+export function allocateEmployeeCode(
+  existing: Array<Pick<Staff, 'employee_code'>>,
+  joiningDate: string,
+): string {
+  const date = (joiningDate || '').trim() || new Date().toISOString().slice(0, 10)
+  return formatEmployeeCode(date, nextEmployeeSequence(existing, date))
+}
+
+/** Assign EMP-… codes to staff missing employee_code (stable by joining_date then name). */
+export function backfillEmployeeCodes<T extends Pick<Staff, 'id' | 'name' | 'joining_date' | 'employee_code'>>(
+  staff: T[],
+): T[] {
+  const sorted = [...staff].sort((a, b) => {
+    const dj = String(a.joining_date || '').localeCompare(String(b.joining_date || ''))
+    if (dj !== 0) return dj
+    return a.name.localeCompare(b.name) || a.id.localeCompare(b.id)
+  })
+  const assigned: Array<Pick<Staff, 'employee_code'>> = staff
+    .filter((s) => s.employee_code)
+    .map((s) => ({ employee_code: s.employee_code }))
+  const out = new Map<string, string>()
+  for (const s of sorted) {
+    if (s.employee_code) {
+      out.set(s.id, s.employee_code)
+      continue
+    }
+    const code = allocateEmployeeCode(assigned, s.joining_date || '0000-00-00')
+    assigned.push({ employee_code: code })
+    out.set(s.id, code)
+  }
+  return staff.map((s) => (s.employee_code ? s : { ...s, employee_code: out.get(s.id) || s.employee_code }))
 }
 
 const SALARY_HISTORY_FALLBACK_PERIOD = '0000-01'
@@ -66,7 +133,7 @@ export function staffSalaryForPeriod(
 /** Staff record with monthly/daily/hourly rates resolved for a payroll month. */
 export function staffWithSalaryForPeriod(staff: Staff, period: string): Staff {
   const monthly_amount = staffSalaryForPeriod(staff, period)
-  const rates = deriveWageRates(monthly_amount)
+  const rates = deriveWageRates(monthly_amount, periodCalendarDays(period))
   return { ...staff, monthly_amount, daily_wage: rates.daily_wage, hourly_wage: rates.hourly_wage }
 }
 
@@ -75,7 +142,7 @@ export function staffDisplayRates(
   refPeriod = currentPeriod(),
 ): { monthly_amount: number; daily_wage: number; hourly_wage: number } {
   const monthly_amount = staffSalaryForPeriod(staff, refPeriod)
-  return { monthly_amount, ...deriveWageRates(monthly_amount) }
+  return { monthly_amount, ...deriveWageRates(monthly_amount, periodCalendarDays(refPeriod)) }
 }
 
 export function upsertSalaryHistoryEntry(
@@ -191,8 +258,8 @@ export function filterDayHoursToEmployment(
 }
 
 /**
- * Weekdays in this month outside employment (before join / after leave).
- * Used so monthly salary deducts those days (÷26 daily), without counting Sundays.
+ * Calendar days outside employment (before join / after leave).
+ * Monthly salary deducts these at calendar daily wage (Sundays included — they are paid days).
  */
 export function unpaidDaysOutsideEmployment(
   staff: Pick<Staff, 'joining_date' | 'leaving_date'>,
@@ -204,7 +271,6 @@ export function unpaidDaysOutsideEmployment(
   for (let d = 1; d <= dim; d++) {
     const key = String(d).padStart(2, '0')
     if (isStaffEmployedOnDay(staff, year, month, key)) continue
-    if (isSunday(year, month, key)) continue
     count++
   }
   return count
@@ -466,8 +532,8 @@ export function dayFromPreset(preset: DayBulkPreset): DayAttendance {
   if (preset === 'half') return { duty_hours: 4, off_paid: false, ot_hours: 0, kind: 'work' }
   if (preset === 'absent') return { duty_hours: 0, off_paid: false, ot_hours: 0, kind: 'absent' }
   if (preset === 'holiday') return { duty_hours: 0, off_paid: true, ot_hours: 0, kind: 'holiday' }
-  // Sunday is already excluded from ÷26 daily wage — rest day, no pay / no cut.
-  if (preset === 'sunday') return { duty_hours: 0, off_paid: false, ot_hours: 0, kind: 'sunday' }
+  // Sunday weekly off is a paid calendar day (same as holiday when not working).
+  if (preset === 'sunday') return { duty_hours: 0, off_paid: true, ot_hours: 0, kind: 'sunday' }
   return { duty_hours: 0, off_paid: true, ot_hours: 0, kind: 'leave' }
 }
 
@@ -513,10 +579,9 @@ export function breakdownDay(day: DayAttendance | undefined): DayHourBreakdown {
   const dutyRegular = Math.min(PAYROLL_HOURS_PER_DAY, dutyRaw)
   const ot = Math.max(0, Number(day.ot_hours) || 0)
 
-  // Weekly off is outside the ÷26 working-day model: no pay and no salary cut.
-  // If someone actually works on Sunday (duty > 0), normal duty/OT pay applies.
+  // Sunday rest (no duty): full day paid. Sunday with duty: normal hours + OT (not 2×).
   if (day.kind === 'sunday' && dutyRegular === 0) {
-    return { paid: ot, unpaid: 0, duty: 0, off: PAYROLL_HOURS_PER_DAY, ot }
+    return { paid: PAYROLL_HOURS_PER_DAY + ot, unpaid: 0, duty: 0, off: PAYROLL_HOURS_PER_DAY, ot }
   }
 
   const off = calcOffDutyHours(dutyRegular)
@@ -586,9 +651,11 @@ export function calcEarnedFromHours(
   monthlyAmount: number,
   hourlyWage: number,
   summary: ReturnType<typeof summarizeDayHours>,
+  calendarDays: number,
 ): number {
   const hourly = Math.max(0, hourlyWage)
   const otPay = summary.total_ot_hours * hourly
+  const days = Math.max(1, Math.floor(Number(calendarDays) || 30))
 
   if (payType === 'daily_wage') {
     return ceilRupee(summary.total_paid_hours * hourly)
@@ -596,9 +663,9 @@ export function calcEarnedFromHours(
 
   // Monthly: fixed salary − full-day absences − partial unpaid off-duty + OT.
   // Absent days already contribute 8 unpaid hours in the summary; deduct those
-  // only once via daily wage (not again as hourly unpaid).
+  // only once via calendar daily wage (not again as hourly unpaid).
   const base = Math.max(0, Number(monthlyAmount) || 0)
-  const daily = ceilRupee(base / PAYROLL_WORKING_DAYS)
+  const daily = ceilRupee(base / days)
   const absentDeduction = summary.days_absent * daily
   const unpaidHoursExAbsent = Math.max(
     0,
@@ -664,7 +731,13 @@ export function buildPayrollLine(
           total_off_unpaid_hours: summary.total_off_unpaid_hours + outsideDays * PAYROLL_HOURS_PER_DAY,
         }
       : summary
-  const earned = calcEarnedFromHours(staff.pay_type, staff.monthly_amount, staff.hourly_wage, summaryForPay)
+  const earned = calcEarnedFromHours(
+    staff.pay_type,
+    staff.monthly_amount,
+    staff.hourly_wage,
+    summaryForPay,
+    dim,
+  )
   const adv = Math.max(0, advanceDeduction)
   const other = Math.min(Math.max(0, otherDeduction), Math.max(0, earned))
   const net = earned - adv - other

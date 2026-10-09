@@ -8,6 +8,8 @@ import {
   advanceTotalInRange,
   advancesForStaffInPeriod,
   advancesInRange,
+  allocateEmployeeCode,
+  backfillEmployeeCodes,
   buildAdvanceItemsInRange,
   buildPayrollLine,
   calcEarnedFromHours,
@@ -15,6 +17,7 @@ import {
   defaultAdvanceRangeForPeriod,
   deriveWageRates,
   deriveLinePayStatus,
+  formatEmployeeCode,
   formatPayrollMoney,
   isStaffInPeriod,
   lineBalanceDue,
@@ -53,10 +56,36 @@ function hoursForDays(
   return out
 }
 
-describe('deriveWageRates', () => {
-  it('divides monthly by 26 and 8 with ceil to rupee', () => {
-    expect(deriveWageRates(26000)).toEqual({ daily_wage: 1000, hourly_wage: 125 })
-    expect(deriveWageRates(25000)).toEqual({ daily_wage: 962, hourly_wage: 121 })
+describe('deriveWageRates — calendar days', () => {
+  it('divides monthly by calendar days and 8 with ceil to rupee', () => {
+    expect(deriveWageRates(30000, 30)).toEqual({ daily_wage: 1000, hourly_wage: 125 })
+    expect(deriveWageRates(31000, 31)).toEqual({ daily_wage: 1000, hourly_wage: 125 })
+    expect(deriveWageRates(26000, 31)).toEqual({ daily_wage: 839, hourly_wage: 105 })
+  })
+})
+
+describe('employee_code from joining date', () => {
+  it('formats EMP-YYYYMMDD-NN', () => {
+    expect(formatEmployeeCode('2026-09-15', 1)).toBe('EMP-20260915-01')
+    expect(formatEmployeeCode('2026-09-15', 12)).toBe('EMP-20260915-12')
+  })
+
+  it('allocates next sequence for same joining date', () => {
+    const existing = [{ employee_code: 'EMP-20260915-01' }]
+    expect(allocateEmployeeCode(existing, '2026-09-15')).toBe('EMP-20260915-02')
+    expect(allocateEmployeeCode([], '2026-10-01')).toBe('EMP-20261001-01')
+  })
+
+  it('backfills missing codes stably by joining date', () => {
+    const staff = [
+      { id: 'b', name: 'B', joining_date: '2026-09-10', employee_code: undefined as string | undefined },
+      { id: 'a', name: 'A', joining_date: '2026-09-01', employee_code: undefined as string | undefined },
+      { id: 'c', name: 'C', joining_date: '2026-09-01', employee_code: undefined as string | undefined },
+    ]
+    const filled = backfillEmployeeCodes(staff)
+    expect(filled.find((s) => s.id === 'a')?.employee_code).toBe('EMP-20260901-01')
+    expect(filled.find((s) => s.id === 'c')?.employee_code).toBe('EMP-20260901-02')
+    expect(filled.find((s) => s.id === 'b')?.employee_code).toBe('EMP-20260910-01')
   })
 })
 
@@ -101,106 +130,114 @@ describe('staffSalaryForPeriod', () => {
 })
 
 describe('staffWithSalaryForPeriod', () => {
-  it('derives wage rates from period salary', () => {
+  it('derives wage rates from period salary and calendar days', () => {
     const staff = {
       id: '1',
       monthly_amount: 30000,
       salary_history: [
-        { effective_period: '2026-01', monthly_amount: 26000 },
+        { effective_period: '2026-01', monthly_amount: 31000 },
         { effective_period: '2026-06', monthly_amount: 30000 },
       ],
     } as Staff
     const may = staffWithSalaryForPeriod(staff, '2026-05')
-    expect(may.monthly_amount).toBe(26000)
-    expect(may.daily_wage).toBe(1000)
-    const jul = staffWithSalaryForPeriod(staff, '2026-07')
-    expect(jul.monthly_amount).toBe(30000)
-    expect(jul.daily_wage).toBe(1154)
+    expect(may.monthly_amount).toBe(31000)
+    expect(may.daily_wage).toBe(1000) // 31 days
+    const jun = staffWithSalaryForPeriod(staff, '2026-06')
+    expect(jun.monthly_amount).toBe(30000)
+    expect(jun.daily_wage).toBe(1000) // 30 days
   })
 })
 
 describe('calcEarnedFromHours — monthly', () => {
-  const monthly = 26000
-  const { hourly_wage } = deriveWageRates(monthly)
+  const monthly = 30000
+  const days = 30
+  const { hourly_wage } = deriveWageRates(monthly, days)
 
   it('pays full monthly when no absences or unpaid hours', () => {
-    const summary = summarizeDayHours(hoursForDays(26), 30)
-    expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary)).toBe(26000)
+    const summary = summarizeDayHours(hoursForDays(26), days)
+    expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary, days)).toBe(30000)
   })
 
   it('deducts only one daily wage per absent day (no double cut)', () => {
-    const summary = summarizeDayHours(hoursForDays(25, 1), 30)
+    const summary = summarizeDayHours(hoursForDays(25, 1), days)
     expect(summary.days_absent).toBe(1)
     expect(summary.total_off_unpaid_hours).toBe(8)
-    expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary)).toBe(25000)
+    expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary, days)).toBe(29000)
   })
 
   it('deducts partial unpaid off-duty hours at hourly rate', () => {
-    const summary = summarizeDayHours(hoursForDays(25, 0, 1), 30)
+    const summary = summarizeDayHours(hoursForDays(25, 0, 1), days)
     expect(summary.total_off_unpaid_hours).toBe(4)
-    expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary)).toBe(25500)
+    expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary, days)).toBe(29500)
   })
 
   it('does not cut paid leave / holiday', () => {
-    const summary = summarizeDayHours(hoursForDays(25, 0, 0, 1), 30)
+    const summary = summarizeDayHours(hoursForDays(25, 0, 0, 1), days)
     expect(summary.days_leave).toBe(1)
     expect(summary.total_off_unpaid_hours).toBe(0)
-    expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary)).toBe(26000)
+    expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary, days)).toBe(30000)
   })
 
   it('adds OT on top of monthly base', () => {
     const dayHours = hoursForDays(26)
     dayHours['01'] = { duty_hours: 8, off_paid: false, ot_hours: 2, kind: 'work' }
-    const summary = summarizeDayHours(dayHours, 30)
-    expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary)).toBe(26250)
+    const summary = summarizeDayHours(dayHours, days)
+    expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary, days)).toBe(30250)
   })
 
   it('handles absent + half unpaid without double-counting absent hours', () => {
-    const summary = summarizeDayHours(hoursForDays(24, 1, 1), 30)
-    expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary)).toBe(24500)
+    const summary = summarizeDayHours(hoursForDays(24, 1, 1), days)
+    expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary, days)).toBe(28500)
   })
 })
 
 describe('calcEarnedFromHours — daily_wage', () => {
   const daily = 1000
   const hourly = 125
+  const days = 30
 
   it('pays only marked paid hours', () => {
-    const summary = summarizeDayHours(hoursForDays(20), 30)
-    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary)).toBe(20000)
+    const summary = summarizeDayHours(hoursForDays(20), days)
+    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary, days)).toBe(20000)
   })
 
   it('pays nothing for absent days', () => {
-    const summary = summarizeDayHours(hoursForDays(0, 5), 30)
-    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary)).toBe(0)
+    const summary = summarizeDayHours(hoursForDays(0, 5), days)
+    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary, days)).toBe(0)
   })
 
   it('pays leave days (off paid)', () => {
-    const summary = summarizeDayHours(hoursForDays(0, 0, 0, 2), 30)
-    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary)).toBe(2000)
+    const summary = summarizeDayHours(hoursForDays(0, 0, 0, 2), days)
+    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary, days)).toBe(2000)
   })
 
-  it('does not pay Sunday weekly off (already in ÷26)', () => {
-    const dayHours: Record<string, DayAttendance> = {}
-    for (let d = 1; d <= 30; d++) {
-      const key = String(d).padStart(2, '0')
-      dayHours[key] = d % 7 === 0 ? dayFromPreset('sunday') : dayFromPreset('full')
+  it('pays Sunday weekly off as full day', () => {
+    const dayHours: Record<string, DayAttendance> = {
+      '01': dayFromPreset('full'),
+      '07': dayFromPreset('sunday'),
     }
-    const summary = summarizeDayHours(dayHours, 30)
-    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary)).toBeLessThan(30000)
+    const summary = summarizeDayHours(dayHours, days)
+    expect(summary.total_paid_hours).toBe(16)
+    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary, days)).toBe(2000)
   })
 
-  it('pays duty/OT if someone works on Sunday', () => {
+  it('pays normal duty + OT if someone works on Sunday (not 2×)', () => {
     const dayHours = hoursForDays(4)
-    dayHours['07'] = { duty_hours: 8, off_paid: false, ot_hours: 2, kind: 'work' }
-    const summary = summarizeDayHours(dayHours, 30)
-    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary)).toBe(5250)
+    dayHours['07'] = { duty_hours: 8, off_paid: false, ot_hours: 2, kind: 'sunday' }
+    const summary = summarizeDayHours(dayHours, days)
+    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary, days)).toBe(5250)
+  })
+
+  it('pays nothing for blank unmarked days', () => {
+    const summary = summarizeDayHours({}, days)
+    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary, days)).toBe(0)
   })
 })
 
 describe('Sunday weekly off — monthly', () => {
-  const monthly = 26000
-  const { hourly_wage } = deriveWageRates(monthly)
+  const monthly = 30000
+  const days = 30
+  const { hourly_wage } = deriveWageRates(monthly, days)
 
   it('does not cut monthly salary for Sunday rest days', () => {
     const dayHours: Record<string, DayAttendance> = {}
@@ -208,10 +245,10 @@ describe('Sunday weekly off — monthly', () => {
       const key = String(d).padStart(2, '0')
       dayHours[key] = d % 7 === 0 ? dayFromPreset('sunday') : dayFromPreset('full')
     }
-    const summary = summarizeDayHours(dayHours, 30)
+    const summary = summarizeDayHours(dayHours, days)
     expect(summary.days_absent).toBe(0)
     expect(summary.total_off_unpaid_hours).toBe(0)
-    expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary)).toBe(26000)
+    expect(calcEarnedFromHours('monthly', monthly, hourly_wage, summary, days)).toBe(30000)
   })
 })
 
@@ -223,7 +260,7 @@ describe('buildPayrollLine', () => {
     phone: '',
     designation: 'Operator',
     pay_type: 'monthly',
-    monthly_amount: 26000,
+    monthly_amount: 30000,
     daily_wage: 1000,
     hourly_wage: 125,
     bank: '',
@@ -238,12 +275,12 @@ describe('buildPayrollLine', () => {
 
   it('nets full advance when equal to earned', () => {
     const line = buildPayrollLine(staff, hoursForDays(25, 1), undefined, 2026, 6, 30000, 0)
-    expect(line.earned).toBe(25000)
+    expect(line.earned).toBe(29000)
     expect(line.advance_deduction).toBe(30000)
-    expect(line.net_pay).toBe(-5000)
+    expect(line.net_pay).toBe(-1000)
     expect(advanceExceedsEarned(line)).toBe(true)
-    expect(advanceOverEarnedAmount(line)).toBe(5000)
-    expect(formatPayrollMoney(lineBalanceDue(line))).toBe('− ₹5,000')
+    expect(advanceOverEarnedAmount(line)).toBe(1000)
+    expect(formatPayrollMoney(lineBalanceDue(line))).toBe('− ₹1,000')
   })
 })
 
@@ -324,7 +361,6 @@ describe('advance period — cutoff day 8 → previous month salary', () => {
   })
 
   it('only counts advances in the same payroll month (after cutoff mapping)', () => {
-    // Mar 10 → Mar; Apr 5 → Mar (≤8)
     expect(advanceTotalForPeriod(advances, 's1', '2026-03')).toBe(8000)
     expect(advanceTotalForPeriod(advances, 's1', '2026-04')).toBe(0)
     expect(advanceTotalForPeriod(advances, 's1', '2026-05')).toBe(0)
@@ -348,7 +384,7 @@ describe('staff ledger', () => {
       id: 'r1', firm_id: 'f1', period: '2026-06', year: 2026, month: 6, status: 'partial' as const,
       lines: [{
         staff_id: 's1', staff_name: 'R', pay_type: 'monthly' as const, monthly_amount: 10000,
-        daily_wage: 385, hourly_wage: 49, day_hours: {}, days_present: 26, days_half: 0, days_absent: 0,
+        daily_wage: 334, hourly_wage: 42, day_hours: {}, days_present: 26, days_half: 0, days_absent: 0,
         days_leave: 0, total_duty_hours: 208, total_off_unpaid_hours: 0, total_ot_hours: 0, total_paid_hours: 208,
         earned: 10000, advance_deduction: 2000, other_deduction: 0, net_pay: 8000,
         paid_amount: 5000, pay_status: 'partial' as const, payments: [{ date: '2026-06-28', amount: 5000, mode: 'transfer' as const }],
@@ -411,14 +447,14 @@ describe('joining date — mid-month staff', () => {
     expect(isStaffEmployedOnDay(s, 2026, 7, '30')).toBe(true)
   })
 
-  it('counts unpaid weekdays before joining for monthly deduction', () => {
-    // July 2026: join on 3rd (Fri). Days 1=Wed, 2=Thu unpaid; no Sunday in 1–2.
+  it('counts calendar days before joining for monthly deduction (incl. Sundays)', () => {
+    // July 2026: join on 3rd. Days 1–2 unpaid.
     expect(unpaidDaysOutsideEmployment({ joining_date: '2026-07-03' }, 2026, 7)).toBe(2)
   })
 
-  it('deducts pre-join weekdays from monthly earned pay', () => {
-    const monthly = 26000
-    const { daily_wage, hourly_wage } = deriveWageRates(monthly)
+  it('deducts pre-join calendar days from monthly earned pay', () => {
+    const monthly = 31000
+    const { daily_wage, hourly_wage } = deriveWageRates(monthly, 31)
     const staff = {
       id: 's1',
       name: 'New',
@@ -439,11 +475,8 @@ describe('joining date — mid-month staff', () => {
       updated_at: '',
       is_deleted: false,
     }
-    // Mark only from join day onward as present for a few days — pre-join weekdays still cut pay.
     const hours = hoursForDays(20)
     const line = buildPayrollLine(staff, hours, undefined, 2026, 7, 0, 0)
-    const fullMonth = calcEarnedFromHours('monthly', monthly, hourly_wage, summarizeDayHours(hoursForDays(26), 31))
-    expect(line.earned).toBeLessThan(fullMonth)
     expect(line.earned).toBe(monthly - 2 * daily_wage)
   })
 })

@@ -306,8 +306,10 @@ export interface Staff extends BaseRecord {
   name: string
   phone: string
   designation: string
+  /** Human employee ID from joining date, e.g. EMP-20260915-01. */
+  employee_code?: string
   pay_type: StaffPayType
-  /** Monthly salary (monthly staff) or monthly equivalent for daily wage (÷26). */
+  /** Monthly salary (monthly staff) or monthly equivalent for daily wage (÷ calendar days). */
   monthly_amount: number
   /** Salary revisions — payroll uses the latest entry where effective_period ≤ run month. */
   salary_history?: StaffSalaryEntry[]
