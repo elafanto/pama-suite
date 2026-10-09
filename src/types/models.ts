@@ -398,7 +398,7 @@ export interface PayrollLine {
    * Ignores joining/leaving — same calendar target for the month.
    */
   expected_duty_hours?: number
-  /** Actual duty hours fed this month (OT alag). */
+  /** Actual hours fed this month (duty + OT). */
   actual_duty_hours?: number
   /** Informational: every employed working day has full 8h duty. */
   duty_complete?: boolean

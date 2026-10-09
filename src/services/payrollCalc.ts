@@ -647,12 +647,13 @@ export function monthExpectedDutyHours(
   return monthWorkingDayCount(year, month, holidayKeys) * PAYROLL_HOURS_PER_DAY
 }
 
-/** Sum of fed duty hours (OT not included). */
+/** Sum of fed duty + OT hours (actual hours worked). */
 export function sumActualDutyHours(dayHours: Record<string, DayAttendance>): number {
   let total = 0
   for (const day of Object.values(dayHours)) {
     if (!day || day.duty_hours === null) continue
     total += Math.max(0, Number(day.duty_hours) || 0)
+    total += Math.max(0, Number(day.ot_hours) || 0)
   }
   return total
 }

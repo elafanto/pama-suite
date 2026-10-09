@@ -710,6 +710,6 @@ describe('month expected vs actual duty hours', () => {
     }
     expect(collectHolidayDayKeys([a, b])).toEqual(['02', '05'])
     expect(sumActualDutyHours(a)).toBe(8)
-    expect(sumActualDutyHours(b)).toBe(6)
+    expect(sumActualDutyHours(b)).toBe(7) // 6 duty + 1 OT
   })
 })

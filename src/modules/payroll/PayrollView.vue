@@ -559,8 +559,13 @@ const monthWorkingDays = computed(() =>
   monthWorkingDayCount(selYear.value, selMonth.value, factoryHolidayKeys.value),
 )
 
-function lineActualDuty(line: { actual_duty_hours?: number; total_duty_hours?: number }) {
-  return line.actual_duty_hours ?? line.total_duty_hours ?? 0
+function lineActualDuty(line: {
+  actual_duty_hours?: number
+  total_duty_hours?: number
+  total_ot_hours?: number
+}) {
+  if (line.actual_duty_hours != null) return line.actual_duty_hours
+  return (line.total_duty_hours ?? 0) + (line.total_ot_hours ?? 0)
 }
 
 function lineDutyDiff(line: { actual_duty_hours?: number; total_duty_hours?: number }) {
@@ -1245,7 +1250,7 @@ onMounted(async () => {
               <h3 class="text-sm font-bold text-navy">Duty hours summary</h3>
               <p class="text-[11px] text-slate-500 mt-0.5">
                 Expected = poora month − Sunday − holiday ({{ monthWorkingDays }} din × {{ PAYROLL_HOURS_PER_DAY }}h = {{ monthExpectedDuty }}h) — joining date se farak nahi.
-                Actual = employee ne jitni duty feed ki. Sun/Hol pay alag checkbox se.
+                Actual = duty + OT (jo feed kiya). Sun/Hol pay alag checkbox se.
               </p>
             </div>
             <div class="flex flex-wrap gap-2">
@@ -1273,7 +1278,7 @@ onMounted(async () => {
                 <tr>
                   <th class="text-left px-2 py-1.5">Staff</th>
                   <th class="text-right px-2 py-1.5" title="Poora month − Sunday − holiday × 8h">Expected h</th>
-                  <th class="text-right px-2 py-1.5" title="Employee ne jo duty feed ki">Actual duty h</th>
+                  <th class="text-right px-2 py-1.5" title="Duty + OT jo feed kiya">Actual (duty+OT)</th>
                   <th class="text-right px-2 py-1.5" title="Actual − Expected">Diff</th>
                   <th class="text-right px-2 py-1.5">OT h</th>
                   <th class="text-right px-2 py-1.5">Paid h</th>
