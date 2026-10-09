@@ -579,9 +579,16 @@ export function breakdownDay(day: DayAttendance | undefined): DayHourBreakdown {
   const dutyRegular = Math.min(PAYROLL_HOURS_PER_DAY, dutyRaw)
   const ot = Math.max(0, Number(day.ot_hours) || 0)
 
-  // Sunday rest (no duty): full day paid. Sunday with duty: normal hours + OT (not 2×).
-  if (day.kind === 'sunday' && dutyRegular === 0) {
-    return { paid: PAYROLL_HOURS_PER_DAY + ot, unpaid: 0, duty: 0, off: PAYROLL_HOURS_PER_DAY, ot }
+  // Weekly off: always normal daily wage (8h) + OT if any duty/OT/rest.
+  // Partial duty on Sunday still pays full daily + OT (not only marked duty hours).
+  if (day.kind === 'sunday') {
+    return {
+      paid: PAYROLL_HOURS_PER_DAY + ot,
+      unpaid: 0,
+      duty: dutyRegular,
+      off: dutyRegular === 0 ? PAYROLL_HOURS_PER_DAY : calcOffDutyHours(dutyRegular),
+      ot,
+    }
   }
 
   const off = calcOffDutyHours(dutyRegular)

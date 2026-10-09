@@ -221,11 +221,31 @@ describe('calcEarnedFromHours — daily_wage', () => {
     expect(calcEarnedFromHours('daily_wage', daily, hourly, summary, days)).toBe(2000)
   })
 
-  it('pays normal duty + OT if someone works on Sunday (not 2×)', () => {
+  it('pays normal daily wage + OT when Sunday has full duty + OT', () => {
     const dayHours = hoursForDays(4)
     dayHours['07'] = { duty_hours: 8, off_paid: false, ot_hours: 2, kind: 'sunday' }
     const summary = summarizeDayHours(dayHours, days)
+    // 4×8 present + Sunday 8 daily + 2 OT = 42h × 125
     expect(calcEarnedFromHours('daily_wage', daily, hourly, summary, days)).toBe(5250)
+  })
+
+  it('pays full daily + OT even if Sunday duty is partial', () => {
+    const dayHours: Record<string, DayAttendance> = {
+      '07': { duty_hours: 4, off_paid: false, ot_hours: 2, kind: 'sunday' },
+    }
+    const summary = summarizeDayHours(dayHours, days)
+    // Weekly off work: daily 8h + OT 2h (not only 4+2)
+    expect(summary.total_paid_hours).toBe(10)
+    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary, days)).toBe(1250)
+  })
+
+  it('pays full daily + OT when Sunday has only OT (no duty hours)', () => {
+    const dayHours: Record<string, DayAttendance> = {
+      '07': { duty_hours: 0, off_paid: true, ot_hours: 3, kind: 'sunday' },
+    }
+    const summary = summarizeDayHours(dayHours, days)
+    expect(summary.total_paid_hours).toBe(11)
+    expect(calcEarnedFromHours('daily_wage', daily, hourly, summary, days)).toBe(1375)
   })
 
   it('pays nothing for blank unmarked days', () => {

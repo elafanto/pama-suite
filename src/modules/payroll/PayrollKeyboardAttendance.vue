@@ -270,7 +270,7 @@ function clearAllStaffOnDay(day: string) {
 
     <p class="text-xs text-slate-600 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">
       <strong>Keyboard feed:</strong> Duty → Tab → OT → Tab = next day (auto-save).
-      Enter bhi same. Blank duty = unmarked (0 pay). Sunday pe kaam = normal + OT.
+      Enter bhi same. Blank duty = unmarked (0 pay). Weekly off pe duty/OT = full daily + OT.
     </p>
 
     <div v-if="editable" class="pp-card p-3 flex flex-wrap items-end gap-2">

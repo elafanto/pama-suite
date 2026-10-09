@@ -1098,7 +1098,7 @@ onMounted(async () => {
         <span class="font-bold text-emerald-900">₹{{ attendanceSalaryExpenseTotal.toLocaleString('en-IN') }}</span>
       </div>
       <p v-if="periodStaff.length > 0" class="text-[10px] text-slate-400 px-1">
-        Daily = monthly ÷ month days. Sunday/holiday off = paid. Sunday pe kaam = normal + OT. Blank unmarked = 0 pay.
+        Daily = monthly ÷ month days. Sunday/holiday off = paid. Weekly off pe duty ya OT = full daily wage + OT. Blank = 0 pay.
         Joining se pehle / leaving ke baad cells <strong>—</strong>.
       </p>
     </section>
