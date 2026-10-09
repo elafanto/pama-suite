@@ -3,6 +3,7 @@ import { computed, nextTick, reactive, ref, watch } from 'vue'
 import type { DayAttendance, PayrollLine, Staff, StaffPayType } from '@/types/models'
 import {
   PAYROLL_HOURS_PER_DAY,
+  applyDayPresetPreservingHours,
   dayFromPreset,
   isStaffEmployedOnDay,
   isSunday,
@@ -299,18 +300,46 @@ async function onDutyKeydownShiftTab(day: string, e: KeyboardEvent) {
 }
 
 function quickFill(preset: 'full' | 'sunday' | 'holiday' | 'absent' | 'clear') {
-  if (!props.editable || !feedStaff.value) return
+  if (!props.editable || !feedStaff.value || !feedStaffId.value) return
+
+  // Holiday / Sunday: merge into stored hours so already-fed duty/OT stay intact.
+  if (preset === 'sunday' || preset === 'holiday') {
+    const line = lineFor(feedStaffId.value)
+    const hours = line ? { ...normalizeDayHours(line) } : {}
+    for (const d of props.dayCols) {
+      if (!employed(d)) continue
+      if (preset === 'sunday' && !isSunday(props.year, props.month, d)) continue
+      // Keep live draft values if user typed but not yet blurred.
+      const draftDuty = cellText(draft[d]?.duty)
+      const draftOt = cellText(draft[d]?.ot)
+      const live: DayAttendance | undefined =
+        draftDuty !== '' || draftOt !== ''
+          ? {
+              duty_hours: draftDuty === '' ? 0 : Math.max(0, Number(draftDuty) || 0),
+              ot_hours: Math.max(0, Number(draftOt) || 0),
+              off_paid: false,
+              kind: 'work',
+            }
+          : hours[d]
+      hours[d] = applyDayPresetPreservingHours(live, preset)
+      const merged = hours[d]
+      draft[d] = {
+        duty: merged.duty_hours === null || merged.duty_hours === undefined ? '' : String(merged.duty_hours),
+        ot: merged.ot_hours > 0 ? String(merged.ot_hours) : '',
+      }
+    }
+    emit('save', feedStaffId.value, hours)
+    return
+  }
+
   for (const d of props.dayCols) {
     if (!employed(d)) continue
     if (preset === 'clear') {
       draft[d] = { duty: '', ot: '' }
       continue
     }
-    if (preset === 'sunday' && !isSunday(props.year, props.month, d)) continue
     if (preset === 'full') {
       draft[d] = { duty: String(PAYROLL_HOURS_PER_DAY), ot: draft[d]?.ot || '' }
-    } else if (preset === 'sunday' || preset === 'holiday') {
-      draft[d] = { duty: '0', ot: '' }
     } else if (preset === 'absent') {
       draft[d] = { duty: '0', ot: '' }
     }

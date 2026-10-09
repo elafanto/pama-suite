@@ -16,6 +16,7 @@ import {
   currentPeriod,
   dayCellClass,
   dayCellLabel,
+  applyDayPresetPreservingHours,
   dayFromPreset,
   daysInMonth,
   defaultAdvanceRangeForPeriod,
@@ -165,7 +166,13 @@ const selectedBulkCount = computed(() => selectedBulkDays.value.size)
 const daySalaryExpense = computed(() => {
   const map: Record<string, number> = {}
   for (const d of dayCols.value) {
-    map[d] = sumDaySalaryExpense(d, periodStaff.value, currentRun.value?.lines)
+    map[d] = sumDaySalaryExpense(
+      d,
+      periodStaff.value,
+      currentRun.value?.lines,
+      selYear.value,
+      selMonth.value,
+    )
   }
   return map
 })
@@ -386,7 +393,12 @@ async function bulkMarkSelected(preset: 'full' | 'holiday' | 'sunday') {
   if (currentRun.value?.status === 'paid') return alert('Month already paid.')
   const days = [...selectedBulkDays.value]
   if (!days.length) return alert('Pehle upar se din select karein (tap on date).')
-  const label = preset === 'full' ? 'SAB PRESENT (8 hr)' : preset === 'holiday' ? 'FACTORY HOLIDAY (paid)' : 'WEEKLY OFF / Sunday (paid)'
+  const label =
+    preset === 'full'
+      ? 'SAB PRESENT (8 hr)'
+      : preset === 'holiday'
+        ? 'FACTORY HOLIDAY (pehle se fed duty/OT same rahenge)'
+        : 'WEEKLY OFF / Sunday (pehle se fed duty/OT same rahenge)'
   if (!confirm(`${days.length} din — sab staff ke liye ${label}?`)) return
   const res = await store.bulkMarkDays(period.value, days, preset)
   if (res && 'error' in res) alert(res.error)
@@ -408,7 +420,7 @@ async function bulkAllSundays() {
   if (currentRun.value?.status === 'paid') return alert('Month already paid.')
   const days = sundaysThisMonth.value
   if (!days.length) return alert('Is month me Sunday nahi hai.')
-  if (!confirm(`Sab ${days.length} Sundays — sab staff weekly off (paid) mark karein?`)) return
+  if (!confirm(`Sab ${days.length} Sundays — weekly off. Jinke din pe duty/OT pehle se hai, woh disturb nahi honge.`)) return
   const res = await store.bulkMarkDays(period.value, days, 'sunday')
   if (res && 'error' in res) alert(res.error)
 }
@@ -446,7 +458,10 @@ async function applyStaffDayPreset(preset: 'full' | 'absent' | 'holiday' | 'sund
       sunday: 'WEEKLY OFF (paid)',
     }
     if (!confirm(`${dayActionStaffName.value} — ${Number(day)} → ${labels[preset]}?`)) return
-    hours[day] = { ...dayFromPreset(preset) }
+    hours[day] =
+      preset === 'holiday' || preset === 'sunday'
+        ? applyDayPresetPreservingHours(hours[day], preset)
+        : { ...dayFromPreset(preset) }
   }
 
   const res = await store.updateRunLine(period.value, staffId, { day_hours: hours })
@@ -1134,8 +1149,8 @@ onMounted(async () => {
         <span class="font-bold text-emerald-900">₹{{ attendanceSalaryExpenseTotal.toLocaleString('en-IN') }}</span>
       </div>
       <p v-if="periodStaff.length > 0" class="text-[10px] text-slate-400 px-1">
-        Daily = monthly ÷ month days. Sunday/holiday off = paid. Weekly off pe duty ya OT = full daily wage + OT. Blank = 0 pay.
-        Joining se pehle / leaving ke baad cells <strong>—</strong>.
+        Daily = monthly ÷ month days. Sunday/holiday rest pay sirf unko jinki working-day duty poori (8h) hai.
+        Holiday/Sunday mark pe pehle se fed duty/OT disturb nahi hota. Weekly off pe kaam = full daily + OT. Blank = 0 pay.
       </p>
     </section>
 
@@ -1185,6 +1200,65 @@ onMounted(async () => {
             <div class="font-bold" :class="currentRun.total_net < 0 ? 'text-rose-700' : 'text-emerald-800'">
               {{ formatPayrollMoney(currentRun.total_net) }}
             </div>
+          </div>
+        </div>
+
+        <div class="pp-card p-3 space-y-2">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h3 class="text-sm font-bold text-navy">Duty hours summary</h3>
+            <span class="text-[11px] text-slate-500">
+              Sunday/Holiday rest pay → sirf duty poori (har working day 8h)
+            </span>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm min-w-[420px]">
+              <thead class="bg-slate-50 text-xs text-slate-500 uppercase">
+                <tr>
+                  <th class="text-left px-2 py-1.5">Staff</th>
+                  <th class="text-right px-2 py-1.5">Duty h</th>
+                  <th class="text-right px-2 py-1.5">OT h</th>
+                  <th class="text-right px-2 py-1.5">Paid h</th>
+                  <th class="text-center px-2 py-1.5">Sun/Hol pay</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="line in sortedSalaryLines"
+                  :key="'duty-sum-' + line.staff_id"
+                  class="border-t border-slate-100"
+                >
+                  <td class="px-2 py-1.5 font-semibold">{{ line.staff_name }}</td>
+                  <td class="px-2 py-1.5 text-right tabular-nums font-mono">{{ line.total_duty_hours ?? 0 }}</td>
+                  <td class="px-2 py-1.5 text-right tabular-nums font-mono">{{ line.total_ot_hours ?? 0 }}</td>
+                  <td class="px-2 py-1.5 text-right tabular-nums font-mono font-semibold">{{ line.total_paid_hours ?? 0 }}</td>
+                  <td class="px-2 py-1.5 text-center">
+                    <span
+                      class="text-[10px] font-bold px-1.5 py-0.5 rounded"
+                      :class="line.duty_complete ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-50 text-rose-700'"
+                    >
+                      {{ line.duty_complete ? 'Yes' : 'No' }}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+              <tfoot>
+                <tr class="border-t-2 border-slate-200 bg-slate-50 font-semibold">
+                  <td class="px-2 py-1.5">Total</td>
+                  <td class="px-2 py-1.5 text-right tabular-nums font-mono">
+                    {{ sortedSalaryLines.reduce((s, l) => s + (l.total_duty_hours || 0), 0) }}
+                  </td>
+                  <td class="px-2 py-1.5 text-right tabular-nums font-mono">
+                    {{ sortedSalaryLines.reduce((s, l) => s + (l.total_ot_hours || 0), 0) }}
+                  </td>
+                  <td class="px-2 py-1.5 text-right tabular-nums font-mono">
+                    {{ sortedSalaryLines.reduce((s, l) => s + (l.total_paid_hours || 0), 0) }}
+                  </td>
+                  <td class="px-2 py-1.5 text-center text-xs text-slate-600">
+                    {{ sortedSalaryLines.filter((l) => l.duty_complete).length }}/{{ sortedSalaryLines.length }}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
           </div>
         </div>
 

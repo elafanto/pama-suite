@@ -14,6 +14,7 @@ import {
   buildAdvanceItemsInRange,
   buildPayrollLine,
   currentPeriod,
+  applyDayPresetPreservingHours,
   dayFromPreset,
   defaultAdvanceRangeForPeriod,
   deriveLinePayStatus,
@@ -495,9 +496,9 @@ export const usePayrollStore = defineStore('payroll', () => {
     if (run.status === 'paid') return { error: 'Month already paid' }
     if (!days.length) return { error: 'Select at least one day' }
 
-    const stamp = dayFromPreset(preset)
     const eligible = staffForPeriod(period)
     const staffById = new Map(eligible.map((s) => [s.id, s]))
+    const preserveHours = preset === 'holiday' || preset === 'sunday'
 
     const lines = run.lines
       .filter((line) => staffById.has(line.staff_id))
@@ -506,7 +507,9 @@ export const usePayrollStore = defineStore('payroll', () => {
         const day_hours = { ...normalizeDayHours(line) }
         for (const d of days) {
           if (!isStaffEmployedOnDay(staff, run.year, run.month, d)) continue
-          day_hours[d] = { ...stamp }
+          day_hours[d] = preserveHours
+            ? applyDayPresetPreservingHours(day_hours[d], preset)
+            : { ...dayFromPreset(preset) }
         }
         return buildLineForStaff(staff, run, day_hours, line.attendance, line)
       })
@@ -516,7 +519,7 @@ export const usePayrollStore = defineStore('payroll', () => {
       const day_hours: Record<string, DayAttendance> = {}
       for (const d of days) {
         if (!isStaffEmployedOnDay(staff, run.year, run.month, d)) continue
-        day_hours[d] = { ...stamp }
+        day_hours[d] = { ...dayFromPreset(preset) }
       }
       lines.push(buildLineForStaff(staff, run, day_hours, undefined))
     }

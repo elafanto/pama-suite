@@ -9,16 +9,19 @@ import {
   advancesForStaffInPeriod,
   advancesInRange,
   allocateEmployeeCode,
+  applyDayPresetPreservingHours,
   backfillEmployeeCodes,
   buildAdvanceItemsInRange,
   buildPayrollLine,
   calcEarnedFromHours,
   dayFromPreset,
+  dayHasFedHours,
   defaultAdvanceRangeForPeriod,
   deriveWageRates,
   deriveLinePayStatus,
   formatEmployeeCode,
   formatPayrollMoney,
+  hasCompleteWorkingDuty,
   isStaffInPeriod,
   lineBalanceDue,
   lineHasRecordedPayment,
@@ -518,5 +521,112 @@ describe('deriveLinePayStatus', () => {
       payments: [{ date: '2026-07-28', amount: 8000, mode: 'transfer' }],
       paid_amount: 8000,
     })).toBe(true)
+  })
+})
+
+describe('holiday/sunday preserve fed hours', () => {
+  it('keeps duty and OT when applying holiday or sunday preset', () => {
+    const existing = { duty_hours: 8, off_paid: false, ot_hours: 2, kind: 'work' as const }
+    expect(dayHasFedHours(existing)).toBe(true)
+    expect(applyDayPresetPreservingHours(existing, 'holiday')).toEqual({
+      duty_hours: 8,
+      ot_hours: 2,
+      off_paid: false,
+      kind: 'holiday',
+    })
+    expect(applyDayPresetPreservingHours(existing, 'sunday')).toEqual({
+      duty_hours: 8,
+      ot_hours: 2,
+      off_paid: false,
+      kind: 'sunday',
+    })
+  })
+
+  it('keeps OT-only Sunday work when marking sunday rest', () => {
+    const existing = { duty_hours: 0, off_paid: false, ot_hours: 3, kind: 'work' as const }
+    expect(applyDayPresetPreservingHours(existing, 'sunday')).toEqual({
+      duty_hours: 0,
+      ot_hours: 3,
+      off_paid: true,
+      kind: 'sunday',
+    })
+  })
+
+  it('applies blank rest stamp when day has no fed hours', () => {
+    expect(applyDayPresetPreservingHours(undefined, 'holiday')).toEqual(dayFromPreset('holiday'))
+    expect(applyDayPresetPreservingHours(dayFromPreset('absent'), 'sunday')).toEqual(dayFromPreset('sunday'))
+  })
+})
+
+describe('Sunday/holiday pay only when duty complete', () => {
+  const year = 2026
+  const month = 9 // 30 days; Sundays 6,13,20,27
+  const dim = 30
+
+  function fullMonthWithSundays(absentDay?: string): Record<string, DayAttendance> {
+    const out: Record<string, DayAttendance> = {}
+    for (let d = 1; d <= dim; d++) {
+      const key = String(d).padStart(2, '0')
+      const sunday = [6, 13, 20, 27].includes(d)
+      if (absentDay && key === absentDay) out[key] = dayFromPreset('absent')
+      else out[key] = sunday ? dayFromPreset('sunday') : dayFromPreset('full')
+    }
+    return out
+  }
+
+  it('detects complete vs incomplete working duty', () => {
+    expect(hasCompleteWorkingDuty(fullMonthWithSundays(), year, month)).toBe(true)
+    expect(hasCompleteWorkingDuty(fullMonthWithSundays('10'), year, month)).toBe(false)
+    expect(hasCompleteWorkingDuty({}, year, month)).toBe(false)
+  })
+
+  it('denies paid Sunday rest when duty incomplete', () => {
+    const dayHours: Record<string, DayAttendance> = {
+      '01': dayFromPreset('full'),
+      '06': dayFromPreset('sunday'),
+    }
+    const paid = summarizeDayHours(dayHours, dim, { grantPaidOffs: true })
+    const unpaid = summarizeDayHours(dayHours, dim, { grantPaidOffs: false })
+    expect(paid.total_paid_hours).toBe(16)
+    expect(unpaid.total_paid_hours).toBe(8) // only the full working day
+  })
+
+  it('still pays Sunday work (duty/OT) even if duty incomplete', () => {
+    const dayHours: Record<string, DayAttendance> = {
+      '06': { duty_hours: 8, off_paid: false, ot_hours: 2, kind: 'sunday' },
+    }
+    const summary = summarizeDayHours(dayHours, dim, { grantPaidOffs: false })
+    expect(summary.total_paid_hours).toBe(10)
+  })
+
+  it('buildPayrollLine grants Sunday rest only when duty complete', () => {
+    const staff: Staff = {
+      id: 's1',
+      firm_id: 'f1',
+      name: 'Ramesh',
+      phone: '',
+      designation: 'Operator',
+      pay_type: 'daily_wage',
+      monthly_amount: 30000,
+      daily_wage: 1000,
+      hourly_wage: 125,
+      bank: '',
+      acno: '',
+      ifsc: '',
+      acname: '',
+      is_active: true,
+      created_at: '',
+      updated_at: '',
+      is_deleted: false,
+    }
+    const complete = buildPayrollLine(staff, fullMonthWithSundays(), undefined, year, month, 0, 0)
+    expect(complete.duty_complete).toBe(true)
+    // 26 work days × 8 + 4 Sundays × 8 = 240 paid hours
+    expect(complete.total_paid_hours).toBe(240)
+
+    const incomplete = buildPayrollLine(staff, fullMonthWithSundays('10'), undefined, year, month, 0, 0)
+    expect(incomplete.duty_complete).toBe(false)
+    // 25 work × 8 + 0 Sunday rest + 1 absent = 200 paid hours
+    expect(incomplete.total_paid_hours).toBe(200)
   })
 })

@@ -537,6 +537,73 @@ export function dayFromPreset(preset: DayBulkPreset): DayAttendance {
   return { duty_hours: 0, off_paid: true, ot_hours: 0, kind: 'leave' }
 }
 
+/** True when the day already has fed duty and/or OT hours. */
+export function dayHasFedHours(day: DayAttendance | undefined | null): boolean {
+  if (!day || day.duty_hours === null) return false
+  const duty = Math.max(0, Number(day.duty_hours) || 0)
+  const ot = Math.max(0, Number(day.ot_hours) || 0)
+  return duty > 0 || ot > 0
+}
+
+/**
+ * Apply holiday / Sunday (or other) preset without wiping already-fed duty / OT.
+ * Rest stamp only lands on blank / zero-hour days.
+ */
+export function applyDayPresetPreservingHours(
+  existing: DayAttendance | undefined,
+  preset: DayBulkPreset,
+): DayAttendance {
+  const stamp = dayFromPreset(preset)
+  if (!dayHasFedHours(existing)) return { ...stamp }
+
+  const duty = Math.max(0, Number(existing!.duty_hours) || 0)
+  const ot = Math.max(0, Number(existing!.ot_hours) || 0)
+  const kind =
+    preset === 'holiday' || preset === 'sunday'
+      ? stamp.kind
+      : existing!.kind || stamp.kind
+  return {
+    duty_hours: duty,
+    ot_hours: ot,
+    off_paid: duty === 0 ? true : !!existing!.off_paid,
+    kind,
+  }
+}
+
+/** Paid rest day (Sunday / holiday / leave) with no work hours fed. */
+export function isPaidRestDay(day: DayAttendance | undefined): boolean {
+  if (!day || day.duty_hours === null) return false
+  const duty = Math.max(0, Number(day.duty_hours) || 0)
+  const ot = Math.max(0, Number(day.ot_hours) || 0)
+  if (duty > 0 || ot > 0) return false
+  if (day.kind === 'holiday' || day.kind === 'sunday' || day.kind === 'leave') return true
+  return duty === 0 && !!day.off_paid
+}
+
+/**
+ * Duty is “poori” when every employed working day has full 8h duty.
+ * Paid rest days (Sunday / holiday / leave) are skipped for this check.
+ * Unmarked, absent, or partial duty → incomplete → no Sunday/holiday rest pay.
+ */
+export function hasCompleteWorkingDuty(
+  dayHours: Record<string, DayAttendance>,
+  year: number,
+  month: number,
+  staff?: Pick<Staff, 'joining_date' | 'leaving_date'>,
+): boolean {
+  const dim = daysInMonth(year, month)
+  for (let d = 1; d <= dim; d++) {
+    const key = String(d).padStart(2, '0')
+    if (staff && !isStaffEmployedOnDay(staff, year, month, key)) continue
+    const day = dayHours[key]
+    if (isPaidRestDay(day)) continue
+    if (!day || day.duty_hours === null) return false
+    const duty = Math.max(0, Number(day.duty_hours) || 0)
+    if (duty < PAYROLL_HOURS_PER_DAY) return false
+  }
+  return true
+}
+
 /** Legacy P/A/H/L → day_hours. */
 export function markToDay(mark: AttendanceMark | '' | undefined): DayAttendance {
   if (mark === 'P') return dayFromPreset('full')
@@ -570,28 +637,62 @@ export interface DayHourBreakdown {
   ot: number
 }
 
-export function breakdownDay(day: DayAttendance | undefined): DayHourBreakdown {
+export function breakdownDay(
+  day: DayAttendance | undefined,
+  opts?: { grantPaidOffs?: boolean },
+): DayHourBreakdown {
   if (!day || day.duty_hours === null) {
     return { paid: 0, unpaid: 0, duty: 0, off: 0, ot: 0 }
   }
 
+  const grantPaidOffs = opts?.grantPaidOffs !== false
   const dutyRaw = Math.max(0, Number(day.duty_hours) || 0)
   const dutyRegular = Math.min(PAYROLL_HOURS_PER_DAY, dutyRaw)
   const ot = Math.max(0, Number(day.ot_hours) || 0)
+  const workedOnOff = dutyRaw > 0 || ot > 0
 
-  // Weekly off: always normal daily wage (8h) + OT if any duty/OT/rest.
-  // Partial duty on Sunday still pays full daily + OT (not only marked duty hours).
+  // Weekly off: work on Sunday → full daily + OT. Rest day → paid only if duty complete.
   if (day.kind === 'sunday') {
+    if (workedOnOff) {
+      return {
+        paid: PAYROLL_HOURS_PER_DAY + ot,
+        unpaid: 0,
+        duty: dutyRegular,
+        off: dutyRegular === 0 ? PAYROLL_HOURS_PER_DAY : calcOffDutyHours(dutyRegular),
+        ot,
+      }
+    }
+    if (!grantPaidOffs) {
+      return {
+        paid: 0,
+        unpaid: PAYROLL_HOURS_PER_DAY,
+        duty: 0,
+        off: PAYROLL_HOURS_PER_DAY,
+        ot: 0,
+      }
+    }
     return {
-      paid: PAYROLL_HOURS_PER_DAY + ot,
+      paid: PAYROLL_HOURS_PER_DAY,
       unpaid: 0,
-      duty: dutyRegular,
-      off: dutyRegular === 0 ? PAYROLL_HOURS_PER_DAY : calcOffDutyHours(dutyRegular),
-      ot,
+      duty: 0,
+      off: PAYROLL_HOURS_PER_DAY,
+      ot: 0,
     }
   }
 
   const off = calcOffDutyHours(dutyRegular)
+  const isRestOff =
+    !workedOnOff && (day.kind === 'holiday' || day.kind === 'leave' || (dutyRegular === 0 && day.off_paid))
+  if (isRestOff && !grantPaidOffs) {
+    return {
+      paid: 0,
+      unpaid: PAYROLL_HOURS_PER_DAY,
+      duty: 0,
+      off: PAYROLL_HOURS_PER_DAY,
+      ot: 0,
+    }
+  }
+
   const offPaid = day.off_paid ? off : 0
   const offUnpaid = day.off_paid ? 0 : off
 
@@ -604,6 +705,7 @@ export function breakdownDay(day: DayAttendance | undefined): DayHourBreakdown {
 export function summarizeDayHours(
   dayHours: Record<string, DayAttendance>,
   daysInPeriod: number,
+  opts?: { grantPaidOffs?: boolean },
 ): {
   days_present: number
   days_half: number
@@ -614,6 +716,7 @@ export function summarizeDayHours(
   total_ot_hours: number
   total_paid_hours: number
 } {
+  const grantPaidOffs = opts?.grantPaidOffs !== false
   let days_present = 0
   let days_half = 0
   let days_absent = 0
@@ -628,14 +731,18 @@ export function summarizeDayHours(
     const day = dayHours[key]
     if (!day || day.duty_hours === null) continue
 
-    const b = breakdownDay(day)
+    const b = breakdownDay(day, { grantPaidOffs })
     total_duty_hours += b.duty
     total_off_unpaid_hours += b.unpaid
     total_ot_hours += b.ot
     total_paid_hours += b.paid
 
-    if (day.kind === 'holiday' || day.kind === 'sunday' || (day.duty_hours === 0 && day.off_paid)) days_leave++
-    else if (day.duty_hours === 0) days_absent++
+    const isRest =
+      day.kind === 'holiday' || day.kind === 'sunday' || (day.duty_hours === 0 && day.off_paid)
+    if (isRest) {
+      if (grantPaidOffs || dayHasFedHours(day)) days_leave++
+      else days_absent++
+    } else if (day.duty_hours === 0) days_absent++
     else if (day.duty_hours >= PAYROLL_HOURS_PER_DAY) days_present++
     else if (day.duty_hours >= PAYROLL_HOURS_PER_DAY / 2) days_half++
     else days_half++
@@ -684,12 +791,19 @@ export function calcEarnedFromHours(
 
 /** Salary expense for one staff on one day (paid hours × hourly wage). */
 export function calcDaySalaryExpense(
-  staff: Pick<Staff, 'hourly_wage'>,
+  staff: Pick<Staff, 'hourly_wage' | 'joining_date' | 'leaving_date'>,
   day: DayAttendance | undefined,
+  dayHours?: Record<string, DayAttendance>,
+  year?: number,
+  month?: number,
 ): number {
   if (!day || day.duty_hours === null) return 0
   const hourly = Math.max(0, staff.hourly_wage)
-  const paidHours = breakdownDay(day).paid
+  const grantPaidOffs =
+    dayHours && year && month
+      ? hasCompleteWorkingDuty(dayHours, year, month, staff)
+      : true
+  const paidHours = breakdownDay(day, { grantPaidOffs }).paid
   if (paidHours <= 0) return 0
   return ceilRupee(paidHours * hourly)
 }
@@ -699,13 +813,15 @@ export function sumDaySalaryExpense(
   dayKey: string,
   staffList: Staff[],
   lines: PayrollLine[] | undefined,
+  year?: number,
+  month?: number,
 ): number {
   const lineByStaff = new Map((lines ?? []).map((l) => [l.staff_id, l]))
   let total = 0
   for (const staff of staffList) {
     const line = lineByStaff.get(staff.id)
     const dayHours = line ? normalizeDayHours(line) : {}
-    total += calcDaySalaryExpense(staff, dayHours[dayKey])
+    total += calcDaySalaryExpense(staff, dayHours[dayKey], dayHours, year, month)
   }
   return total
 }
@@ -728,7 +844,8 @@ export function buildPayrollLine(
       : migrateMarksToDayHours(legacyMarks)
   const day_hours = filterDayHoursToEmployment(rawHours, staff, year, month)
 
-  const summary = summarizeDayHours(day_hours, dim)
+  const duty_complete = hasCompleteWorkingDuty(day_hours, year, month, staff)
+  const summary = summarizeDayHours(day_hours, dim, { grantPaidOffs: duty_complete })
   const outsideDays = unpaidDaysOutsideEmployment(staff, year, month)
   const summaryForPay =
     outsideDays > 0 && staff.pay_type === 'monthly'
@@ -769,6 +886,7 @@ export function buildPayrollLine(
     total_off_unpaid_hours: summary.total_off_unpaid_hours,
     total_ot_hours: summary.total_ot_hours,
     total_paid_hours: summary.total_paid_hours,
+    duty_complete,
     earned,
     advance_deduction: adv,
     advance_items: advanceItems,

@@ -393,6 +393,11 @@ export interface PayrollLine {
   total_off_unpaid_hours: number
   total_ot_hours: number
   total_paid_hours: number
+  /**
+   * True when every employed working day has full duty (8h).
+   * Only then Sunday / holiday paid-rest salary is granted.
+   */
+  duty_complete?: boolean
   earned: number
   advance_deduction: number
   /** Advances in this salary cycle, date-wise (for payslip breakdown). */
