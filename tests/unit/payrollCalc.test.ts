@@ -14,6 +14,7 @@ import {
   buildAdvanceItemsInRange,
   buildPayrollLine,
   calcEarnedFromHours,
+  collectHolidayDayKeys,
   dayFromPreset,
   dayHasFedHours,
   defaultAdvanceRangeForPeriod,
@@ -25,10 +26,13 @@ import {
   isStaffInPeriod,
   lineBalanceDue,
   lineHasRecordedPayment,
+  monthExpectedDutyHours,
+  monthWorkingDayCount,
   periodLastDate,
   sortAdvanceItems,
   staffSalaryForPeriod,
   staffWithSalaryForPeriod,
+  sumActualDutyHours,
   summarizeDayHours,
   isStaffEmployedOnDay,
   unpaidDaysOutsideEmployment,
@@ -652,5 +656,60 @@ describe('Sunday/holiday pay only when duty complete', () => {
     expect(denied.grant_paid_offs).toBe(false)
     // 25 work × 8, Sundays denied = 200
     expect(denied.total_paid_hours).toBe(200)
+  })
+})
+
+describe('month expected vs actual duty hours', () => {
+  it('counts full-month working days after removing Sundays and holidays', () => {
+    // Sept 2026: 30 days, Sundays 6/13/20/27 → 26 working; minus 1 holiday → 25 × 8 = 200
+    expect(monthWorkingDayCount(2026, 9)).toBe(26)
+    expect(monthExpectedDutyHours(2026, 9)).toBe(208)
+    expect(monthWorkingDayCount(2026, 9, ['15'])).toBe(25)
+    expect(monthExpectedDutyHours(2026, 9, ['15'])).toBe(200)
+  })
+
+  it('ignores joining date for expected hours', () => {
+    const lateJoiner: Staff = {
+      id: 's2',
+      firm_id: 'f1',
+      name: 'Late',
+      phone: '',
+      designation: '',
+      pay_type: 'daily_wage',
+      monthly_amount: 30000,
+      daily_wage: 1000,
+      hourly_wage: 125,
+      bank: '',
+      acno: '',
+      ifsc: '',
+      acname: '',
+      joining_date: '2026-09-20',
+      is_active: true,
+      created_at: '',
+      updated_at: '',
+      is_deleted: false,
+    }
+    const dayHours: Record<string, DayAttendance> = {
+      '15': dayFromPreset('holiday'),
+      '20': dayFromPreset('full'),
+      '21': dayFromPreset('full'),
+    }
+    const line = buildPayrollLine(lateJoiner, dayHours, undefined, 2026, 9, 0, 0)
+    expect(line.expected_duty_hours).toBe(200) // full month − 4 Sun − 1 Hol
+    expect(line.actual_duty_hours).toBe(16) // only employed days with duty
+  })
+
+  it('collects holiday keys and sums actual duty', () => {
+    const a: Record<string, DayAttendance> = {
+      '01': dayFromPreset('full'),
+      '02': dayFromPreset('holiday'),
+    }
+    const b: Record<string, DayAttendance> = {
+      '05': dayFromPreset('holiday'),
+      '06': { duty_hours: 6, off_paid: false, ot_hours: 1, kind: 'work' },
+    }
+    expect(collectHolidayDayKeys([a, b])).toEqual(['02', '05'])
+    expect(sumActualDutyHours(a)).toBe(8)
+    expect(sumActualDutyHours(b)).toBe(6)
   })
 })

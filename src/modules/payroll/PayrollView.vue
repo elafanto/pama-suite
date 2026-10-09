@@ -17,6 +17,7 @@ import {
   dayCellClass,
   dayCellLabel,
   applyDayPresetPreservingHours,
+  collectHolidayDayKeys,
   dayFromPreset,
   daysInMonth,
   defaultAdvanceRangeForPeriod,
@@ -28,6 +29,8 @@ import {
   isSunday,
   lineBalanceDue,
   lineHasRecordedPayment,
+  monthExpectedDutyHours,
+  monthWorkingDayCount,
   normalizeDayHours,
   normalizeSalaryHistory,
   periodCalendarDays,
@@ -539,6 +542,29 @@ async function setGrantPaidOffsAll(grant: boolean) {
 
 function lineGrantsPaidOffs(line: { grant_paid_offs?: boolean }) {
   return line.grant_paid_offs !== false
+}
+
+/** Factory holidays marked on any staff — used for full-month expected duty. */
+const factoryHolidayKeys = computed(() => {
+  const lines = currentRun.value?.lines ?? []
+  return collectHolidayDayKeys(lines.map((l) => normalizeDayHours(l)))
+})
+
+/** Full month working days × 8 after removing Sundays + holidays (join date ignored). */
+const monthExpectedDuty = computed(() =>
+  monthExpectedDutyHours(selYear.value, selMonth.value, factoryHolidayKeys.value),
+)
+
+const monthWorkingDays = computed(() =>
+  monthWorkingDayCount(selYear.value, selMonth.value, factoryHolidayKeys.value),
+)
+
+function lineActualDuty(line: { actual_duty_hours?: number; total_duty_hours?: number }) {
+  return line.actual_duty_hours ?? line.total_duty_hours ?? 0
+}
+
+function lineDutyDiff(line: { actual_duty_hours?: number; total_duty_hours?: number }) {
+  return lineActualDuty(line) - monthExpectedDuty.value
 }
 
 async function calculateSalary() {
@@ -1218,7 +1244,8 @@ onMounted(async () => {
             <div>
               <h3 class="text-sm font-bold text-navy">Duty hours summary</h3>
               <p class="text-[11px] text-slate-500 mt-0.5">
-                Sun/Hol pay checkbox se decide karein — kise dena hai, kise nahi. Duty-complete sirf hint hai.
+                Expected = poora month − Sunday − holiday ({{ monthWorkingDays }} din × {{ PAYROLL_HOURS_PER_DAY }}h = {{ monthExpectedDuty }}h) — joining date se farak nahi.
+                Actual = employee ne jitni duty feed ki. Sun/Hol pay alag checkbox se.
               </p>
             </div>
             <div class="flex flex-wrap gap-2">
@@ -1241,11 +1268,13 @@ onMounted(async () => {
             </div>
           </div>
           <div class="overflow-x-auto">
-            <table class="w-full text-sm min-w-[480px]">
+            <table class="w-full text-sm min-w-[640px]">
               <thead class="bg-slate-50 text-xs text-slate-500 uppercase">
                 <tr>
                   <th class="text-left px-2 py-1.5">Staff</th>
-                  <th class="text-right px-2 py-1.5">Duty h</th>
+                  <th class="text-right px-2 py-1.5" title="Poora month − Sunday − holiday × 8h">Expected h</th>
+                  <th class="text-right px-2 py-1.5" title="Employee ne jo duty feed ki">Actual duty h</th>
+                  <th class="text-right px-2 py-1.5" title="Actual − Expected">Diff</th>
                   <th class="text-right px-2 py-1.5">OT h</th>
                   <th class="text-right px-2 py-1.5">Paid h</th>
                   <th class="text-center px-2 py-1.5">Duty full?</th>
@@ -1259,7 +1288,14 @@ onMounted(async () => {
                   class="border-t border-slate-100"
                 >
                   <td class="px-2 py-1.5 font-semibold">{{ line.staff_name }}</td>
-                  <td class="px-2 py-1.5 text-right tabular-nums font-mono">{{ line.total_duty_hours ?? 0 }}</td>
+                  <td class="px-2 py-1.5 text-right tabular-nums font-mono text-slate-600">{{ monthExpectedDuty }}</td>
+                  <td class="px-2 py-1.5 text-right tabular-nums font-mono font-semibold">{{ lineActualDuty(line) }}</td>
+                  <td
+                    class="px-2 py-1.5 text-right tabular-nums font-mono text-xs font-semibold"
+                    :class="lineDutyDiff(line) >= 0 ? 'text-emerald-700' : 'text-rose-600'"
+                  >
+                    {{ lineDutyDiff(line) > 0 ? '+' : '' }}{{ lineDutyDiff(line) }}
+                  </td>
                   <td class="px-2 py-1.5 text-right tabular-nums font-mono">{{ line.total_ot_hours ?? 0 }}</td>
                   <td class="px-2 py-1.5 text-right tabular-nums font-mono font-semibold">{{ line.total_paid_hours ?? 0 }}</td>
                   <td class="px-2 py-1.5 text-center">
@@ -1293,8 +1329,19 @@ onMounted(async () => {
               <tfoot>
                 <tr class="border-t-2 border-slate-200 bg-slate-50 font-semibold">
                   <td class="px-2 py-1.5">Total</td>
+                  <td class="px-2 py-1.5 text-right tabular-nums font-mono text-slate-600">
+                    {{ monthExpectedDuty * sortedSalaryLines.length }}
+                  </td>
                   <td class="px-2 py-1.5 text-right tabular-nums font-mono">
-                    {{ sortedSalaryLines.reduce((s, l) => s + (l.total_duty_hours || 0), 0) }}
+                    {{ sortedSalaryLines.reduce((s, l) => s + lineActualDuty(l), 0) }}
+                  </td>
+                  <td class="px-2 py-1.5 text-right tabular-nums font-mono text-xs">
+                    {{
+                      (() => {
+                        const d = sortedSalaryLines.reduce((s, l) => s + lineDutyDiff(l), 0)
+                        return (d > 0 ? '+' : '') + d
+                      })()
+                    }}
                   </td>
                   <td class="px-2 py-1.5 text-right tabular-nums font-mono">
                     {{ sortedSalaryLines.reduce((s, l) => s + (l.total_ot_hours || 0), 0) }}

@@ -393,6 +393,13 @@ export interface PayrollLine {
   total_off_unpaid_hours: number
   total_ot_hours: number
   total_paid_hours: number
+  /**
+   * Full-month expected duty hours after removing Sundays + holidays (×8).
+   * Ignores joining/leaving — same calendar target for the month.
+   */
+  expected_duty_hours?: number
+  /** Actual duty hours fed this month (OT alag). */
+  actual_duty_hours?: number
   /** Informational: every employed working day has full 8h duty. */
   duty_complete?: boolean
   /**

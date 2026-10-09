@@ -583,7 +583,7 @@ export function isPaidRestDay(day: DayAttendance | undefined): boolean {
 /**
  * Duty is “poori” when every employed working day has full 8h duty.
  * Paid rest days (Sunday / holiday / leave) are skipped for this check.
- * Unmarked, absent, or partial duty → incomplete → no Sunday/holiday rest pay.
+ * Unmarked, absent, or partial duty → incomplete (informational only).
  */
 export function hasCompleteWorkingDuty(
   dayHours: Record<string, DayAttendance>,
@@ -602,6 +602,59 @@ export function hasCompleteWorkingDuty(
     if (duty < PAYROLL_HOURS_PER_DAY) return false
   }
   return true
+}
+
+/** Day keys marked as factory/staff holiday in one or more attendance maps. */
+export function collectHolidayDayKeys(
+  dayHoursList: Array<Record<string, DayAttendance>>,
+): string[] {
+  const set = new Set<string>()
+  for (const hours of dayHoursList) {
+    for (const [key, day] of Object.entries(hours)) {
+      if (day?.kind === 'holiday') set.add(String(key).padStart(2, '0'))
+    }
+  }
+  return [...set].sort()
+}
+
+/**
+ * Working days in the calendar month after removing Sundays and holidays.
+ * Joining/leaving dates are ignored — always the full month.
+ */
+export function monthWorkingDayCount(
+  year: number,
+  month: number,
+  holidayKeys: Iterable<string> = [],
+): number {
+  const dim = daysInMonth(year, month)
+  const holidays = new Set([...holidayKeys].map((k) => String(k).padStart(2, '0')))
+  let n = 0
+  for (let d = 1; d <= dim; d++) {
+    const key = String(d).padStart(2, '0')
+    if (isSunday(year, month, key)) continue
+    if (holidays.has(key)) continue
+    n++
+  }
+  return n
+}
+
+/** Full-month expected duty hours = working days × 8 (Sundays + holidays out). */
+export function monthExpectedDutyHours(
+  year: number,
+  month: number,
+  holidayKeys: Iterable<string> = [],
+): number {
+  return monthWorkingDayCount(year, month, holidayKeys) * PAYROLL_HOURS_PER_DAY
+}
+
+/** Sum of fed duty hours (OT not included). */
+export function sumActualDutyHours(dayHours: Record<string, DayAttendance>): number {
+  let total = 0
+  for (const day of Object.values(dayHours)) {
+    if (!day || day.duty_hours === null) continue
+    total += Math.max(0, Number(day.duty_hours) || 0)
+  }
+  return total
 }
 
 /** Legacy P/A/H/L → day_hours. */
@@ -842,6 +895,11 @@ export function buildPayrollLine(
       : migrateMarksToDayHours(legacyMarks)
   const day_hours = filterDayHoursToEmployment(rawHours, staff, year, month)
 
+  // Expected = full calendar month minus Sundays/holidays (join date ignored).
+  const holidayKeys = collectHolidayDayKeys([rawHours, day_hours])
+  const expected_duty_hours = monthExpectedDutyHours(year, month, holidayKeys)
+  const actual_duty_hours = sumActualDutyHours(day_hours)
+
   const duty_complete = hasCompleteWorkingDuty(day_hours, year, month, staff)
   // Manual toggle (default ON). Not auto-gated by duty_complete.
   const grant_paid_offs = existing?.grant_paid_offs !== false
@@ -886,6 +944,8 @@ export function buildPayrollLine(
     total_off_unpaid_hours: summary.total_off_unpaid_hours,
     total_ot_hours: summary.total_ot_hours,
     total_paid_hours: summary.total_paid_hours,
+    expected_duty_hours,
+    actual_duty_hours,
     duty_complete,
     grant_paid_offs,
     earned,
