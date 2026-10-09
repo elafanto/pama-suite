@@ -150,6 +150,8 @@ const currentRun = computed(() => {
 
 /** Staff eligible for the selected payroll month (excludes people who left earlier). */
 const periodStaff = computed(() => store.staffForPeriod(period.value))
+const periodStaffMonthly = computed(() => periodStaff.value.filter((s) => s.pay_type === 'monthly'))
+const periodStaffDaily = computed(() => periodStaff.value.filter((s) => s.pay_type === 'daily_wage'))
 const selectedBulkDays = ref<Set<string>>(new Set())
 const attendanceEditMode = ref(false)
 const showDayActionModal = ref(false)
@@ -877,7 +879,7 @@ onMounted(async () => {
             <strong>Locked</strong> — month paid, attendance change nahi hogi.
           </template>
           <template v-else-if="canEditAttendance">
-            <strong>Edit mode ON</strong> — neeche keyboard feed (Duty + OT, Tab = next day). Grid pe ✕all = us din sab clear.
+            <strong>Edit mode ON</strong> — upar alag feed: Monthly salary + Daily wage. Neeche purana grid view (dekhne ke liye).
           </template>
           <template v-else>
             <strong>View only</strong> — pehle Edit dabayein, phir keyboard se fatafat feed karein.
@@ -901,17 +903,51 @@ onMounted(async () => {
         </button>
       </div>
 
-      <PayrollKeyboardAttendance
-        v-if="periodStaff.length > 0 && currentRun"
-        :staff="periodStaff"
-        :lines="currentRun.lines"
-        :year="selYear"
-        :month="selMonth"
-        :day-cols="dayCols"
-        :editable="canEditAttendance"
-        @save="saveKeyboardAttendance"
-        @clear-day="bulkClearOneDay"
-      />
+      <template v-if="periodStaff.length > 0 && currentRun">
+        <div class="pp-card p-3 border-navy/20 bg-slate-50/80 space-y-3">
+          <h3 class="text-sm font-bold text-navy flex items-center gap-2">
+            📋 Monthly salary — attendance feed
+            <span class="pp-badge bg-navy text-white text-[10px]">{{ periodStaffMonthly.length }}</span>
+          </h3>
+          <PayrollKeyboardAttendance
+            pay-type="monthly"
+            input-id-prefix="feed-monthly-"
+            :show-clear-day-tools="true"
+            :staff="periodStaff"
+            :lines="currentRun.lines"
+            :year="selYear"
+            :month="selMonth"
+            :day-cols="dayCols"
+            :editable="canEditAttendance"
+            @save="saveKeyboardAttendance"
+            @clear-day="bulkClearOneDay"
+          />
+        </div>
+
+        <div class="pp-card p-3 border-emerald-300/60 bg-emerald-50/40 space-y-3">
+          <h3 class="text-sm font-bold text-emerald-900 flex items-center gap-2">
+            📋 Daily wage — attendance feed
+            <span class="pp-badge bg-emerald-700 text-white text-[10px]">{{ periodStaffDaily.length }}</span>
+          </h3>
+          <PayrollKeyboardAttendance
+            pay-type="daily_wage"
+            input-id-prefix="feed-daily-"
+            :show-clear-day-tools="false"
+            :staff="periodStaff"
+            :lines="currentRun.lines"
+            :year="selYear"
+            :month="selMonth"
+            :day-cols="dayCols"
+            :editable="canEditAttendance"
+            @save="saveKeyboardAttendance"
+            @clear-day="bulkClearOneDay"
+          />
+        </div>
+      </template>
+
+      <h3 v-if="periodStaff.length > 0 && currentRun" class="text-sm font-bold text-slate-700 px-1 pt-2">
+        📅 Month grid (sab staff — overview)
+      </h3>
 
       <p v-if="canEditAttendance" class="text-xs text-slate-500 px-1">
         Grid: Date tap = bulk select · <strong>✓all</strong> = sab present · <strong>✕all</strong> = us din sab clear

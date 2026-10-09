@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue'
-import type { DayAttendance, Staff } from '@/types/models'
+import type { DayAttendance, PayrollLine, Staff, StaffPayType } from '@/types/models'
 import {
   PAYROLL_HOURS_PER_DAY,
   dayFromPreset,
@@ -8,16 +8,27 @@ import {
   isSunday,
   normalizeDayHours,
 } from '@/services/payrollCalc'
-import type { PayrollLine } from '@/types/models'
 
-const props = defineProps<{
-  staff: Staff[]
-  lines: PayrollLine[]
-  year: number
-  month: number
-  dayCols: string[]
-  editable: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    staff: Staff[]
+    lines: PayrollLine[]
+    year: number
+    month: number
+    dayCols: string[]
+    editable: boolean
+    /** Which pay group this feed is for (separate monthly vs daily wage UI). */
+    payType: StaffPayType
+    /** Unique prefix for input ids when two feeds are on one page. */
+    inputIdPrefix?: string
+    /** Show “clear date for all staff” controls (only once on the page). */
+    showClearDayTools?: boolean
+  }>(),
+  {
+    inputIdPrefix: undefined,
+    showClearDayTools: false,
+  },
+)
 
 const emit = defineEmits<{
   save: [staffId: string, dayHours: Record<string, DayAttendance>]
@@ -25,17 +36,17 @@ const emit = defineEmits<{
 }>()
 
 const clearDayPick = ref('')
-
-const segment = ref<'monthly' | 'daily_wage'>('monthly')
 const feedStaffId = ref('')
+
+const idPrefix = computed(() => props.inputIdPrefix || `feed-${props.payType}-`)
 
 type FeedRow = { duty: string; ot: string }
 
 const draft = reactive<Record<string, FeedRow>>({})
 
-const segmentStaff = computed(() =>
+const groupStaff = computed(() =>
   props.staff
-    .filter((s) => s.pay_type === segment.value)
+    .filter((s) => s.pay_type === props.payType)
     .slice()
     .sort((a, b) =>
       String(a.employee_code || '').localeCompare(String(b.employee_code || ''))
@@ -43,7 +54,9 @@ const segmentStaff = computed(() =>
     ),
 )
 
-const feedStaff = computed(() => segmentStaff.value.find((s) => s.id === feedStaffId.value))
+const feedStaff = computed(() => groupStaff.value.find((s) => s.id === feedStaffId.value))
+
+const payTypeLabel = computed(() => (props.payType === 'monthly' ? 'Monthly salary' : 'Daily wage'))
 
 function lineFor(staffId: string) {
   return props.lines.find((l) => l.staff_id === staffId)
@@ -67,7 +80,7 @@ function loadDraft(staffId: string) {
 }
 
 watch(
-  segmentStaff,
+  groupStaff,
   (list) => {
     if (!list.length) {
       feedStaffId.value = ''
@@ -93,8 +106,12 @@ function selectStaff(id: string) {
   nextTick(() => focusCell(props.dayCols[0], 'duty'))
 }
 
+function inputId(day: string, field: 'duty' | 'ot') {
+  return `${idPrefix.value}${day}-${field}`
+}
+
 function focusCell(day: string, field: 'duty' | 'ot') {
-  const el = document.getElementById(`feed-${day}-${field}`) as HTMLInputElement | null
+  const el = document.getElementById(inputId(day, field)) as HTMLInputElement | null
   if (!el || el.disabled) return
   el.focus()
   el.select()
@@ -187,8 +204,7 @@ async function onOtKeydown(day: string, e: KeyboardEvent) {
     const next = nextEmployedDay(day)
     if (next) focusCell(next, 'duty')
     else {
-      // End of month → next staff in segment
-      const list = segmentStaff.value
+      const list = groupStaff.value
       const i = list.findIndex((s) => s.id === feedStaffId.value)
       if (i >= 0 && i < list.length - 1) {
         selectStaff(list[i + 1].id)
@@ -237,10 +253,6 @@ function quickFill(preset: 'full' | 'sunday' | 'holiday' | 'absent' | 'clear') {
   void commitStaffHours()
 }
 
-function switchSegment(next: 'monthly' | 'daily_wage') {
-  segment.value = next
-}
-
 function clearAllStaffOnDay(day: string) {
   if (!props.editable || !day) return
   emit('clearDay', day)
@@ -249,36 +261,17 @@ function clearAllStaffOnDay(day: string) {
 
 <template>
   <div class="space-y-3">
-    <div class="flex flex-wrap gap-2">
-      <button
-        type="button"
-        class="pp-btn !py-2"
-        :class="segment === 'monthly' ? 'pp-btn-primary' : 'pp-btn-ghost'"
-        @click="switchSegment('monthly')"
-      >
-        Monthly salary ({{ staff.filter((s) => s.pay_type === 'monthly').length }})
-      </button>
-      <button
-        type="button"
-        class="pp-btn !py-2"
-        :class="segment === 'daily_wage' ? 'pp-btn-primary' : 'pp-btn-ghost'"
-        @click="switchSegment('daily_wage')"
-      >
-        Daily wage ({{ staff.filter((s) => s.pay_type === 'daily_wage').length }})
-      </button>
-    </div>
-
     <p class="text-xs text-slate-600 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">
-      <strong>Keyboard feed:</strong> Duty → Tab → OT → Tab = next day (auto-save).
-      Enter bhi same. Blank duty = unmarked (0 pay). Weekly off pe duty/OT = full daily + OT.
+      <strong>{{ payTypeLabel }} — keyboard feed:</strong> Duty → Tab → OT → Tab = next day (auto-save).
+      Blank duty = unmarked (0 pay). Weekly off pe duty/OT = full daily + OT.
     </p>
 
-    <div v-if="editable" class="pp-card p-3 flex flex-wrap items-end gap-2">
+    <div v-if="showClearDayTools && editable" class="pp-card p-3 flex flex-wrap items-end gap-2">
       <div class="min-w-[140px]">
         <label class="pp-label">Clear date — sab staff</label>
         <select v-model="clearDayPick" class="pp-input">
           <option value="">Din choose…</option>
-          <option v-for="d in dayCols" :key="'clr-' + d" :value="d">
+          <option v-for="d in dayCols" :key="'clr-' + payType + d" :value="d">
             {{ Number(d) }}{{ isSunday(year, month, d) ? ' (Sun)' : '' }}
           </option>
         </select>
@@ -293,14 +286,14 @@ function clearAllStaffOnDay(day: string) {
       </button>
     </div>
 
-    <div v-if="!segmentStaff.length" class="pp-card p-6 text-center text-slate-400">
-      Is segment me is month ka koi staff nahi.
+    <div v-if="!groupStaff.length" class="pp-card p-6 text-center text-slate-400">
+      Is month me {{ payTypeLabel.toLowerCase() }} staff nahi.
     </div>
 
     <template v-else>
       <div class="flex flex-wrap gap-2">
         <button
-          v-for="s in segmentStaff"
+          v-for="s in groupStaff"
           :key="s.id"
           type="button"
           class="pp-btn !py-1.5 !text-xs"
@@ -326,7 +319,7 @@ function clearAllStaffOnDay(day: string) {
             · {{ feedStaff.name }}
           </div>
           <div class="text-xs text-slate-500">
-            {{ segment === 'monthly' ? 'Monthly' : 'Daily wage' }} · Duty + OT
+            {{ payTypeLabel }} · Duty + OT
           </div>
         </div>
 
@@ -355,7 +348,7 @@ function clearAllStaffOnDay(day: string) {
                     <span>{{ Number(d) }}</span>
                     <span v-if="isSunday(year, month, d)" class="text-[10px] text-indigo-700">Sun</span>
                     <button
-                      v-if="editable"
+                      v-if="editable && showClearDayTools"
                       type="button"
                       class="text-[10px] text-rose-600 hover:underline ml-1"
                       title="Is din sab staff clear"
@@ -368,7 +361,7 @@ function clearAllStaffOnDay(day: string) {
                 <td class="px-2 py-1">
                   <input
                     v-if="employed(d) && editable"
-                    :id="`feed-${d}-duty`"
+                    :id="inputId(d, 'duty')"
                     v-model="draft[d].duty"
                     type="number"
                     min="0"
@@ -384,7 +377,7 @@ function clearAllStaffOnDay(day: string) {
                 <td class="px-2 py-1">
                   <input
                     v-if="employed(d) && editable"
-                    :id="`feed-${d}-ot`"
+                    :id="inputId(d, 'ot')"
                     v-model="draft[d].ot"
                     type="number"
                     min="0"
