@@ -5,6 +5,7 @@ import {
   breakdownDay,
   calcDaySalaryExpense,
   ceilRupee,
+  dayHasFedHours,
   daysInMonth,
   isSunday,
   lineBalanceDue,
@@ -53,28 +54,39 @@ export interface PayslipDayRow {
   dayPay: number
 }
 
-/** Day-wise rows for payslip PDF (marked days only). */
+/** Day-wise rows for payslip PDF (marked days only). Uses same Sun/Hol pay flag as salary. */
 export function buildPayslipDayRows(line: PayrollLine, year: number, month: number): PayslipDayRow[] {
   const hours = normalizeDayHours(line)
   const dim = daysInMonth(year, month)
   const rows: PayslipDayRow[] = []
   const staffWage = { hourly_wage: line.hourly_wage }
+  const grantPaidOffs = line.grant_paid_offs !== false
 
   for (let d = 1; d <= dim; d++) {
     const dayKey = String(d).padStart(2, '0')
     const day = hours[dayKey]
     if (!day || day.duty_hours === null) continue
-    rows.push(buildOneDayRow(dayKey, day, year, month, staffWage))
+    rows.push(buildOneDayRow(dayKey, day, year, month, staffWage, grantPaidOffs))
   }
   return rows
 }
 
-function dayStatusLabel(day: DayAttendance, b: ReturnType<typeof breakdownDay>): string {
-  if (day.kind === 'holiday') return day.duty_hours === 0 && !day.ot_hours ? 'Holiday rest' : 'Holiday work'
-  if (day.kind === 'sunday') return day.duty_hours === 0 && !day.ot_hours ? 'Weekly off' : 'Sunday work'
-  if (day.kind === 'leave') return 'Leave'
+function dayStatusLabel(
+  day: DayAttendance,
+  b: ReturnType<typeof breakdownDay>,
+  grantPaidOffs: boolean,
+): string {
+  if (day.kind === 'holiday') {
+    if (dayHasFedHours(day)) return 'Holiday work'
+    return grantPaidOffs ? 'Holiday rest' : 'Holiday (no pay)'
+  }
+  if (day.kind === 'sunday') {
+    if (dayHasFedHours(day)) return 'Sunday work'
+    return grantPaidOffs ? 'Weekly off' : 'Sunday (no pay)'
+  }
+  if (day.kind === 'leave') return grantPaidOffs || day.off_paid ? 'Leave' : 'Leave (no pay)'
   if (day.duty_hours === 0 && !day.off_paid) return 'Absent'
-  if (day.duty_hours === 0 && day.off_paid) return 'Paid off'
+  if (day.duty_hours === 0 && day.off_paid) return grantPaidOffs ? 'Paid off' : 'Off (no pay)'
   if (b.unpaid > 0) return 'Partial'
   if (b.ot > 0) return 'Full+OT'
   if ((day.duty_hours ?? 0) >= 8) return 'Full'
@@ -99,18 +111,19 @@ function buildOneDayRow(
   year: number,
   month: number,
   staffWage: { hourly_wage: number },
+  grantPaidOffs: boolean,
 ): PayslipDayRow {
-  const b = breakdownDay(day, { grantPaidOffs: true })
+  const b = breakdownDay(day, { grantPaidOffs })
   return {
     dayKey,
     weekday: weekdayShort(year, month, dayKey),
     sunHol: sunHolLabel(day, year, month, dayKey),
-    status: dayStatusLabel(day, b),
+    status: dayStatusLabel(day, b, grantPaidOffs),
     duty: b.duty,
     offUnpaid: b.unpaid,
     ot: b.ot,
     paid: b.paid,
-    dayPay: calcDaySalaryExpense(staffWage, day),
+    dayPay: calcDaySalaryExpense(staffWage, day, { grantPaidOffs }),
   }
 }
 
@@ -257,7 +270,13 @@ function addPayslipPage(
   y += 4
   pdf.setFont('helvetica', 'normal').setFontSize(7)
   pdf.setTextColor(100)
-  pdf.text('Sun/Hol = Sunday ya Holiday. Off unpaid = baki hours. Day Rs = paid hours x hourly (approx).', L, y)
+  pdf.text(
+    line.grant_paid_offs === false
+      ? 'Sun/Hol rest pay OFF is staff ke liye — rest din Paid h / Day Rs me nahi. TOTAL = Gross earned.'
+      : 'Sun/Hol = Sunday ya Holiday. TOTAL Paid h / Day Rs = salary Gross earned se match.',
+    L,
+    y,
+  )
   pdf.setTextColor(0)
   y += 5
 
@@ -298,23 +317,12 @@ function addPayslipPage(
     y += 6
   } else {
     y = drawTableHeader(y)
-    let sumDuty = 0
-    let sumOff = 0
-    let sumOt = 0
-    let sumPaid = 0
-    let sumPay = 0
 
     for (const row of dayRows) {
       y = ensureSpace(pdf, y, bodyH + 1, bottom, () => {
         const ny = drawContinuingHeader()
         return drawTableHeader(ny)
       })
-
-      sumDuty += row.duty
-      sumOff += row.offUnpaid
-      sumOt += row.ot
-      sumPaid += row.paid
-      sumPay += row.dayPay
 
       pdf.setDrawColor(226, 232, 240)
       pdf.line(L, y + bodyH, R, y + bodyH)
@@ -340,15 +348,16 @@ function addPayslipPage(
       const ny = drawContinuingHeader()
       return drawTableHeader(ny)
     })
+    // TOTAL always from salary line — matches Gross earned (not sum of rounded day Rs).
     pdf.setFillColor(248, 250, 252)
     pdf.rect(L, y, W, bodyH, 'F')
     pdf.setFont('helvetica', 'bold').setFontSize(7)
     pdf.text('TOTAL', cols.date + 1, y + 3.6)
-    pdf.text(String(sumDuty), cols.duty, y + 3.6, { align: 'right' })
-    pdf.text(String(sumOff), cols.off, y + 3.6, { align: 'right' })
-    pdf.text(String(sumOt), cols.ot, y + 3.6, { align: 'right' })
-    pdf.text(String(sumPaid), cols.paid, y + 3.6, { align: 'right' })
-    pdf.text(money(sumPay), cols.pay - 1, y + 3.6, { align: 'right' })
+    pdf.text(String(line.total_duty_hours || 0), cols.duty, y + 3.6, { align: 'right' })
+    pdf.text(String(line.total_off_unpaid_hours || 0), cols.off, y + 3.6, { align: 'right' })
+    pdf.text(String(line.total_ot_hours || 0), cols.ot, y + 3.6, { align: 'right' })
+    pdf.text(String(line.total_paid_hours || 0), cols.paid, y + 3.6, { align: 'right' })
+    pdf.text(money(line.earned), cols.pay - 1, y + 3.6, { align: 'right' })
     y += bodyH + 4
   }
 
