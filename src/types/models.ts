@@ -403,8 +403,8 @@ export interface PayrollLine {
   /** Informational: every employed working day has full 8h duty. */
   duty_complete?: boolean
   /**
-   * User choice: grant Sunday / holiday rest pay for this staff.
-   * Default true when undefined. Worked Sunday (duty/OT) always pays.
+   * Legacy flag — ignored. Sunday / Holiday rest is always paid.
+   * Kept optional so old saved runs still load.
    */
   grant_paid_offs?: boolean
   earned: number

@@ -555,22 +555,6 @@ async function setOtherDeduction(staffId: string, amount: number) {
   await store.updateRunLine(period.value, staffId, { other_deduction: Math.max(0, amount) })
 }
 
-async function setGrantPaidOffs(staffId: string, grant: boolean) {
-  if (currentRun.value?.status === 'paid') return
-  const res = await store.updateRunLine(period.value, staffId, { grant_paid_offs: grant })
-  if (res && 'error' in res) alert(res.error)
-}
-
-async function setGrantPaidOffsAll(grant: boolean) {
-  if (currentRun.value?.status === 'paid') return alert('Month already paid.')
-  const res = await store.setGrantPaidOffsBulk(period.value, grant)
-  if (res && 'error' in res) alert(res.error)
-}
-
-function lineGrantsPaidOffs(line: { grant_paid_offs?: boolean }) {
-  return line.grant_paid_offs !== false
-}
-
 /** Factory holidays marked on any staff — used for full-month expected duty. */
 const factoryHolidayKeys = computed(() => {
   const lines = currentRun.value?.lines ?? []
@@ -1217,8 +1201,8 @@ onMounted(async () => {
         <span class="font-bold text-emerald-900">₹{{ attendanceSalaryExpenseTotal.toLocaleString('en-IN') }}</span>
       </div>
       <p v-if="periodStaff.length > 0" class="text-[10px] text-slate-400 px-1">
-        Daily = monthly ÷ month days. Sunday/holiday rest pay Salary tab se staff-wise ON/OFF.
-        Holiday/Sunday mark pe pehle se fed duty/OT disturb nahi hota. Weekly off pe kaam = full daily + OT. Blank = 0 pay.
+        Daily = monthly ÷ month days. Sunday/Holiday rest hamesha paid. Sunday/Holiday pe sirf OT (normal duty nahi).
+        Holiday/Sunday mark pe pehle se fed OT disturb nahi hota. Blank = 0 pay.
       </p>
     </section>
 
@@ -1277,30 +1261,12 @@ onMounted(async () => {
               <h3 class="text-sm font-bold text-navy">Duty hours summary</h3>
               <p class="text-[11px] text-slate-500 mt-0.5">
                 Expected = poora month − Sunday − holiday ({{ monthWorkingDays }} din × {{ PAYROLL_HOURS_PER_DAY }}h = {{ monthExpectedDuty }}h) — joining date se farak nahi.
-                Actual = duty + OT (jo feed kiya). Sun/Hol pay alag checkbox se.
+                Actual = duty + OT. Sunday/Holiday rest hamesha paid.
               </p>
-            </div>
-            <div class="flex flex-wrap gap-2">
-              <button
-                type="button"
-                class="pp-btn pp-btn-ghost !py-1 !text-xs border-emerald-200 text-emerald-800"
-                :disabled="currentRun.status === 'paid'"
-                @click="setGrantPaidOffsAll(true)"
-              >
-                Sab Sun/Hol ON
-              </button>
-              <button
-                type="button"
-                class="pp-btn pp-btn-ghost !py-1 !text-xs border-rose-200 text-rose-700"
-                :disabled="currentRun.status === 'paid'"
-                @click="setGrantPaidOffsAll(false)"
-              >
-                Sab Sun/Hol OFF
-              </button>
             </div>
           </div>
           <div class="overflow-x-auto">
-            <table class="w-full text-sm min-w-[640px]">
+            <table class="w-full text-sm min-w-[560px]">
               <thead class="bg-slate-50 text-xs text-slate-500 uppercase">
                 <tr>
                   <th class="text-left px-2 py-1.5">Staff</th>
@@ -1310,7 +1276,6 @@ onMounted(async () => {
                   <th class="text-right px-2 py-1.5">OT h</th>
                   <th class="text-right px-2 py-1.5">Paid h</th>
                   <th class="text-center px-2 py-1.5">Duty full?</th>
-                  <th class="text-center px-2 py-1.5">Sun/Hol pay</th>
                 </tr>
               </thead>
               <tbody>
@@ -1339,23 +1304,6 @@ onMounted(async () => {
                       {{ line.duty_complete ? 'Yes' : 'No' }}
                     </span>
                   </td>
-                  <td class="px-2 py-1.5 text-center">
-                    <label class="inline-flex items-center gap-1.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        class="w-4 h-4"
-                        :checked="lineGrantsPaidOffs(line)"
-                        :disabled="currentRun.status === 'paid'"
-                        @change="setGrantPaidOffs(line.staff_id, ($event.target as HTMLInputElement).checked)"
-                      />
-                      <span
-                        class="text-[10px] font-bold"
-                        :class="lineGrantsPaidOffs(line) ? 'text-emerald-700' : 'text-rose-600'"
-                      >
-                        {{ lineGrantsPaidOffs(line) ? 'ON' : 'OFF' }}
-                      </span>
-                    </label>
-                  </td>
                 </tr>
               </tbody>
               <tfoot>
@@ -1383,9 +1331,6 @@ onMounted(async () => {
                   </td>
                   <td class="px-2 py-1.5 text-center text-xs text-slate-600">
                     {{ sortedSalaryLines.filter((l) => l.duty_complete).length }}/{{ sortedSalaryLines.length }}
-                  </td>
-                  <td class="px-2 py-1.5 text-center text-xs text-slate-600">
-                    {{ sortedSalaryLines.filter((l) => lineGrantsPaidOffs(l)).length }}/{{ sortedSalaryLines.length }}
                   </td>
                 </tr>
               </tfoot>

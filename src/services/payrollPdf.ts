@@ -54,39 +54,28 @@ export interface PayslipDayRow {
   dayPay: number
 }
 
-/** Day-wise rows for payslip PDF (marked days only). Uses same Sun/Hol pay flag as salary. */
+/** Day-wise rows for payslip PDF (marked days only). Sunday/Holiday rest always paid. */
 export function buildPayslipDayRows(line: PayrollLine, year: number, month: number): PayslipDayRow[] {
   const hours = normalizeDayHours(line)
   const dim = daysInMonth(year, month)
   const rows: PayslipDayRow[] = []
   const staffWage = { hourly_wage: line.hourly_wage }
-  const grantPaidOffs = line.grant_paid_offs !== false
 
   for (let d = 1; d <= dim; d++) {
     const dayKey = String(d).padStart(2, '0')
     const day = hours[dayKey]
     if (!day || day.duty_hours === null) continue
-    rows.push(buildOneDayRow(dayKey, day, year, month, staffWage, grantPaidOffs))
+    rows.push(buildOneDayRow(dayKey, day, year, month, staffWage))
   }
   return rows
 }
 
-function dayStatusLabel(
-  day: DayAttendance,
-  b: ReturnType<typeof breakdownDay>,
-  grantPaidOffs: boolean,
-): string {
-  if (day.kind === 'holiday') {
-    if (dayHasFedHours(day)) return 'Holiday work'
-    return grantPaidOffs ? 'Holiday rest' : 'Holiday (no pay)'
-  }
-  if (day.kind === 'sunday') {
-    if (dayHasFedHours(day)) return 'Sunday work'
-    return grantPaidOffs ? 'Weekly off' : 'Sunday (no pay)'
-  }
-  if (day.kind === 'leave') return grantPaidOffs || day.off_paid ? 'Leave' : 'Leave (no pay)'
+function dayStatusLabel(day: DayAttendance, b: ReturnType<typeof breakdownDay>): string {
+  if (day.kind === 'holiday') return dayHasFedHours(day) ? 'Holiday work' : 'Holiday rest'
+  if (day.kind === 'sunday') return dayHasFedHours(day) ? 'Sunday work' : 'Weekly off'
+  if (day.kind === 'leave') return 'Leave'
   if (day.duty_hours === 0 && !day.off_paid) return 'Absent'
-  if (day.duty_hours === 0 && day.off_paid) return grantPaidOffs ? 'Paid off' : 'Off (no pay)'
+  if (day.duty_hours === 0 && day.off_paid) return 'Paid off'
   if (b.unpaid > 0) return 'Partial'
   if (b.ot > 0) return 'Full+OT'
   if ((day.duty_hours ?? 0) >= 8) return 'Full'
@@ -111,19 +100,18 @@ function buildOneDayRow(
   year: number,
   month: number,
   staffWage: { hourly_wage: number },
-  grantPaidOffs: boolean,
 ): PayslipDayRow {
-  const b = breakdownDay(day, { grantPaidOffs })
+  const b = breakdownDay(day, { grantPaidOffs: true })
   return {
     dayKey,
     weekday: weekdayShort(year, month, dayKey),
     sunHol: sunHolLabel(day, year, month, dayKey),
-    status: dayStatusLabel(day, b, grantPaidOffs),
+    status: dayStatusLabel(day, b),
     duty: b.duty,
     offUnpaid: b.unpaid,
     ot: b.ot,
     paid: b.paid,
-    dayPay: calcDaySalaryExpense(staffWage, day, { grantPaidOffs }),
+    dayPay: calcDaySalaryExpense(staffWage, day, { grantPaidOffs: true }),
   }
 }
 
@@ -270,13 +258,7 @@ function addPayslipPage(
   y += 4
   pdf.setFont('helvetica', 'normal').setFontSize(7)
   pdf.setTextColor(100)
-  pdf.text(
-    line.grant_paid_offs === false
-      ? 'Sun/Hol rest pay OFF is staff ke liye — rest din Paid h / Day Rs me nahi. TOTAL = Gross earned.'
-      : 'Sun/Hol = Sunday ya Holiday. TOTAL Paid h / Day Rs = salary Gross earned se match.',
-    L,
-    y,
-  )
+  pdf.text('Sun/Hol = Sunday ya Holiday (rest always paid). TOTAL Paid h / Day Rs = Gross earned.', L, y)
   pdf.setTextColor(0)
   y += 5
 
