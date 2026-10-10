@@ -569,7 +569,7 @@ export const usePayrollStore = defineStore('payroll', () => {
   async function updateRunLine(
     period: string,
     staffId: string,
-    patch: Partial<Pick<PayrollLine, 'day_hours' | 'other_deduction'>>,
+    patch: Partial<Pick<PayrollLine, 'day_hours' | 'other_deduction' | 'grant_paid_offs'>>,
   ) {
     const run = await ensureRun(period)
     if (run.status === 'paid') return { error: 'Month already paid' }
@@ -596,10 +596,12 @@ export const usePayrollStore = defineStore('payroll', () => {
           run.month,
         )
         const other = patch.other_deduction ?? line.other_deduction
+        const grant_paid_offs =
+          patch.grant_paid_offs !== undefined ? patch.grant_paid_offs : line.grant_paid_offs
         return buildLineForStaff(staff, run, day_hours, line.attendance, {
           ...line,
           other_deduction: other,
-          grant_paid_offs: true,
+          grant_paid_offs,
         })
       })
 
@@ -612,9 +614,34 @@ export const usePayrollStore = defineStore('payroll', () => {
         run.year,
         run.month,
       )
-      lines.push(buildLineForStaff(staff, run, day_hours, undefined))
+      lines.push(
+        buildLineForStaff(staff, run, day_hours, undefined, {
+          grant_paid_offs: patch.grant_paid_offs,
+        } as PayrollLine),
+      )
     }
 
+    await persistRunLines(run, lines)
+    void syncPayrollToCloudIfReady()
+    return { ok: true }
+  }
+
+  /** Set Sunday/holiday rest-pay flag for many staff at once. */
+  async function setGrantPaidOffsBulk(period: string, grant: boolean) {
+    const run = await ensureRun(period)
+    if (run.status === 'paid') return { error: 'Month already paid' }
+    const eligible = staffForPeriod(period)
+    const staffById = new Map(eligible.map((s) => [s.id, s]))
+    const lines = run.lines
+      .filter((line) => staffById.has(line.staff_id))
+      .map((line) => {
+        const staff = staffById.get(line.staff_id)!
+        if (lineHasRecordedPayment(line)) return line
+        return buildLineForStaff(staff, run, normalizeDayHours(line), line.attendance, {
+          ...line,
+          grant_paid_offs: grant,
+        })
+      })
     await persistRunLines(run, lines)
     void syncPayrollToCloudIfReady()
     return { ok: true }
@@ -903,6 +930,7 @@ export const usePayrollStore = defineStore('payroll', () => {
     bulkMarkDays,
     bulkClearDays,
     updateRunLine,
+    setGrantPaidOffsBulk,
     rangeAdvanceBundle,
     recalculateRun,
     resetAdvanceAdjustments,

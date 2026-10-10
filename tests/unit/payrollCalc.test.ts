@@ -603,7 +603,7 @@ describe('Sunday/holiday pay only when duty complete', () => {
     expect(summary.total_paid_hours).toBe(10)
   })
 
-  it('buildPayrollLine always pays Sunday rest (policy)', () => {
+  it('buildPayrollLine grants Sunday rest by default; toggle grant_paid_offs to deny', () => {
     const staff: Staff = {
       id: 's1',
       firm_id: 'f1',
@@ -637,13 +637,25 @@ describe('Sunday/holiday pay only when duty complete', () => {
       month,
       0,
       0,
-      { grant_paid_offs: false, payments: [], paid_amount: 0, pay_status: 'pending' },
     )
-    // Legacy grant_paid_offs=false is ignored — Sundays stay paid.
     expect(withAbsentStillGranted.duty_complete).toBe(false)
     expect(withAbsentStillGranted.grant_paid_offs).toBe(true)
     // 25 work × 8 + 4 Sunday rest = 232 (absent day unpaid)
     expect(withAbsentStillGranted.total_paid_hours).toBe(232)
+
+    const denied = buildPayrollLine(
+      staff,
+      fullMonthWithSundays('10'),
+      undefined,
+      year,
+      month,
+      0,
+      0,
+      { grant_paid_offs: false, payments: [], paid_amount: 0, pay_status: 'pending' },
+    )
+    expect(denied.grant_paid_offs).toBe(false)
+    // 25 work × 8, Sundays denied = 200
+    expect(denied.total_paid_hours).toBe(200)
   })
 })
 

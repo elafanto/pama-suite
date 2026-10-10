@@ -78,27 +78,27 @@ describe('buildPayslipDayRows', () => {
     expect(buildPayslipDayRows(baseLine({}), 2026, 8)).toEqual([])
   })
 
-  it('always pays Sunday/Holiday rest in day rows (even if legacy flag false)', () => {
+  it('respects grant_paid_offs=false so Sunday/Holiday rest is not paid in day rows', () => {
     const line = baseLine({
       '05': dayFromPreset('full'),
       '06': dayFromPreset('sunday'),
       '15': dayFromPreset('holiday'),
     })
     line.grant_paid_offs = false
-    line.hourly_wage = 125
+    line.hourly_wage = 36
     const rows = buildPayslipDayRows(line, 2026, 9)
-    expect(rows.find((r) => r.dayKey === '05')).toMatchObject({ paid: 8, dayPay: 1000 })
+    expect(rows.find((r) => r.dayKey === '05')).toMatchObject({ paid: 8, dayPay: 288 })
     expect(rows.find((r) => r.dayKey === '06')).toMatchObject({
       sunHol: 'Sunday',
-      status: 'Weekly off',
-      paid: 8,
-      dayPay: 1000,
+      status: 'Sunday (no pay)',
+      paid: 0,
+      dayPay: 0,
     })
     expect(rows.find((r) => r.dayKey === '15')).toMatchObject({
       sunHol: 'Holiday',
-      status: 'Holiday rest',
-      paid: 8,
-      dayPay: 1000,
+      status: 'Holiday (no pay)',
+      paid: 0,
+      dayPay: 0,
     })
   })
 })

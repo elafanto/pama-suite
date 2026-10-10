@@ -868,7 +868,9 @@ export function sumDaySalaryExpense(
   for (const staff of staffList) {
     const line = lineByStaff.get(staff.id)
     const dayHours = line ? normalizeDayHours(line) : {}
-    total += calcDaySalaryExpense(staff, dayHours[dayKey], { grantPaidOffs: true })
+    total += calcDaySalaryExpense(staff, dayHours[dayKey], {
+      grantPaidOffs: line?.grant_paid_offs !== false,
+    })
   }
   return total
 }
@@ -900,9 +902,9 @@ export function buildPayrollLine(
   const actual_duty_hours = sumActualDutyHours(day_hours)
 
   const duty_complete = hasCompleteWorkingDuty(day_hours, year, month, staff)
-  // Policy: Sunday / Holiday rest is always paid (OT-only work days too).
-  const grant_paid_offs = true
-  const summary = summarizeDayHours(day_hours, dim, { grantPaidOffs: true })
+  // Manual toggle (default ON). Not auto-gated by duty_complete.
+  const grant_paid_offs = existing?.grant_paid_offs !== false
+  const summary = summarizeDayHours(day_hours, dim, { grantPaidOffs: grant_paid_offs })
   const outsideDays = unpaidDaysOutsideEmployment(staff, year, month)
   const summaryForPay =
     outsideDays > 0 && staff.pay_type === 'monthly'
