@@ -8,8 +8,11 @@ import {
   buildGstrB2csExportRows,
   buildGstrDocsExportRows,
   buildGstrHsnB2BExportRows,
+  buildGstrHsnB2CExportRows,
+  exportHsnCode,
   formatGstrInvoiceDate,
   formatPlaceOfSupply,
+  invoiceHsnLineTaxables,
   isB2clInvoice,
   periodMonthBounds,
   toGstrUqc,
@@ -94,6 +97,15 @@ describe('buildGstrB2BExportRows', () => {
   })
 })
 
+describe('exportHsnCode', () => {
+  it('normalizes to 4-digit HSN and never emits NA', () => {
+    expect(exportHsnCode('48191010')).toBe('4819')
+    expect(exportHsnCode('NA')).toBe('')
+    expect(exportHsnCode('')).toBe('')
+    expect(exportHsnCode(null)).toBe('')
+  })
+})
+
 describe('buildGstrHsnB2BExportRows', () => {
   it('aggregates HSN with CGST/SGST for intra-state and V2.2 rate-before-taxable shape', () => {
     const inv = makeInvoice({
@@ -120,9 +132,114 @@ describe('buildGstrHsnB2BExportRows', () => {
       items: [{ item_id: null, name: 'Boxes', hsn: '48191010', qty: 10, unit: 'NOS', rate: 1000, gst: 5 }],
     })
     const rows = buildGstrHsnB2BExportRows([inv])
+    expect(rows[0].hsn).toBe('4819')
     expect(rows[0].igst).toBe(500)
     expect(rows[0].cgst).toBe(0)
     expect(rows[0].sgst).toBe(0)
+  })
+
+  it('nets registered-buyer credit notes into hsn(b2b)', () => {
+    const inv = makeInvoice({
+      id: '1',
+      items: [{ item_id: null, name: 'Paper', hsn: '4707', qty: 100, unit: 'KG', rate: 100, gst: 5 }],
+    })
+    const cn = makeInvoice({
+      id: 'cn',
+      bill_no: 'CN-1',
+      doc_type: 'CREDIT_NOTE',
+      items: [{ item_id: null, name: 'Paper', hsn: '4707', qty: 10, unit: 'KG', rate: 100, gst: 5 }],
+    })
+    const rows = buildGstrHsnB2BExportRows([inv, cn])
+    expect(rows).toHaveLength(1)
+    expect(rows[0].taxableValue).toBe(9000)
+    expect(rows[0].totalQuantity).toBe(90)
+    expect(rows[0].cgst + rows[0].sgst).toBe(450)
+  })
+})
+
+describe('Table 12 B2C / CDNUR HSN tie-out', () => {
+  it('includes unregistered credit notes in hsn(b2c) so CDNUR taxable is not orphaned', () => {
+    const cn = makeInvoice({
+      id: 'cn-b2c',
+      bill_no: 'CN-U1',
+      doc_type: 'CREDIT_NOTE',
+      party_snapshot: { is_consumer: true, state: '05' },
+      ship: { name: '', phone: '', addr: '', city: '', pin: '', email: '', gstin: '', state: '05' },
+      gst_type: 'intra',
+      grand_total: 15.75,
+      sub: 15,
+      total_tax: 0.75,
+      taxBuckets: { 5: { taxable: 15, tax: 0.75 } },
+      items: [{ item_id: null, name: 'Corrugated box', hsn: '4819', qty: 1, unit: 'NOS', rate: 15, gst: 5 }],
+    })
+    const payload = buildGstr1ExportPayload([cn])
+    expect(payload.cdnur).toHaveLength(1)
+    expect(payload.cdnur[0].taxableValue).toBe(15)
+    expect(payload.hsnB2c).toHaveLength(1)
+    expect(payload.hsnB2c[0].hsn).toBe('4819')
+    expect(payload.hsnB2c[0].taxableValue).toBe(-15)
+    expect(payload.hsnB2b).toHaveLength(0)
+  })
+
+  it('puts taxBuckets-only B2C amounts into hsn(b2c) so sheets and Table 12 share the same taxable', () => {
+    const inv = makeInvoice({
+      id: 'b2c-tb',
+      party_snapshot: { is_consumer: true, state: '05' },
+      ship: { name: '', phone: '', addr: '', city: '', pin: '', email: '', gstin: '', state: '05' },
+      gst_type: 'intra',
+      grand_total: 15.75,
+      sub: 15,
+      items: [],
+      taxBuckets: { 5: { taxable: 15, tax: 0.75 } },
+    })
+    const payload = buildGstr1ExportPayload([inv])
+    const b2csTaxable = payload.b2cs.reduce((s, r) => s + r.taxableValue, 0)
+    const hsnTaxable = payload.hsnB2c.reduce((s, r) => s + r.taxableValue, 0)
+    expect(b2csTaxable).toBe(15)
+    expect(hsnTaxable).toBe(15)
+  })
+
+  it('aligns B2CS taxable with hsn(b2c) after invoice discount', () => {
+    const inv = makeInvoice({
+      id: 'b2c-disc',
+      party_snapshot: { is_consumer: true, state: '05' },
+      ship: { name: '', phone: '', addr: '', city: '', pin: '', email: '', gstin: '', state: '05' },
+      gst_type: 'intra',
+      discount_amount: 15,
+      sub: 1015,
+      grand_total: 1050,
+      taxBuckets: { 5: { taxable: 1000, tax: 50 } },
+      items: [{ item_id: null, name: 'Box', hsn: '4819', qty: 1015, unit: 'NOS', rate: 1, gst: 5 }],
+    })
+    const lines = invoiceHsnLineTaxables(inv)
+    expect(lines[0].taxable).toBe(1000)
+    const payload = buildGstr1ExportPayload([inv])
+    const b2csTaxable = payload.b2cs.reduce((s, r) => s + r.taxableValue, 0)
+    const hsnTaxable = payload.hsnB2c.reduce((s, r) => s + r.taxableValue, 0)
+    expect(b2csTaxable).toBe(1000)
+    expect(hsnTaxable).toBe(1000)
+    expect(payload.hsnB2c[0].hsn).toBe('4819')
+  })
+
+  it('rebalances CGST/SGST so halves always add to the row tax', () => {
+    const inv = makeInvoice({
+      id: 'odd',
+      party_snapshot: { is_consumer: true, state: '05' },
+      ship: { name: '', phone: '', addr: '', city: '', pin: '', email: '', gstin: '', state: '05' },
+      gst_type: 'intra',
+      items: [
+        { item_id: null, name: 'A', hsn: '4819', qty: 1, unit: 'NOS', rate: 10.1, gst: 5 },
+        { item_id: null, name: 'B', hsn: '4819', qty: 1, unit: 'NOS', rate: 10.1, gst: 5 },
+        { item_id: null, name: 'C', hsn: '4819', qty: 1, unit: 'NOS', rate: 10.1, gst: 5 },
+      ],
+    })
+    const rows = buildGstrHsnB2CExportRows([inv])
+    expect(rows).toHaveLength(1)
+    const tax = rows[0].cgst + rows[0].sgst
+    expect(tax).toBe(1.53)
+    expect(rows[0].cgst).toBe(0.77)
+    expect(rows[0].sgst).toBe(0.76)
+    expect(rows[0].cgst + rows[0].sgst).toBe(tax)
   })
 })
 

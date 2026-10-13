@@ -1,10 +1,11 @@
 import * as XLSX from 'xlsx'
 import { db } from '@/data/db'
 import { getStateCode, getStateName, isInterstateGst } from '@/services/gst'
+import { normalizeHsn4 } from '@/services/hsnGst'
 import { gstrB2B, gstrB2C } from '@/services/reports'
 import { isInvoiceDocsCancelled, isInvoiceGstrReportable } from '@/services/invoiceStatus'
 import { isCreditOrDebitNote, isDeliveryChallan, isGstrMonthDoc, isTaxInvoiceDoc } from '@/services/invoiceDoc'
-import type { Invoice } from '@/types/models'
+import type { Invoice, InvoiceItemLine } from '@/types/models'
 
 /** Official GSTR-1 Excel Workbook Template V2.2 sheet names / columns. */
 export const GSTR1_TEMPLATE_PATH = '/templates/GSTR1_Excel_Workbook_Template_V2.2.xlsx'
@@ -262,7 +263,70 @@ export function toGstrUqc(unit: string | undefined): string {
   return `OTH-OTHERS`
 }
 
+/** 4-digit HSN for Table 12 — never emit placeholder "NA" (portal treats as missing). */
+export function exportHsnCode(hsn: string | undefined | null): string {
+  const n4 = normalizeHsn4(hsn)
+  if (n4) return n4
+  const digits = String(hsn ?? '').replace(/\D/g, '')
+  return digits
+}
+
+type HsnLineTaxable = {
+  line: InvoiceItemLine
+  hsn: string
+  rate: number
+  uqc: string
+  qty: number
+  taxable: number
+}
+
+/**
+ * Post-discount line taxables (same basis as invoice taxBuckets).
+ * Values are always positive document amounts — HSN aggregation applies credit-note sign.
+ */
+export function invoiceHsnLineTaxables(inv: Invoice): HsnLineTaxable[] {
+  const items = inv.items || []
+  if (!items.length) return []
+
+  const discount = Math.max(0, r2(Number(inv.discount_amount) || 0))
+  const grossRows = items.map((line) => ({
+    line,
+    gross: r2((Number(line.qty) || 0) * (Number(line.rate) || 0)),
+  }))
+  const grossSub = r2(grossRows.reduce((s, row) => s + row.gross, 0))
+
+  return grossRows.map(({ line, gross }) => {
+    const share = grossSub > 0 ? gross / grossSub : 0
+    const taxable = r2(Math.max(0, gross - discount * share))
+    return {
+      line,
+      hsn: exportHsnCode(line.hsn),
+      rate: Number(line.gst) || 0,
+      uqc: toGstrUqc(line.unit),
+      qty: r2(Number(line.qty) || 0),
+      taxable,
+    }
+  })
+}
+
+/**
+ * Rate buckets for B2B/B2C/CDN sheets.
+ * Prefer post-discount line taxables so sheets match hsn(b2b)/hsn(b2c).
+ * Fall back to stored taxBuckets when items are missing (imports).
+ */
 function invoiceRateBuckets(inv: Invoice): { rate: number; taxable: number }[] {
+  const lines = invoiceHsnLineTaxables(inv)
+  if (lines.length) {
+    const map = new Map<number, number>()
+    for (const row of lines) {
+      map.set(row.rate, r2((map.get(row.rate) || 0) + row.taxable))
+    }
+    return [...map.entries()]
+      .map(([rate, taxable]) => ({ rate, taxable: r2(taxable) }))
+      .filter((b) => b.taxable > 0 || b.rate >= 0)
+      .sort((a, b) => a.rate - b.rate)
+  }
+
   if (inv.taxBuckets && Object.keys(inv.taxBuckets).length) {
     return Object.entries(inv.taxBuckets)
       .map(([rate, bucket]) => ({
@@ -272,15 +336,8 @@ function invoiceRateBuckets(inv: Invoice): { rate: number; taxable: number }[] {
       .filter((b) => b.taxable > 0 || b.rate >= 0)
       .sort((a, b) => a.rate - b.rate)
   }
-  const map = new Map<number, number>()
-  for (const line of inv.items || []) {
-    const taxable = (line.qty || 0) * (line.rate || 0)
-    const rate = Number(line.gst) || 0
-    map.set(rate, r2((map.get(rate) || 0) + taxable))
-  }
-  return [...map.entries()]
-    .map(([rate, taxable]) => ({ rate, taxable }))
-    .sort((a, b) => a.rate - b.rate)
+
+  return []
 }
 
 function buyerGstin(inv: Invoice): string {
@@ -398,21 +455,49 @@ function buildHsnRows(invoices: Invoice[]): GstrHsnExportRow[] {
 
   for (const inv of invoices) {
     const isInter = isInterstateGst(inv.gst_type)
-    for (const line of inv.items || []) {
-      const hsn = (line.hsn || 'NA').trim()
-      const rate = Number(line.gst) || 0
-      const uqc = toGstrUqc(line.unit)
-      const key = `${hsn}|${rate}|${uqc}`
-      const taxable = r2((line.qty || 0) * (line.rate || 0))
-      const tax = r2((taxable * rate) / 100)
+    // Credit notes reduce Table 12; debit notes / invoices add.
+    const sign = docKind(inv) === 'CREDIT_NOTE' ? -1 : 1
+    let lines = invoiceHsnLineTaxables(inv)
+
+    // Imports / notes with taxBuckets but no item lines — keep taxable in Table 12
+    // (portal will still flag blank HSN so it can be corrected).
+    if (!lines.length && inv.taxBuckets && Object.keys(inv.taxBuckets).length) {
+      lines = Object.entries(inv.taxBuckets).map(([rateKey, bucket]) => ({
+        line: {
+          item_id: null,
+          name: inv.party_name || 'Supply',
+          hsn: '',
+          qty: 0,
+          unit: 'NOS',
+          rate: 0,
+          gst: Number(rateKey) || 0,
+        },
+        hsn: '',
+        rate: Number(rateKey) || 0,
+        uqc: toGstrUqc('NOS'),
+        qty: 0,
+        taxable: r2(bucket.taxable ?? 0),
+      }))
+    }
+
+    for (const rowLine of lines) {
+      if (Math.abs(rowLine.taxable) < 0.005 && Math.abs(rowLine.qty) < 0.005) continue
+
+      const hsn = rowLine.hsn
+      const rate = rowLine.rate
+      const uqc = rowLine.uqc
+      const key = `${hsn || '_MISSING_'}|${rate}|${uqc}`
+      const taxable = r2(rowLine.taxable * sign)
+      const qty = r2(rowLine.qty * sign)
+      const tax = r2((Math.abs(taxable) * rate) / 100) * (taxable < 0 ? -1 : 1)
       const igst = isInter ? tax : 0
-      const cgst = isInter ? 0 : r2(tax / 2)
+      const cgst = isInter ? 0 : r2(Math.abs(tax) / 2) * (tax < 0 ? -1 : 1)
       const sgst = isInter ? 0 : r2(tax - cgst)
 
       if (!map.has(key)) {
         map.set(key, {
-          hsn,
-          description: line.name || '',
+          hsn: hsn || '',
+          description: rowLine.line.name || '',
           uqc,
           totalQuantity: 0,
           totalValue: 0,
@@ -425,25 +510,48 @@ function buildHsnRows(invoices: Invoice[]): GstrHsnExportRow[] {
         })
       }
       const row = map.get(key)!
-      row.totalQuantity = r2(row.totalQuantity + (line.qty || 0))
+      row.totalQuantity = r2(row.totalQuantity + qty)
       row.taxableValue = r2(row.taxableValue + taxable)
       row.igst = r2(row.igst + igst)
       row.cgst = r2(row.cgst + cgst)
       row.sgst = r2(row.sgst + sgst)
-      row.totalValue = r2(row.taxableValue + row.igst + row.cgst + row.sgst)
-      if (!row.description && line.name) row.description = line.name
+      if (!row.description && rowLine.line.name) row.description = rowLine.line.name
     }
   }
 
-  return [...map.values()].sort((a, b) => b.taxableValue - a.taxableValue)
+  // Rebalance CGST/SGST on each aggregate row so halves always add to total tax.
+  for (const row of map.values()) {
+    if (row.igst !== 0) {
+      row.cgst = 0
+      row.sgst = 0
+    } else {
+      const tax = r2(row.cgst + row.sgst)
+      row.cgst = r2(tax / 2)
+      row.sgst = r2(tax - row.cgst)
+    }
+    row.totalValue = r2(row.taxableValue + row.igst + row.cgst + row.sgst)
+  }
+
+  return [...map.values()]
+    .filter((row) => row.taxableValue !== 0 || row.totalQuantity !== 0)
+    .sort((a, b) => Math.abs(b.taxableValue) - Math.abs(a.taxableValue))
 }
 
+/** B2B invoices + registered-buyer credit/debit notes → hsn(b2b). */
 export function buildGstrHsnB2BExportRows(invoices: Invoice[]): GstrHsnExportRow[] {
-  return buildHsnRows(gstrB2B(invoices.filter(isTaxInvoice)))
+  const taxInv = gstrB2B(invoices.filter(isTaxInvoice))
+  const notes = invoices.filter(isCreditOrDebitNote).filter(isRegisteredBuyer)
+  return buildHsnRows([...taxInv, ...notes])
 }
 
+/**
+ * B2C invoices + unregistered-buyer credit/debit notes → hsn(b2c).
+ * Portal Table 12 cross-checks b2cl+b2cs+cdnur (+exemp) against this sheet.
+ */
 export function buildGstrHsnB2CExportRows(invoices: Invoice[]): GstrHsnExportRow[] {
-  return buildHsnRows(gstrB2C(invoices.filter(isTaxInvoice)))
+  const taxInv = gstrB2C(invoices.filter(isTaxInvoice))
+  const notes = invoices.filter(isCreditOrDebitNote).filter((inv) => !isRegisteredBuyer(inv))
+  return buildHsnRows([...taxInv, ...notes])
 }
 
 function sortBillNos(a: string, b: string): number {
