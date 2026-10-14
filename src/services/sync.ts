@@ -101,6 +101,7 @@ const EPOCH_ISO = '1970-01-01T00:00:00.000Z'
 const LAST_SYNC_AT_KEY = 'pama_last_sync_at'
 const LAST_SYNC_RESULT_KEY = 'pama_last_sync_result'
 const LAST_SYNC_ERROR_KEY = 'pama_last_sync_error'
+const LAST_SYNC_WARNING_KEY = 'pama_last_sync_warning'
 const OPTIONAL_TABLE_MIGRATIONS: Partial<Record<SyncTable, string>> = {
   reel_stocks: '005_production_tracking.sql',
   consumable_lots: '017_consumable_lots.sql',
@@ -116,6 +117,13 @@ const OPTIONAL_TABLE_MIGRATIONS: Partial<Record<SyncTable, string>> = {
   party_advances: '018_party_advances.sql',
 }
 
+/** Optional-table / migration warnings — not hard sync failures. */
+export function isOptionalMigrationWarning(value: string): boolean {
+  if (!value) return false
+  if (/Supabase table ".+" missing\. Run supabase\/migrations\//i.test(value)) return true
+  return Object.values(OPTIONAL_TABLE_MIGRATIONS).some((file) => value.includes(file))
+}
+
 let syncInFlight: Promise<string> | null = null
 
 export interface SyncDiagnostics {
@@ -123,6 +131,8 @@ export interface SyncDiagnostics {
   lastSyncAt: string
   lastSyncResult: string
   lastSyncError: string
+  /** Non-fatal issues (e.g. optional Supabase table not migrated yet). */
+  lastSyncWarning: string
 }
 
 function isMissingRemoteTableError(message: string): boolean {
@@ -164,23 +174,42 @@ function readLocalStorage(key: string): string {
   }
 }
 
-function rememberSyncResult(message: string, error = ''): void {
+function rememberSyncResult(message: string, error = '', warning = ''): void {
   try {
     localStorage.setItem(LAST_SYNC_AT_KEY, nowISO())
     localStorage.setItem(LAST_SYNC_RESULT_KEY, message)
-    if (error) localStorage.setItem(LAST_SYNC_ERROR_KEY, error)
+    // Older builds stuffed optional migration notes into lastSyncError — split them.
+    const errIsWarn = error && isOptionalMigrationWarning(error)
+    const hardError = errIsWarn ? '' : error
+    const warnText = uniqWarnings([warning, errIsWarn ? error : '']).join(' ')
+    if (hardError) localStorage.setItem(LAST_SYNC_ERROR_KEY, hardError)
     else localStorage.removeItem(LAST_SYNC_ERROR_KEY)
+    if (warnText) localStorage.setItem(LAST_SYNC_WARNING_KEY, warnText)
+    else localStorage.removeItem(LAST_SYNC_WARNING_KEY)
   } catch {
     // Diagnostics should never block sync.
   }
 }
 
 export function getSyncDiagnostics(): SyncDiagnostics {
+  const rawError = readLocalStorage(LAST_SYNC_ERROR_KEY)
+  const rawWarning = readLocalStorage(LAST_SYNC_WARNING_KEY)
+  // Migrate legacy: optional-table text stored as error → show as warning.
+  if (rawError && isOptionalMigrationWarning(rawError) && !rawWarning) {
+    return {
+      lastPull: readLocalStorage('pama_last_pull'),
+      lastSyncAt: readLocalStorage(LAST_SYNC_AT_KEY),
+      lastSyncResult: readLocalStorage(LAST_SYNC_RESULT_KEY),
+      lastSyncError: '',
+      lastSyncWarning: rawError,
+    }
+  }
   return {
     lastPull: readLocalStorage('pama_last_pull'),
     lastSyncAt: readLocalStorage(LAST_SYNC_AT_KEY),
     lastSyncResult: readLocalStorage(LAST_SYNC_RESULT_KEY),
-    lastSyncError: readLocalStorage(LAST_SYNC_ERROR_KEY),
+    lastSyncError: rawError,
+    lastSyncWarning: rawWarning,
   }
 }
 
@@ -613,13 +642,17 @@ export async function runFullPullFromCloud(): Promise<string> {
     const payrollPull = await pullPayrollFromCloud()
     const deduped = await dedupeAllPayrollRuns()
     if (pull.pulled > 0 || payrollPull.restored > 0 || deduped > 0) await reloadAllStores()
+    const warnings = uniqWarnings([
+      ...(pull.warnings || []),
+      ...(payrollPull.error ? [`Payroll cloud pull: ${payrollPull.error}`] : []),
+    ])
     const message = withWarnings(
       pull.pulled || repaired || payrollPull.restored
         ? `Full pull: ${pull.pulled} records${repaired ? `, repaired ${repaired}` : ''}${payrollPull.restored ? `, payroll ${payrollPull.restored}` : ''}${deduped ? `, deduped ${deduped}` : ''}`
         : 'Cloud has no data for this account',
-      [...(pull.warnings || []), ...(payrollPull.error ? [`Payroll cloud pull: ${payrollPull.error}`] : [])],
+      warnings,
     )
-    rememberSyncResult(message, uniqWarnings(pull.warnings || []).join(' '))
+    rememberSyncResult(message, '', warnings.join(' '))
     return message
   })
 }
@@ -633,8 +666,9 @@ export async function runFullPushToCloud(): Promise<string> {
       rememberSyncResult(message, message)
       return message
     }
-    const message = withWarnings(push.pushed ? `Full push: ${push.pushed} records` : 'No local records to push', push.warnings)
-    rememberSyncResult(message, uniqWarnings(push.warnings || []).join(' '))
+    const warnings = uniqWarnings(push.warnings || [])
+    const message = withWarnings(push.pushed ? `Full push: ${push.pushed} records` : 'No local records to push', warnings)
+    rememberSyncResult(message, '', warnings.join(' '))
     return message
   })
 }
@@ -683,7 +717,7 @@ export async function runSync(): Promise<string> {
       ...(payrollPush.error && auth.canSync ? [`Payroll cloud: ${payrollPush.error}`] : []),
     ])
     const message = withWarnings(parts.length ? `Synced (${parts.join(', ')})` : 'Already up to date', warnings)
-    rememberSyncResult(message, warnings.join(' '))
+    rememberSyncResult(message, '', warnings.join(' '))
     return message
   })
 }
