@@ -1378,7 +1378,7 @@ async function clearPurchasePayment(pur: Purchase) {
   if ((pur.amt_paid || 0) <= 0) return
   const ok = confirm(
     `Purchase ${pur.bill_no} se ₹${n2(pur.amt_paid)} payment hata den?\n\n`
-    + 'Lump/bank payment thi to same supplier + same payment date wali linked bills bhi clear ho sakti hain.',
+    + 'Lump / bank payment ho to us payment voucher aur ALLOC wali linked bills bhi clear hongi — party ledger se payment hat jayega.',
   )
   if (!ok) return
   try {
