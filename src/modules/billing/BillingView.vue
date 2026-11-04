@@ -1217,7 +1217,7 @@ async function clearInvoicePayment(inv: Invoice) {
   if ((inv.amt_paid || 0) <= 0) return
   const ok = confirm(
     `Invoice ${inv.bill_no} se ₹${n2(inv.amt_paid)} payment hata den?\n\n`
-    + 'Agar ye lump/bank reconcile payment thi (voucher is bill par), same party + same payment date wali linked bills bhi clear ho jayengi.',
+    + 'Lump / bank payment ho to us receipt voucher aur ALLOC wali linked bills bhi clear hongi — party ledger se payment hat jayega.',
   )
   if (!ok) return
   try {

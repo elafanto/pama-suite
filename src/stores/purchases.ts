@@ -19,7 +19,7 @@ import {
   type PaymentSettleReason,
 } from '@/services/partyPaymentAllocation'
 import { usePartyAdvanceStore } from '@/stores/partyAdvances'
-import { relatedPurchasePaymentIds } from '@/services/paymentReversal'
+import { planPurchasePaymentClear } from '@/services/paymentReversal'
 import { resolvePaymentClearAction } from '@/services/paymentClear'
 import { movePurchaseBillsToFirm, type MovePurchaseBillsResult } from '@/services/purchaseCorrection'
 import {
@@ -299,20 +299,27 @@ export const usePurchaseStore = defineStore('purchases', () => {
       throw new Error('Purchase nahi mili — payment clear fail')
     }
 
-    const payRef = `${id}_PAY`
-    const hasVoucher = !!(await db.vouchers
+    const firmPurchases = await db.purchases.where('firm_id').equals(existing.firm_id).toArray()
+    const firmVouchers = await db.vouchers
       .where('firm_id')
       .equals(existing.firm_id)
-      .filter((v) => v.ref_id === payRef && !v.is_deleted)
-      .first())
-    const action = resolvePaymentClearAction(existing.amt_paid || 0, hasVoucher)
+      .filter((v) => !v.is_deleted && (v.type === 'RECEIPT' || v.type === 'PAYMENT'))
+      .toArray()
+    const plan = planPurchasePaymentClear(existing, firmPurchases, firmVouchers)
+    const action = resolvePaymentClearAction(existing.amt_paid || 0, plan.hasCoveringVoucher)
 
     if (action === 'none') {
       throw new Error(`Purchase ${existing.bill_no} par koi payment nahi hai.`)
     }
 
     const accounting = useAccountingStore()
-    if (hasVoucher) await accounting.reverseLedgerByRef(payRef)
+    for (const refId of plan.voucherRefIds) {
+      await accounting.reverseLedgerByRef(refId)
+    }
+    for (const voucherId of plan.voucherIds) {
+      const still = await db.vouchers.get(voucherId)
+      if (still && !still.is_deleted) await accounting.deleteVoucherById(voucherId)
+    }
 
     if (action === 'voucher_only') {
       await logActivity(existing.firm_id, 'update', 'purchase', id, `Orphan payment voucher removed for ${existing.bill_no}`)
@@ -320,9 +327,8 @@ export const usePurchaseStore = defineStore('purchases', () => {
       return
     }
 
-    const firmPurchases = await db.purchases.where('firm_id').equals(existing.firm_id).toArray()
-    const targetIds = relatedPurchasePaymentIds(existing, firmPurchases, hasVoucher)
     const stamp = new Date().toISOString().slice(0, 10)
+    const targetIds = plan.billIds
 
     for (const billId of targetIds) {
       const pur = firmPurchases.find((row) => row.id === billId)
