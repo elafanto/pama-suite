@@ -14,6 +14,8 @@ import {
   formatGstin,
   detectSupplyGstType,
   resolvePlaceOfSupplyState,
+  normalizeGstType,
+  isInterstateGst,
 } from '@/services/gst'
 import { numberToWords } from '@/services/numberToWords'
 import { openStatementPrint } from '@/services/billingStatements'
@@ -509,6 +511,15 @@ const formEwayEligibility = computed(() => getEwayEligibility({
   is_deleted: false,
 }))
 
+/** Always bind UI to canonical intra|inter — legacy bills may store IGST / CGST_SGST. */
+const formGstKind = computed({
+  get: (): 'intra' | 'inter' => normalizeGstType(form.gst_type),
+  set: (v: 'intra' | 'inter') => {
+    form.gst_type = v
+  },
+})
+const formIsIntra = computed(() => !isInterstateGst(form.gst_type))
+
 const stockRows = computed(() =>
   computeStock(itemStore.list, purchaseStore.list, invoiceStore.list, firmStore.activeFirmId, stockMovements.value),
 )
@@ -967,7 +978,7 @@ async function saveInvoice() {
     distance: form.distance || 0,
     docNo: form.docNo.trim(),
     payment: form.payment,
-    gst_type: form.gst_type,
+    gst_type: normalizeGstType(form.gst_type),
     items: validItems,
     taxBuckets: taxBuckets.value,
     sub: subTotal.value,
@@ -1061,7 +1072,7 @@ function editInvoice(inv: Invoice) {
     distance: inv.distance || 0,
     docNo: inv.docNo || '',
     payment: inv.payment || 'CASH',
-    gst_type: inv.gst_type,
+    gst_type: normalizeGstType(inv.gst_type),
     items: [],
     notes: inv.notes || '',
     discount_mode: inferInvoiceDiscountMode(inv.discount_amount, inv.discount_pct).mode,
@@ -1106,7 +1117,7 @@ function copyInvoice(inv: Invoice) {
     distance: inv.distance || 0,
     docNo: inv.docNo || '',
     payment: inv.payment || 'CASH',
-    gst_type: inv.gst_type,
+    gst_type: normalizeGstType(inv.gst_type),
     items: [],
     notes: inv.notes || '',
     discount_mode: inferInvoiceDiscountMode(inv.discount_amount, inv.discount_pct).mode,
@@ -1521,6 +1532,27 @@ onMounted(async () => {
             </div>
           </div>
 
+          <!-- Tax split — visible on create + edit (legacy IGST bills need Intra switch) -->
+          <div class="rounded-xl border border-slate-200 bg-slate-50/80 p-3 space-y-2">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <label class="pp-label !mb-0">Tax type (CGST+SGST / IGST)</label>
+              <button type="button" class="text-xs text-accent underline" @click="detectGstType">Auto-detect from GSTIN</button>
+            </div>
+            <div class="flex flex-wrap gap-4">
+              <label class="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                <input type="radio" v-model="formGstKind" value="intra" class="w-4 h-4 text-accent" />
+                CGST + SGST (Intra-state)
+              </label>
+              <label class="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                <input type="radio" v-model="formGstKind" value="inter" class="w-4 h-4 text-accent" />
+                IGST (Inter-state)
+              </label>
+            </div>
+            <p v-if="editingId && !formIsIntra" class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+              Ye bill abhi IGST pe hai. Uttarakhand / same-state buyer ho to <strong>CGST + SGST</strong> select karke Update Bill dabayein.
+            </p>
+          </div>
+
           <!-- Customer details -->
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-slate-100 pt-4">
             <div>
@@ -1780,29 +1812,25 @@ onMounted(async () => {
               </div>
             </div>
 
-            <!-- GST type (auto from firm vs party GSTIN; manually overridable) -->
+            <!-- GST type summary (main form has full control) -->
             <div class="border-t border-slate-100/60 pt-2 space-y-1.5">
               <div class="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">GST type</div>
               <div class="flex flex-wrap items-center gap-3 text-xs">
                 <label class="flex items-center gap-1.5 cursor-pointer">
-                  <input type="radio" v-model="form.gst_type" value="intra" class="text-accent" />
+                  <input type="radio" v-model="formGstKind" value="intra" class="text-accent" />
                   Intra (CGST+SGST)
                 </label>
                 <label class="flex items-center gap-1.5 cursor-pointer">
-                  <input type="radio" v-model="form.gst_type" value="inter" class="text-accent" />
+                  <input type="radio" v-model="formGstKind" value="inter" class="text-accent" />
                   Inter (IGST)
                 </label>
-                <button type="button" class="text-accent underline" @click="detectGstType">Auto-detect</button>
               </div>
-              <p class="text-[10px] text-slate-400 leading-snug">
-                Auto uses firm GSTIN vs buyer/ship GSTIN state (e.g. 05 = Uttarakhand). Galat ho to radio se change karein.
-              </p>
             </div>
 
             <!-- Tax Breakdown -->
             <div class="border-t border-slate-100/60 pt-2 space-y-1.5">
               <div v-for="(b, pct) in taxBuckets" :key="pct" class="text-xs text-slate-500 space-y-0.5">
-                <div v-if="form.gst_type === 'intra'" class="flex justify-between">
+                <div v-if="formIsIntra" class="flex justify-between">
                   <span>CGST @{{ Number(pct)/2 }}% + SGST @{{ Number(pct)/2 }}%:</span>
                   <span>₹ {{ n2(b.tax) }}</span>
                 </div>
@@ -2155,7 +2183,7 @@ onMounted(async () => {
                 <td class="px-3 py-2">{{ b.date }}</td>
                 <td class="px-3 py-2 font-mono">{{ b.bill_no }}</td>
                 <td class="px-3 py-2">{{ b.party_name }}</td>
-                <td class="px-3 py-2">{{ b.gst_type === 'inter' ? 'Inter' : 'Intra' }}</td>
+                <td class="px-3 py-2">{{ isInterstateGst(b.gst_type) ? 'Inter' : 'Intra' }}</td>
                 <td class="px-3 py-2 text-right tabular-nums">₹{{ n2(b.grand_total) }}</td>
                 <td class="px-3 py-2 text-center">{{ b.distance || 0 }}</td>
                 <td class="px-3 py-2">{{ b.vehicle || '—' }}</td>
@@ -2530,15 +2558,15 @@ onMounted(async () => {
                 <td class="border-r border-black p-1">{{ pct }}%</td>
                 <td class="border-r border-black p-1 text-right">₹{{ n2(b.taxable) }}</td>
                 <td class="border-r border-black p-1 text-right">
-                  <template v-if="previewInvoice.gst_type === 'intra'">₹{{ n2(b.tax / 2) }}</template>
+                  <template v-if="!isInterstateGst(previewInvoice.gst_type)">₹{{ n2(b.tax / 2) }}</template>
                   <template v-else>-</template>
                 </td>
                 <td class="border-r border-black p-1 text-right">
-                  <template v-if="previewInvoice.gst_type === 'intra'">₹{{ n2(b.tax / 2) }}</template>
+                  <template v-if="!isInterstateGst(previewInvoice.gst_type)">₹{{ n2(b.tax / 2) }}</template>
                   <template v-else>-</template>
                 </td>
                 <td class="border-r border-black p-1 text-right">
-                  <template v-if="previewInvoice.gst_type === 'inter'">₹{{ n2(b.tax) }}</template>
+                  <template v-if="isInterstateGst(previewInvoice.gst_type)">₹{{ n2(b.tax) }}</template>
                   <template v-else>-</template>
                 </td>
                 <td class="p-1 text-right font-bold">₹{{ n2(b.tax) }}</td>
@@ -2716,15 +2744,15 @@ onMounted(async () => {
             <td class="border-r border-black p-1">{{ pct }}%</td>
             <td class="border-r border-black p-1 text-right">₹{{ n2(b.taxable) }}</td>
             <td class="border-r border-black p-1 text-right">
-              <template v-if="previewInvoice.gst_type === 'intra'">₹{{ n2(b.tax / 2) }}</template>
+              <template v-if="!isInterstateGst(previewInvoice.gst_type)">₹{{ n2(b.tax / 2) }}</template>
               <template v-else>-</template>
             </td>
             <td class="border-r border-black p-1 text-right">
-              <template v-if="previewInvoice.gst_type === 'intra'">₹{{ n2(b.tax / 2) }}</template>
+              <template v-if="!isInterstateGst(previewInvoice.gst_type)">₹{{ n2(b.tax / 2) }}</template>
               <template v-else>-</template>
             </td>
             <td class="border-r border-black p-1 text-right">
-              <template v-if="previewInvoice.gst_type === 'inter'">₹{{ n2(b.tax) }}</template>
+              <template v-if="isInterstateGst(previewInvoice.gst_type)">₹{{ n2(b.tax) }}</template>
               <template v-else>-</template>
             </td>
             <td class="p-1 text-right font-bold">₹{{ n2(b.tax) }}</td>
