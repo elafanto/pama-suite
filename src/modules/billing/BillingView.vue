@@ -7,7 +7,14 @@ import { useInvoiceStore } from '@/stores/invoices'
 import { useAccountingStore } from '@/stores/accounting'
 import { usePurchaseStore } from '@/stores/purchases'
 import { usePartyAdvanceStore } from '@/stores/partyAdvances'
-import { getStateName, getStateCode, isGstinValid, formatGstin } from '@/services/gst'
+import {
+  getStateName,
+  getStateCode,
+  isGstinValid,
+  formatGstin,
+  detectSupplyGstType,
+  resolvePlaceOfSupplyState,
+} from '@/services/gst'
 import { numberToWords } from '@/services/numberToWords'
 import { openStatementPrint } from '@/services/billingStatements'
 import { getEwayEligibility, downloadEwayJson } from '@/services/ewayBill'
@@ -404,38 +411,43 @@ function handleCustSelect() {
     form.ship.pin = match.pin
     form.ship.email = match.email
     form.ship.gstin = match.gst
-    form.ship.state = match.state
+    // Prefer GSTIN prefix — party.state may be a name like "Uttarakhand" from old data.
+    form.ship.state = resolvePlaceOfSupplyState({ gstin: match.gst, state: match.state }) || match.state
     detectGstType()
   } else {
     form.party_id = null
   }
 }
 
-// Automatically detect intra vs inter state GST
+/** Keep ship.state in sync with GSTIN digits when user types a GSTIN. */
+function onShipGstinInput() {
+  const code = getStateCode(form.ship.gstin)
+  if (code) form.ship.state = code
+  detectGstType()
+}
+
+// Automatically detect intra vs inter state GST (GSTIN state preferred over free-text).
 function detectGstType() {
   const activeFirm = firmStore.activeFirm
   if (!activeFirm) return
 
-  const firmState = (activeFirm.state || getStateCode(activeFirm.gst) || '05').padStart(2, '0').substring(0, 2)
-  let consigneeState = ''
+  let place: { gstin?: string; state?: string } = {
+    gstin: form.ship.gstin,
+    state: form.ship.state,
+  }
 
   if (form.sameAsBuyer) {
     const key = form.party_name.trim().toLowerCase()
     const c = partyStore.list.find(p => !p.is_deleted && p.name.toLowerCase() === key)
-    consigneeState = c ? (c.state || getStateCode(c.gst) || '') : ''
-  } else {
-    consigneeState = form.ship.state
-    if (!consigneeState) {
-      consigneeState = getStateCode(form.ship.gstin) || ''
+    if (c) {
+      place = { gstin: c.gst || form.ship.gstin, state: c.state || form.ship.state }
     }
   }
 
-  const consS = String(consigneeState || '').padStart(2, '0').substring(0, 2)
-  if (!consS || consS === '00') {
-    form.gst_type = 'intra'
-    return
-  }
-  form.gst_type = (firmState === consS) ? 'intra' : 'inter'
+  form.gst_type = detectSupplyGstType(
+    { gstin: activeFirm.gst, state: activeFirm.state },
+    place,
+  )
 }
 
 watch(() => form.sameAsBuyer, detectGstType)
@@ -1580,7 +1592,7 @@ onMounted(async () => {
               <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider">Consignee Shipping Details</h3>
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><label class="pp-label">Consignee Name</label><input v-model="form.ship.name" class="pp-input" /></div>
-                <div><label class="pp-label">GSTIN</label><input v-model="form.ship.gstin" @input="detectGstType" class="pp-input uppercase" placeholder="05ABCDE1234F1Z5" /></div>
+                <div><label class="pp-label">GSTIN</label><input v-model="form.ship.gstin" @input="onShipGstinInput" class="pp-input uppercase" placeholder="05ABCDE1234F1Z5" /></div>
               </div>
               <div><label class="pp-label">Address</label><input v-model="form.ship.addr" class="pp-input" /></div>
               <div class="grid grid-cols-3 gap-3">
@@ -1766,6 +1778,25 @@ onMounted(async () => {
                 <span>Taxable value</span>
                 <span class="font-semibold">₹ {{ n2(taxableTotal) }}</span>
               </div>
+            </div>
+
+            <!-- GST type (auto from firm vs party GSTIN; manually overridable) -->
+            <div class="border-t border-slate-100/60 pt-2 space-y-1.5">
+              <div class="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">GST type</div>
+              <div class="flex flex-wrap items-center gap-3 text-xs">
+                <label class="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" v-model="form.gst_type" value="intra" class="text-accent" />
+                  Intra (CGST+SGST)
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" v-model="form.gst_type" value="inter" class="text-accent" />
+                  Inter (IGST)
+                </label>
+                <button type="button" class="text-accent underline" @click="detectGstType">Auto-detect</button>
+              </div>
+              <p class="text-[10px] text-slate-400 leading-snug">
+                Auto uses firm GSTIN vs buyer/ship GSTIN state (e.g. 05 = Uttarakhand). Galat ho to radio se change karein.
+              </p>
             </div>
 
             <!-- Tax Breakdown -->

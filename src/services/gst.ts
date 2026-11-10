@@ -57,6 +57,79 @@ export function getStateCode(gstin: string | undefined): string {
   return ''
 }
 
+/** Common abbreviations / alternate spellings → GST state code. */
+const STATE_ALIASES: Record<string, string> = {
+  ua: '05',
+  uk: '05',
+  uttarakhand: '05',
+  uttaranchal: '05',
+  up: '09',
+  'uttar pradesh': '09',
+  dl: '07',
+  delhi: '07',
+  nct: '07',
+  mh: '27',
+  maharashtra: '27',
+  hr: '06',
+  haryana: '06',
+  pb: '03',
+  punjab: '03',
+  rj: '08',
+  rajasthan: '08',
+  hp: '02',
+  'himachal pradesh': '02',
+  jk: '01',
+  'jammu and kashmir': '01',
+  'jammu & kashmir': '01',
+}
+
+/**
+ * Normalize free-text state (code, name, or alias) to a 2-digit GST state code.
+ * Fixes bugs like firm.state = "Uttarakhand" → first-two-chars "Ut" vs party "05".
+ */
+export function normalizeStateCode(value: string | undefined | null): string {
+  const raw = String(value ?? '').trim()
+  if (!raw) return ''
+  if (/^\d{2}/.test(raw)) return raw.slice(0, 2)
+  if (/^\d$/.test(raw)) return raw.padStart(2, '0')
+
+  const lower = raw.toLowerCase().replace(/\s+/g, ' ')
+  if (STATE_ALIASES[lower]) return STATE_ALIASES[lower]
+
+  for (const [code, name] of Object.entries(stateMap)) {
+    if (name.toLowerCase() === lower) return code
+  }
+  return ''
+}
+
+/**
+ * Place-of-supply / supplier state for GST comparison.
+ * Prefer GSTIN prefix (authoritative for registered parties), then state field.
+ */
+export function resolvePlaceOfSupplyState(opts: {
+  gstin?: string | null
+  state?: string | null
+}): string {
+  const fromGst = getStateCode(opts.gstin || undefined)
+  if (fromGst) return fromGst
+  return normalizeStateCode(opts.state)
+}
+
+/**
+ * Intra vs inter from firm vs place-of-supply state codes.
+ * Missing place code → intra (unregistered / unknown buyer — same as prior billing default).
+ */
+export function detectSupplyGstType(
+  firm: { gst?: string | null; state?: string | null },
+  place: { gstin?: string | null; state?: string | null },
+  fallbackFirmCode = '05',
+): 'intra' | 'inter' {
+  const firmCode = resolvePlaceOfSupplyState(firm) || normalizeStateCode(fallbackFirmCode) || '05'
+  const placeCode = resolvePlaceOfSupplyState(place)
+  if (!placeCode) return 'intra'
+  return firmCode === placeCode ? 'intra' : 'inter'
+}
+
 /** True when the bill is interstate (IGST). Handles both new ('inter') and
  *  legacy ('IGST') gst_type values — single source of truth. */
 export function isInterstateGst(gstType: string | undefined): boolean {
