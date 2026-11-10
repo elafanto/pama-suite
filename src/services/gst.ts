@@ -102,15 +102,20 @@ export function normalizeStateCode(value: string | undefined | null): string {
   return ''
 }
 
+export type GstStateSource = {
+  /** Firm / party field name in models */
+  gst?: string | null
+  /** Invoice ship / form field name */
+  gstin?: string | null
+  state?: string | null
+}
+
 /**
  * Place-of-supply / supplier state for GST comparison.
  * Prefer GSTIN prefix (authoritative for registered parties), then state field.
  */
-export function resolvePlaceOfSupplyState(opts: {
-  gstin?: string | null
-  state?: string | null
-}): string {
-  const fromGst = getStateCode(opts.gstin || undefined)
+export function resolvePlaceOfSupplyState(opts: GstStateSource): string {
+  const fromGst = getStateCode(opts.gstin || opts.gst || undefined)
   if (fromGst) return fromGst
   return normalizeStateCode(opts.state)
 }
@@ -120,8 +125,8 @@ export function resolvePlaceOfSupplyState(opts: {
  * Missing place code → intra (unregistered / unknown buyer — same as prior billing default).
  */
 export function detectSupplyGstType(
-  firm: { gst?: string | null; state?: string | null },
-  place: { gstin?: string | null; state?: string | null },
+  firm: GstStateSource,
+  place: GstStateSource,
   fallbackFirmCode = '05',
 ): 'intra' | 'inter' {
   const firmCode = resolvePlaceOfSupplyState(firm) || normalizeStateCode(fallbackFirmCode) || '05'
