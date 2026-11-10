@@ -46,6 +46,7 @@ import {
   type PaymentSettleReason,
 } from '@/services/partyPaymentAllocation'
 import type { CapitalCategory, ExpenseCategory, GstType, PaperType, PayStatus, Purchase, PurchaseItemLine } from '@/types/models'
+import { detectSupplyGstType } from '@/services/gst'
 
 // Stores
 const firmStore = useFirmStore()
@@ -328,18 +329,19 @@ function handleVendorSelect() {
   if (match) {
     form.supplier_id = match.id
     form.supplier_name = match.name
-    updateGstType(match.state)
+    updateGstTypeFromParty(match)
   } else {
     form.supplier_id = null
   }
 }
 
-
-function updateGstType(vendorStateCode: string) {
+function updateGstTypeFromParty(party: { gst?: string; state?: string }) {
   const activeFirm = firmStore.activeFirm
-  if (activeFirm && vendorStateCode) {
-    form.gst_type = (activeFirm.state === vendorStateCode) ? 'intra' : 'inter'
-  }
+  if (!activeFirm) return
+  form.gst_type = detectSupplyGstType(
+    { gstin: activeFirm.gst, state: activeFirm.state },
+    { gstin: party.gst, state: party.state },
+  )
 }
 
 // Item row selection helper
@@ -697,9 +699,10 @@ async function saveScannedBill(bill: ScannedBillWithFile, reuseStoragePath?: str
     date: String(bill.date || new Date().toISOString().slice(0, 10)).slice(0, 10),
     received_date: new Date().toISOString().slice(0, 10),
     payment: 'BANK',
-    gst_type: firmStore.activeFirm?.state && vendor.state
-      ? (firmStore.activeFirm.state === vendor.state ? 'intra' : 'inter')
-      : 'intra',
+    gst_type: detectSupplyGstType(
+      { gstin: firmStore.activeFirm?.gst, state: firmStore.activeFirm?.state },
+      { gstin: vendor.gst, state: vendor.state },
+    ),
     items,
     sub: totals.sub,
     total_tax: totals.totalTax,
@@ -1050,9 +1053,10 @@ async function saveBulkPurchases() {
       date: row.date,
       received_date: row.received_date,
       payment: row.payment,
-      gst_type: firmStore.activeFirm?.state && vendor.state
-        ? (firmStore.activeFirm.state === vendor.state ? 'intra' : 'inter')
-        : 'intra',
+      gst_type: detectSupplyGstType(
+        { gstin: firmStore.activeFirm?.gst, state: firmStore.activeFirm?.state },
+        { gstin: vendor.gst, state: vendor.state },
+      ),
       items: [line],
       sub: totals.sub,
       total_tax: totals.totalTax,
@@ -1378,7 +1382,7 @@ async function clearPurchasePayment(pur: Purchase) {
   if ((pur.amt_paid || 0) <= 0) return
   const ok = confirm(
     `Purchase ${pur.bill_no} se ₹${n2(pur.amt_paid)} payment hata den?\n\n`
-    + 'Lump/bank payment thi to same supplier + same payment date wali linked bills bhi clear ho sakti hain.',
+    + 'Lump / bank payment ho to us payment voucher aur ALLOC wali linked bills bhi clear hongi — party ledger se payment hat jayega.',
   )
   if (!ok) return
   try {

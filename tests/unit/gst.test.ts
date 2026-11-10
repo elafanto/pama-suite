@@ -4,6 +4,9 @@ import {
   getStateCode,
   isInterstateGst,
   normalizeGstType,
+  normalizeStateCode,
+  resolvePlaceOfSupplyState,
+  detectSupplyGstType,
   isGstinValid,
   isGstinChecksumValid,
   validateGstinForForm,
@@ -55,6 +58,49 @@ describe('gst type helpers', () => {
     expect(normalizeGstType('IGST')).toBe('inter')
     expect(normalizeGstType('CGST')).toBe('intra')
     expect(normalizeGstType(undefined)).toBe('intra')
+  })
+})
+
+describe('normalizeStateCode / place of supply', () => {
+  it('maps Uttarakhand name and aliases to 05 (not first-two-chars Ut)', () => {
+    expect(normalizeStateCode('Uttarakhand')).toBe('05')
+    expect(normalizeStateCode('uttaranchal')).toBe('05')
+    expect(normalizeStateCode('UA')).toBe('05')
+    expect(normalizeStateCode('05')).toBe('05')
+    expect(normalizeStateCode('5')).toBe('05')
+  })
+
+  it('prefers GSTIN prefix over free-text state name', () => {
+    expect(resolvePlaceOfSupplyState({ gstin: '05ABCDE1234F1Z5', state: 'Uttar Pradesh' })).toBe('05')
+    expect(resolvePlaceOfSupplyState({ gstin: '', state: 'Uttarakhand' })).toBe('05')
+  })
+
+  it('keeps Uttarakhand firm + Uttarakhand party as intra even when state fields are names', () => {
+    expect(
+      detectSupplyGstType(
+        { gstin: '05AAAAA0000A1Z5', state: 'Uttarakhand' },
+        { gstin: '05BBBBB0000B1Z5', state: 'Uttarakhand' },
+      ),
+    ).toBe('intra')
+  })
+
+  it('does not treat firm.state name vs party code 05 as inter', () => {
+    // Old billing bug: firm.state "Uttarakhand" → "Ut", party "05" → IGST
+    expect(
+      detectSupplyGstType(
+        { gstin: '', state: 'Uttarakhand' },
+        { gstin: '05BBBBB0000B1Z5', state: '05' },
+      ),
+    ).toBe('intra')
+  })
+
+  it('detects real inter-state (UK firm vs UP party)', () => {
+    expect(
+      detectSupplyGstType(
+        { gstin: '05AAAAA0000A1Z5', state: '05' },
+        { gstin: '09BBBBB0000B1Z5', state: '09' },
+      ),
+    ).toBe('inter')
   })
 })
 

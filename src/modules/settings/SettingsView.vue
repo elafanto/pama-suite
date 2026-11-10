@@ -7,7 +7,13 @@ import { useAuthStore } from '@/stores/auth'
 import { getSupabaseConfig } from '@/services/supabase'
 import { useSettingsStore } from '@/stores/settings'
 import { exportAll, downloadBackup, importBackup, previewImport, type ImportPreview, type ImportResult } from '@/services/backup'
-import { getSyncDiagnostics, runSync, runFullPullFromCloud, runFullPushToCloud } from '@/services/sync'
+import {
+  getSyncDiagnostics,
+  isOptionalMigrationWarning,
+  runSync,
+  runFullPullFromCloud,
+  runFullPushToCloud,
+} from '@/services/sync'
 import { usePwaInstall } from '@/composables/usePwaInstall'
 import { hardRefreshApp } from '@/services/pwaRefresh'
 import type { BillNoFormat, Firm } from '@/types/models'
@@ -286,8 +292,9 @@ function refreshSyncDiag() {
   syncDiag.value = getSyncDiagnostics()
 }
 
-function isOptionalMigrationSyncIssue(value: string) {
-  return /reel_stocks|production_jobs|production_stages|stock_movements|005_production_tracking|item_stock_movements|006_item_stock_movements/i.test(value)
+function migrationHintFromWarning(value: string): string {
+  const m = value.match(/supabase\/migrations\/([0-9a-z_]+\.sql)/i)
+  return m ? m[1] : '018_party_advances.sql'
 }
 
 function fmtSyncTime(value: string) {
@@ -529,15 +536,20 @@ onMounted(async () => {
           <div><span class="font-semibold text-slate-500">Last sync:</span> {{ fmtSyncTime(syncDiag.lastSyncAt) }}</div>
           <div><span class="font-semibold text-slate-500">Last pull anchor:</span> {{ fmtSyncTime(syncDiag.lastPull) }}</div>
           <div class="sm:col-span-2"><span class="font-semibold text-slate-500">Result:</span> {{ syncDiag.lastSyncResult || 'No sync run on this device yet' }}</div>
+          <div v-if="syncDiag.lastSyncWarning" class="sm:col-span-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-amber-900">
+            <span class="font-semibold">Warning:</span> {{ syncDiag.lastSyncWarning }}
+            <p v-if="isOptionalMigrationWarning(syncDiag.lastSyncWarning)" class="mt-1 text-xs leading-relaxed">
+              Yeh sirf optional table hai — <strong>billing / invoices sync block nahi hota</strong>.
+              Supabase → SQL Editor me <code>supabase/migrations/{{ migrationHintFromWarning(syncDiag.lastSyncWarning) }}</code> run karein, phir Sync / Full Push.
+            </p>
+          </div>
           <div v-if="syncDiag.lastSyncError" class="sm:col-span-2 rounded border border-red-200 bg-white px-2 py-1 text-red-700">
             <span class="font-semibold">Last error:</span> {{ syncDiag.lastSyncError }}
-            <p v-if="isOptionalMigrationSyncIssue(syncDiag.lastSyncError)" class="mt-1 text-xs text-red-600">
-              Fix: Supabase SQL Editor me missing <code>supabase/migrations/005_production_tracking.sql</code> ya <code>supabase/migrations/006_item_stock_movements.sql</code> run karein. Local pending rows dirty rahenge; migration ke baad Sync/Full Push dabayein.
-            </p>
           </div>
         </div>
         <p class="mt-2 text-xs text-slate-500">
-          Mobile me data missing ho to PC par Full Push, phir phone par Full Pull dabayein. Update button app shell refresh karta hai; login/local data clear nahi hota.
+          Billing me purana data missing? PC (jahan bills dikhte hain) par <strong>Full Push</strong>, phir phone par <strong>Full Pull</strong>.
+          Update button app shell refresh karta hai; login/local data clear nahi hota.
         </p>
       </div>
       <p class="text-xs text-slate-500 mt-3 leading-relaxed">
