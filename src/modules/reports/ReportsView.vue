@@ -11,7 +11,8 @@ import {
   filterInvoices, gstrB2B, gstrB2C, gstrHsnSummary, outstandingAging,
   cashBookFromVouchers, ewayInvoices, itemSalesReport, getStateName, getStateCode,
 } from '@/services/reports'
-import { downloadGstrOfflineExcel, periodMonthBounds } from '@/services/gstrExport'
+import { downloadGstrOfflineExcel, downloadGstrOfflineJson, periodMonthBounds } from '@/services/gstrExport'
+import { gstr1PortalJsonFromExcel, downloadJsonFile, periodToGstrFp } from '@/services/gstrJson'
 import {
   buildSalesPurchaseSummary,
   resolvePeriodBounds,
@@ -266,6 +267,22 @@ function exportItemSales() {
     itemRows.value.map(r => [r.name, String(r.count), n2(r.qty), n2(r.value)]))
 }
 
+function gstrCountsAlert(kind: string, file: string, c: {
+  b2b: number; b2cl: number; b2cs: number; hsnB2b: number; hsnB2c: number
+  docsTotal: number; docsCancelled: number; cdnr: number; cdnur: number
+}, docsSummary: { nature: string; srFrom: string; srTo: string; totalNumber: number; cancelled: number }[]) {
+  const docsLines = docsSummary.length
+    ? docsSummary.map((d) => `  ${d.nature}: ${d.srFrom}→${d.srTo} total ${d.totalNumber}, cancelled ${d.cancelled}`).join('\n')
+    : '  (none)'
+  alert(
+    `GSTR-1 ${kind} downloaded (${gstrMonth.value}):\n${file}\n\n`
+    + `B2B: ${c.b2b} · B2CL: ${c.b2cl} · B2CS: ${c.b2cs}\n`
+    + `HSN B2B: ${c.hsnB2b} · HSN B2C: ${c.hsnB2c}\n`
+    + `Docs Table 13: ${c.docsTotal} issued, ${c.docsCancelled} cancelled\n${docsLines}\n`
+    + `CDNR: ${c.cdnr} · CDNUR: ${c.cdnur}`,
+  )
+}
+
 async function exportGstrOffline() {
   const res = await downloadGstrOfflineExcel({
     firmId: firmStore.activeFirmId,
@@ -280,19 +297,45 @@ async function exportGstrOffline() {
   const bounds = periodMonthBounds(gstrMonth.value)
   from.value = bounds.from
   to.value = bounds.to
-  const c = res.counts
-  const src = res.usedOfficialTemplate ? 'official V2.2 template' : 'V2.2 sheet format'
-  const docsLines = res.docsSummary.length
-    ? res.docsSummary.map((d) => `  ${d.nature}: ${d.srFrom}→${d.srTo} total ${d.totalNumber}, cancelled ${d.cancelled}`).join('\n')
-    : '  (none)'
-  alert(
-    `GSTR-1 Excel downloaded (${gstrMonth.value}, ${src}):\n${res.file}\n\n`
-    + `B2B: ${c.b2b} · B2CL: ${c.b2cl} · B2CS: ${c.b2cs}\n`
-    + `HSN B2B: ${c.hsnB2b} · HSN B2C: ${c.hsnB2c}\n`
-    + `Docs Table 13: ${c.docsTotal} issued, ${c.docsCancelled} cancelled\n${docsLines}\n`
-    + `CDNR: ${c.cdnr} · CDNUR: ${c.cdnur}\n\n`
-    + `Note: same-month deleted bills stay out of B2B/B2C/HSN; they only count in Table 13 Cancelled.`,
-  )
+  gstrCountsAlert(`Excel (${res.usedOfficialTemplate ? 'official V2.2 template' : 'V2.2 sheets'})`, res.file, res.counts, res.docsSummary)
+}
+
+async function exportGstrJson() {
+  const res = await downloadGstrOfflineJson({
+    firmId: firmStore.activeFirmId,
+    period: gstrMonth.value,
+    gstin: firmStore.activeFirm?.gst || '',
+  })
+  if (!res.ok) {
+    alert(res.error)
+    return
+  }
+  const bounds = periodMonthBounds(gstrMonth.value)
+  from.value = bounds.from
+  to.value = bounds.to
+  gstrCountsAlert('JSON (GST portal format)', res.file, res.counts, res.docsSummary)
+}
+
+/** Convert an already-downloaded GSTR-1 V2.2 Excel into portal JSON. */
+async function convertGstrExcelToJson(ev: Event) {
+  const input = ev.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  try {
+    const buf = await file.arrayBuffer()
+    const json = gstr1PortalJsonFromExcel(buf, {
+      fileName: file.name,
+      gstin: firmStore.activeFirm?.gst || undefined,
+      period: gstrMonth.value || undefined,
+    })
+    const fp = json.fp || periodToGstrFp(gstrMonth.value)
+    const outName = `GSTR1_${json.gstin}_${fp}.json`
+    downloadJsonFile(outName, json)
+    alert(`Excel → JSON ready:\n${outName}\n\nB2B parties: ${json.b2b?.length || 0}\nHSN B2B: ${json.hsn?.hsn_b2b?.length || 0}\nCDNUR: ${json.cdnur?.length || 0}`)
+  } catch (e: any) {
+    alert(e?.message || 'Excel → JSON convert fail')
+  }
 }
 </script>
 
@@ -311,6 +354,13 @@ async function exportGstrOffline() {
         <button class="pp-btn pp-btn-primary !py-2" type="button" @click="exportGstrOffline">
           📥 GSTR-1 Excel (V2.2)
         </button>
+        <button class="pp-btn pp-btn-ghost !py-2" type="button" @click="exportGstrJson">
+          📄 GSTR-1 JSON
+        </button>
+        <label class="pp-btn pp-btn-ghost !py-2 cursor-pointer">
+          Excel → JSON
+          <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden" @change="convertGstrExcelToJson" />
+        </label>
         <div><label class="pp-label">From</label><input v-model="from" type="date" class="pp-input !w-36" @change="salesPreset = 'custom'" /></div>
         <div><label class="pp-label">To</label><input v-model="to" type="date" class="pp-input !w-36" @change="salesPreset = 'custom'" /></div>
       </div>
@@ -519,12 +569,11 @@ async function exportGstrOffline() {
     <div v-if="tab === 'b2b'" class="pp-card overflow-x-auto">
       <p class="text-xs text-slate-500 mb-3 p-3 bg-blue-50 rounded">
         B2B invoices with buyer GSTIN — GSTR-1 Table 4A.
-        <strong>GSTR-1 Excel (V2.2)</strong> downloads one workbook matching
-        <code>GSTR1_Excel_Workbook_Template_V2.2</code>
-        (<code>b2b,sez,de</code>, <code>b2cs</code>, <code>b2cl</code>, <code>hsn(b2b)</code>, <code>hsn(b2c)</code>, <code>docs</code>, notes).
+        <strong>GSTR-1 Excel (V2.2)</strong> = offline workbook;
+        <strong>GSTR-1 JSON</strong> = GST portal / return ready-made JSON (same month data).
+        <strong>Excel → JSON</strong> converts a downloaded V2.2 Excel into that JSON.
         Same-month deleted bills count only in Table 13 Cancelled, not in B2B/B2C/HSN.
-        Import this file in the GST Java offline tool.
-        File karne ke baad <strong>Billing → Sales History</strong> se us month ko <strong>Lock</strong> kar do taaki bills edit na ho.
+        File karne ke baad <strong>Billing → Sales History</strong> se us month ko <strong>Lock</strong> kar do.
       </p>
       <table class="w-full text-sm">
         <thead><tr class="border-b"><th class="text-left p-2">Date</th><th>Invoice</th><th>Buyer</th><th>GSTIN</th><th>POS</th><th class="text-right">Taxable</th><th class="text-right">Tax</th><th class="text-right">Total</th></tr></thead>

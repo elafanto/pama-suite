@@ -5,6 +5,7 @@ import { normalizeHsn4 } from '@/services/hsnGst'
 import { gstrB2B, gstrB2C } from '@/services/reports'
 import { isInvoiceDocsCancelled, isInvoiceGstrReportable } from '@/services/invoiceStatus'
 import { isCreditOrDebitNote, isDeliveryChallan, isGstrMonthDoc, isTaxInvoiceDoc } from '@/services/invoiceDoc'
+import { buildGstr1PortalJson, downloadJsonFile, periodToGstrFp } from '@/services/gstrJson'
 import type { Invoice, InvoiceItemLine } from '@/types/models'
 
 /** Official GSTR-1 Excel Workbook Template V2.2 sheet names / columns. */
@@ -978,6 +979,39 @@ export type GstrDownloadResult =
     }
   | { ok: false; error: string }
 
+async function loadGstr1PayloadForPeriod(opts: {
+  firmId?: string
+  invoices?: Invoice[]
+  period: string
+  gstin: string
+}): Promise<{ ok: true; gstin: string; payload: Gstr1ExportPayload } | { ok: false; error: string }> {
+  const gstin = (opts.gstin || '').trim().toUpperCase()
+  if (!gstin) return { ok: false, error: 'Firm GSTIN missing — add it in Settings → Firm profile.' }
+
+  const { from, to } = periodMonthBounds(opts.period)
+  const source = opts.firmId
+    ? await loadPeriodInvoicesForGstr(opts.firmId, opts.period)
+    : filterMonthDocsAll(opts.invoices || [], from, to)
+  return { ok: true, gstin, payload: buildGstr1ExportPayload(source) }
+}
+
+function countsFromPayload(payload: Gstr1ExportPayload) {
+  const docsTotal = payload.docs.reduce((s, r) => s + r.totalNumber, 0)
+  const docsCancelled = payload.docs.reduce((s, r) => s + r.cancelled, 0)
+  return {
+    b2b: payload.b2b.length,
+    b2cl: payload.b2cl.length,
+    b2cs: payload.b2cs.length,
+    hsnB2b: payload.hsnB2b.length,
+    hsnB2c: payload.hsnB2c.length,
+    docs: payload.docs.length,
+    docsTotal,
+    docsCancelled,
+    cdnr: payload.cdnr.length,
+    cdnur: payload.cdnur.length,
+  }
+}
+
 export async function downloadGstrOfflineExcel(opts: {
   /** When set, loads period invoices from Dexie including soft-deleted (preferred). */
   firmId?: string
@@ -990,14 +1024,9 @@ export async function downloadGstrOfflineExcel(opts: {
   useOfficialTemplate?: boolean
   templateUrl?: string
 }): Promise<GstrDownloadResult> {
-  const gstin = (opts.gstin || '').trim().toUpperCase()
-  if (!gstin) return { ok: false, error: 'Firm GSTIN missing — add it in Settings → Firm profile.' }
-
-  const { from, to } = periodMonthBounds(opts.period)
-  const source = opts.firmId
-    ? await loadPeriodInvoicesForGstr(opts.firmId, opts.period)
-    : filterMonthDocsAll(opts.invoices || [], from, to)
-  const payload = buildGstr1ExportPayload(source)
+  const loaded = await loadGstr1PayloadForPeriod(opts)
+  if (!loaded.ok) return loaded
+  const { gstin, payload } = loaded
 
   // Default: lightweight workbook with official sheet names + V2.2 column headers.
   // Optional: fill GST portal template (large; can hang mobile / low-RAM browsers).
@@ -1016,25 +1045,45 @@ export async function downloadGstrOfflineExcel(opts: {
   const file = `GSTR1_${safeGstin}_${fp}_V2.2.xlsx`
   XLSX.writeFile(wb, file)
 
-  const docsTotal = payload.docs.reduce((s, r) => s + r.totalNumber, 0)
-  const docsCancelled = payload.docs.reduce((s, r) => s + r.cancelled, 0)
-
   return {
     ok: true,
     file,
     usedOfficialTemplate,
-    counts: {
-      b2b: payload.b2b.length,
-      b2cl: payload.b2cl.length,
-      b2cs: payload.b2cs.length,
-      hsnB2b: payload.hsnB2b.length,
-      hsnB2c: payload.hsnB2c.length,
-      docs: payload.docs.length,
-      docsTotal,
-      docsCancelled,
-      cdnr: payload.cdnr.length,
-      cdnur: payload.cdnur.length,
-    },
+    counts: countsFromPayload(payload),
+    docsSummary: payload.docs,
+  }
+}
+
+export type GstrJsonDownloadResult =
+  | {
+      ok: true
+      file: string
+      counts: ReturnType<typeof countsFromPayload>
+      docsSummary: GstrDocsExportRow[]
+    }
+  | { ok: false; error: string }
+
+/** Download GST portal offline JSON for the same month as Excel (ready to upload). */
+export async function downloadGstrOfflineJson(opts: {
+  firmId?: string
+  invoices?: Invoice[]
+  period: string
+  gstin: string
+}): Promise<GstrJsonDownloadResult> {
+  const loaded = await loadGstr1PayloadForPeriod(opts)
+  if (!loaded.ok) return loaded
+  const { gstin, payload } = loaded
+
+  const json = buildGstr1PortalJson(payload, { gstin, period: opts.period })
+  const fp = periodToGstrFp(opts.period) || opts.period.replace('-', '')
+  const safeGstin = gstin.replace(/[^A-Z0-9]/gi, '')
+  const file = `GSTR1_${safeGstin}_${fp}.json`
+  downloadJsonFile(file, json)
+
+  return {
+    ok: true,
+    file,
+    counts: countsFromPayload(payload),
     docsSummary: payload.docs,
   }
 }
