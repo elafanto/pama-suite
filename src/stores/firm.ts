@@ -18,7 +18,7 @@ import {
   salesPeriodFromDate,
   withLockedSalesMonth,
 } from '@/services/salesMonthLock'
-import { DEFAULT_INVOICE_TERMS } from '@/services/invoiceTerms'
+import { DEFAULT_INVOICE_TERMS, shouldUpgradeInvoiceTerms } from '@/services/invoiceTerms'
 
 export type FirmLinkedCounts = { parties: number; invoices: number; purchases: number }
 
@@ -62,7 +62,7 @@ export const useFirmStore = defineStore('firm', () => {
     let firmMetaTouched = false
     for (const f of firms.value) {
       const needsPrefix = !f.prefix || !f.next_bill_no || !f.bill_no_format
-      const needsTerms = !(f.terms || '').trim()
+      const needsTerms = shouldUpgradeInvoiceTerms(f.terms)
       if (!needsPrefix && !needsTerms) continue
       firmMetaTouched = true
       await db.firms.put(plain({

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_INVOICE_TERMS,
+  LEGACY_INVOICE_TERMS_V1,
   normalizePaymentDays,
   resolveInvoiceTerms,
+  shouldUpgradeInvoiceTerms,
 } from '@/services/invoiceTerms'
 
 describe('normalizePaymentDays', () => {
@@ -22,12 +24,14 @@ describe('normalizePaymentDays', () => {
 })
 
 describe('resolveInvoiceTerms', () => {
-  it('uses default T&C and fills party payment days', () => {
+  it('uses 3-clause default and fills party payment days', () => {
     const text = resolveInvoiceTerms({ paymentDays: 15 })
     expect(text).toContain('Payment is due within 15 days from the date of invoice.')
     expect(text).toContain('interest @ 1.5% per month')
+    expect(text).toContain('within 3 days of receipt')
     expect(text).toContain('courts at Kashipur')
-    expect(text).toContain('Custom size / printed boxes or jars are strictly non-returnable.')
+    expect(text).not.toContain('Custom size / printed boxes')
+    expect(text).not.toContain('Goods remain our property')
   })
 
   it('keeps blank underline when payment days missing', () => {
@@ -51,11 +55,30 @@ describe('resolveInvoiceTerms', () => {
     expect(text).toBe('1. Payment is due within 7 days from the date of invoice.')
   })
 
-  it('default template includes all five clauses', () => {
+  it('upgrades stored legacy 5-clause default when resolving', () => {
+    const text = resolveInvoiceTerms({
+      firmTerms: LEGACY_INVOICE_TERMS_V1,
+      paymentDays: 10,
+    })
+    expect(text).toContain('within 10 days')
+    expect(text).toContain('within 3 days of receipt')
+    expect(text).not.toContain('Goods remain our property')
+  })
+
+  it('default template includes exactly three clauses', () => {
     expect(DEFAULT_INVOICE_TERMS).toMatch(/^1\./m)
     expect(DEFAULT_INVOICE_TERMS).toMatch(/^2\./m)
     expect(DEFAULT_INVOICE_TERMS).toMatch(/^3\./m)
-    expect(DEFAULT_INVOICE_TERMS).toMatch(/^4\./m)
-    expect(DEFAULT_INVOICE_TERMS).toMatch(/^5\./m)
+    expect(DEFAULT_INVOICE_TERMS).not.toMatch(/^4\./m)
+    expect(DEFAULT_INVOICE_TERMS).not.toMatch(/^5\./m)
+  })
+})
+
+describe('shouldUpgradeInvoiceTerms', () => {
+  it('upgrades blank and legacy defaults', () => {
+    expect(shouldUpgradeInvoiceTerms('')).toBe(true)
+    expect(shouldUpgradeInvoiceTerms(LEGACY_INVOICE_TERMS_V1)).toBe(true)
+    expect(shouldUpgradeInvoiceTerms(DEFAULT_INVOICE_TERMS)).toBe(false)
+    expect(shouldUpgradeInvoiceTerms('Custom short terms')).toBe(false)
   })
 })

@@ -274,12 +274,13 @@ onMounted(store.load)
             <th class="text-left font-semibold px-4 py-2.5 hidden sm:table-cell">GST</th>
             <th class="text-left font-semibold px-4 py-2.5 hidden md:table-cell">Phone</th>
             <th class="text-left font-semibold px-4 py-2.5 hidden lg:table-cell">City</th>
+            <th class="text-left font-semibold px-4 py-2.5 hidden md:table-cell">Pay days</th>
             <th class="text-right font-semibold px-4 py-2.5">Actions</th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="filtered.length === 0">
-            <td colspan="6" class="text-center text-slate-400 py-10">
+            <td colspan="7" class="text-center text-slate-400 py-10">
               <div class="text-4xl mb-2">👥</div>No parties yet. Click “Add Party”.
             </td>
           </tr>
@@ -294,6 +295,9 @@ onMounted(store.load)
             <td class="px-4 py-2.5 hidden sm:table-cell font-mono text-sm font-semibold text-slate-700">{{ formatGstin(p.gst) || '—' }}</td>
             <td class="px-4 py-2.5 hidden md:table-cell text-slate-600">{{ p.phone || '—' }}</td>
             <td class="px-4 py-2.5 hidden lg:table-cell text-slate-600">{{ p.city || '—' }}</td>
+            <td class="px-4 py-2.5 hidden md:table-cell text-slate-600">
+              {{ p.payment_days == null ? '—' : `${p.payment_days} days` }}
+            </td>
             <td class="px-4 py-2.5 text-right whitespace-nowrap">
               <button class="pp-btn pp-btn-ghost !px-2 !py-1 mr-1" title="Merge into another party" @click="openMerge(p)">⇄</button>
               <button class="pp-btn pp-btn-ghost !px-2 !py-1 mr-1" @click="openEdit(p)">✏️</button>
@@ -361,18 +365,21 @@ onMounted(store.load)
           <div><label class="pp-label">PIN</label><input v-model="form.pin" class="pp-input" /></div>
           <div><label class="pp-label">State code</label><input v-model="form.state" class="pp-input" placeholder="05" /></div>
         </div>
-        <div>
-          <label class="pp-label">Payment due (days)</label>
-          <input
-            v-model.number="form.payment_days"
-            type="number"
-            min="0"
-            step="1"
-            class="pp-input !w-40"
-            placeholder="e.g. 7 / 15 / 30"
-          />
+        <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <label class="pp-label">Payment is due within (days)</label>
+          <div class="flex items-center gap-2 flex-wrap">
+            <input
+              v-model.number="form.payment_days"
+              type="number"
+              min="0"
+              step="1"
+              class="pp-input !w-28"
+              placeholder="e.g. 7"
+            />
+            <span class="text-sm text-slate-600">days from invoice date</span>
+          </div>
           <p class="text-xs text-slate-500 mt-1">
-            Bill Terms &amp; Conditions me “Payment is due within <strong>X</strong> days” yahi se aayega.
+            Bill / PDF Terms clause 1 me yahi number aayega. Blank = ______ on bill.
           </p>
         </div>
 
