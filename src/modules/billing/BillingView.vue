@@ -23,13 +23,16 @@ import { getEwayEligibility, downloadEwayJson } from '@/services/ewayBill'
 import { downloadInvoicePdf, bulkDownloadInvoicePdf, INVOICE_PDF_COPY_OPTIONS, type InvoicePdfCopy } from '@/services/invoicePdf'
 import { resolveFirmSignature } from '@/services/firmSignature'
 import { resolveLivePartyDetails, resolveLiveShipDetails, type PartyLookup } from '@/services/invoiceDisplay'
-import { peekBillNo, peekChallanNo } from '@/services/invoiceNumber'
+import { peekDocNo } from '@/services/invoiceNumber'
 import {
   DOC_TYPE_OPTIONS,
+  docKind,
   docNoLabel,
   docPdfSubtitle,
   docPdfTitle,
+  isCreditOrDebitNote,
   isDeliveryChallan,
+  isTaxInvoiceDoc,
   JOB_WORK_CHALLAN_NOTE,
 } from '@/services/invoiceDoc'
 import {
@@ -179,6 +182,10 @@ const initialFormState = () => ({
   bill_no: '',
   date: new Date().toISOString().slice(0, 10),
   ref: '',
+  against_invoice_id: null as string | null,
+  against_bill_no: '',
+  against_bill_date: '',
+  against_search: '',
   party_id: null as string | null,
   party_name: '',
   sameAsBuyer: true,
@@ -353,13 +360,86 @@ function resetForm() {
 }
 
 const isChallanForm = computed(() => isDeliveryChallan(form.doc_type))
+const isNoteForm = computed(() => isCreditOrDebitNote(form.doc_type))
 
 const nextBillPreview = computed(() => {
   const firm = firmStore.activeFirm
   if (!firm || editingId.value) return ''
-  if (isChallanForm.value) return peekChallanNo(firm, invoiceStore.list, form.date)
-  return peekBillNo(firm, invoiceStore.list, form.date)
+  return peekDocNo(firm, invoiceStore.list, form.doc_type, form.date)
 })
+
+function formatAgainstRef(billNo: string, date: string) {
+  const d = date ? new Date(`${date.slice(0, 10)}T12:00:00`).toLocaleDateString('en-IN') : ''
+  return d ? `${billNo} dt. ${d}` : billNo
+}
+
+const againstInvoiceCandidates = computed(() => {
+  if (!isNoteForm.value) return [] as Invoice[]
+  const q = form.against_search.trim().toLowerCase()
+  const partyKey = form.party_name.trim().toLowerCase()
+  return invoiceStore.list
+    .filter((inv) => {
+      if (!isInvoiceActive(inv) || !isTaxInvoiceDoc(inv)) return false
+      if (editingId.value && inv.id === editingId.value) return false
+      if (partyKey && (inv.party_name || '').trim().toLowerCase() !== partyKey && inv.party_id !== form.party_id) {
+        // Still allow search across parties when query typed
+        if (!q) return false
+      }
+      if (!q) {
+        if (!partyKey) return true
+        return (inv.party_name || '').trim().toLowerCase() === partyKey || inv.party_id === form.party_id
+      }
+      const hay = `${inv.bill_no} ${inv.party_name} ${inv.date} ${inv.grand_total}`.toLowerCase()
+      return hay.includes(q)
+    })
+    .sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.bill_no || '').localeCompare(a.bill_no || ''))
+    .slice(0, 40)
+})
+
+function selectAgainstInvoice(inv: Invoice) {
+  form.against_invoice_id = inv.id
+  form.against_bill_no = inv.bill_no
+  form.against_bill_date = inv.date
+  form.against_search = `${inv.bill_no} — ${inv.party_name}`
+  form.ref = formatAgainstRef(inv.bill_no, inv.date)
+  if (!form.party_name.trim()) {
+    form.party_id = inv.party_id
+    form.party_name = inv.party_name
+    handleCustSelect()
+  }
+  if (!form.gst_type) form.gst_type = normalizeGstType(inv.gst_type)
+}
+
+function clearAgainstInvoice() {
+  form.against_invoice_id = null
+  form.against_bill_no = ''
+  form.against_bill_date = ''
+  form.against_search = ''
+}
+
+function createNoteFromHistory(inv: Invoice, noteType: 'CREDIT_NOTE' | 'DEBIT_NOTE') {
+  if (!isTaxInvoiceDoc(inv) || !isInvoiceActive(inv)) {
+    return alert('Credit/Debit note sirf active Tax Invoice / Bill of Supply se bana sakte ho.')
+  }
+  resetForm()
+  form.doc_type = noteType
+  form.party_id = inv.party_id
+  form.party_name = inv.party_name
+  form.sameAsBuyer = inv.sameAsBuyer !== false
+  form.ship = inv.ship ? {
+    name: inv.ship.name,
+    addr: inv.ship.addr,
+    city: inv.ship.city,
+    pin: inv.ship.pin,
+    email: inv.ship.email,
+    gstin: inv.ship.gstin,
+    state: inv.ship.state,
+  } : { name: '', addr: '', city: '', pin: '', email: '', gstin: '', state: '' }
+  form.gst_type = normalizeGstType(inv.gst_type)
+  selectAgainstInvoice(inv)
+  activeTab.value = 'new'
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
 
 const saveButtonLabel = computed(() => {
   if (editingId.value) return isChallanForm.value ? 'Update Challan' : 'Update Bill'
@@ -462,6 +542,9 @@ watch(() => form.doc_type, (dt) => {
     form.amt_paid = 0
     form.discount_mode = 'none'
     form.discount_value = 0
+    clearAgainstInvoice()
+  } else if (!isCreditOrDebitNote(dt)) {
+    clearAgainstInvoice()
   }
 })
 
@@ -931,6 +1014,9 @@ async function saveInvoice() {
   if (savingInvoice.value) return
   if (!firmStore.activeFirmId) return alert('Please set up an active firm first.')
   if (!form.party_name.trim()) return alert('Customer name is required.')
+  if (isNoteForm.value && !(form.against_bill_no || '').trim()) {
+    return alert('Credit/Debit note ke liye Against Invoice select karo.')
+  }
   if (firmStore.isSalesLocked(form.date)) {
     return alert(salesMonthLockMessage(salesPeriodFromDate(form.date)))
   }
@@ -970,6 +1056,9 @@ async function saveInvoice() {
     bill_no: editingId.value ? form.bill_no.trim() : '',
     date: form.date,
     ref: form.ref,
+    against_invoice_id: isNoteForm.value ? form.against_invoice_id : null,
+    against_bill_no: isNoteForm.value ? (form.against_bill_no || '').trim() : '',
+    against_bill_date: isNoteForm.value ? (form.against_bill_date || '').trim() : '',
     party_id: form.party_id,
     party_name: form.party_name.trim(),
     party_snapshot: customerObj ? {
@@ -1075,6 +1164,12 @@ function editInvoice(inv: Invoice) {
     bill_no: inv.bill_no,
     date: inv.date,
     ref: inv.ref || '',
+    against_invoice_id: inv.against_invoice_id || null,
+    against_bill_no: inv.against_bill_no || '',
+    against_bill_date: inv.against_bill_date || '',
+    against_search: inv.against_bill_no
+      ? `${inv.against_bill_no}${inv.against_bill_date ? ` — ${inv.against_bill_date}` : ''}`
+      : '',
     party_id: inv.party_id,
     party_name: inv.party_name,
     sameAsBuyer: inv.sameAsBuyer !== false,
@@ -1120,6 +1215,12 @@ function copyInvoice(inv: Invoice) {
     bill_no: '',
     date: new Date().toISOString().slice(0, 10),
     ref: inv.ref || '',
+    against_invoice_id: inv.against_invoice_id || null,
+    against_bill_no: inv.against_bill_no || '',
+    against_bill_date: inv.against_bill_date || '',
+    against_search: inv.against_bill_no
+      ? `${inv.against_bill_no}${inv.against_bill_date ? ` — ${inv.against_bill_date}` : ''}`
+      : '',
     party_id: inv.party_id,
     party_name: inv.party_name,
     sameAsBuyer: inv.sameAsBuyer !== false,
@@ -1515,6 +1616,12 @@ onMounted(async () => {
           <strong>Job work delivery challan</strong> — sales, ledger, stock aur GSTR-1 B2B me nahi jayega.
           Number alag series se lagta hai (<span class="font-mono">DC-0001</span>). GSTR-1 Table 13 me "Delivery Challan for job work" count hoga.
         </div>
+        <div v-else-if="isNoteForm" class="pp-card p-3 border border-violet-200 bg-violet-50 text-sm text-violet-900">
+          <strong>{{ docKind(form.doc_type) === 'CREDIT_NOTE' ? 'Credit Note' : 'Debit Note' }}</strong>
+          — alag number series
+          (<span class="font-mono">{{ docKind(form.doc_type) === 'CREDIT_NOTE' ? 'CN-0001' : 'DN-0001' }}</span>).
+          Against Invoice select karo — PDF pe bill no + date print hoga.
+        </div>
         <div v-if="formEwayEligibility.show" class="pp-card p-3 border border-amber-200 bg-amber-50 text-sm text-amber-900">
           🚚 <strong>E-Way:</strong> {{ formEwayEligibility.reason }}
           <span class="block text-xs mt-1 text-amber-800">
@@ -1556,6 +1663,47 @@ onMounted(async () => {
               <label class="pp-label">Date</label>
               <input v-model="form.date" type="date" class="pp-input" />
             </div>
+          </div>
+
+          <div v-if="isNoteForm" class="rounded-xl border border-violet-200 bg-violet-50/60 p-3 space-y-2">
+            <div class="flex items-center justify-between gap-2 flex-wrap">
+              <label class="pp-label !mb-0">Against Invoice *</label>
+              <button
+                v-if="form.against_invoice_id || form.against_bill_no"
+                type="button"
+                class="text-xs text-rose-700 underline"
+                @click="clearAgainstInvoice"
+              >Clear</button>
+            </div>
+            <input
+              v-model="form.against_search"
+              class="pp-input"
+              placeholder="Search bill no / party / date…"
+              autocomplete="off"
+            />
+            <div
+              v-if="againstInvoiceCandidates.length"
+              class="max-h-44 overflow-y-auto rounded-lg border border-violet-100 bg-white divide-y divide-slate-100"
+            >
+              <button
+                v-for="inv in againstInvoiceCandidates"
+                :key="inv.id"
+                type="button"
+                class="w-full text-left px-3 py-2 text-sm hover:bg-violet-50"
+                :class="form.against_invoice_id === inv.id ? 'bg-violet-100' : ''"
+                @click="selectAgainstInvoice(inv)"
+              >
+                <span class="font-semibold text-navy">{{ inv.bill_no }}</span>
+                <span class="text-slate-500"> · {{ new Date(inv.date).toLocaleDateString('en-IN') }}</span>
+                <span class="block text-xs text-slate-600 truncate">{{ inv.party_name }} · ₹{{ n2(inv.grand_total) }}</span>
+              </button>
+            </div>
+            <p v-if="form.against_bill_no" class="text-xs text-violet-900">
+              Selected: <strong>{{ form.against_bill_no }}</strong>
+              <span v-if="form.against_bill_date"> ({{ new Date(form.against_bill_date).toLocaleDateString('en-IN') }})</span>
+              — Reference: <strong>{{ form.ref || '—' }}</strong>
+            </p>
+            <p v-else class="text-xs text-violet-800">Party select karke list me se invoice choose karo, ya upar search karo.</p>
           </div>
 
           <!-- Tax split — visible on create + edit (legacy IGST bills need Intra switch) -->
@@ -2108,6 +2256,20 @@ onMounted(async () => {
                   >✏️</button>
                   <button @click="copyInvoice(inv)" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" title="Copy Draft">📋</button>
                   <button
+                    v-if="isInvoiceActive(inv) && isTaxInvoiceDoc(inv)"
+                    type="button"
+                    class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs text-violet-800"
+                    title="Create Credit Note against this bill"
+                    @click="createNoteFromHistory(inv, 'CREDIT_NOTE')"
+                  >CN</button>
+                  <button
+                    v-if="isInvoiceActive(inv) && isTaxInvoiceDoc(inv)"
+                    type="button"
+                    class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs text-violet-800"
+                    title="Create Debit Note against this bill"
+                    @click="createNoteFromHistory(inv, 'DEBIT_NOTE')"
+                  >DN</button>
+                  <button
                     v-if="isInvoiceActive(inv)"
                     @click="cancelInvoice(inv)"
                     class="pp-btn pp-btn-danger !px-2 !py-1 text-xs"
@@ -2518,6 +2680,13 @@ onMounted(async () => {
               <td class="w-[30%] border border-black p-2 align-top text-[11px] space-y-1 break-words">
                 <div><strong>{{ docNoLabel(previewInvoice) }}:</strong> {{ previewInvoice.bill_no }}</div>
                 <div><strong>Date:</strong> {{ new Date(previewInvoice.date).toLocaleDateString('en-IN') }}</div>
+                <template v-if="isCreditOrDebitNote(previewInvoice)">
+                  <div><strong>Against Invoice:</strong> {{ previewInvoice.against_bill_no || '-' }}</div>
+                  <div>
+                    <strong>Invoice Date:</strong>
+                    {{ previewInvoice.against_bill_date ? new Date(previewInvoice.against_bill_date).toLocaleDateString('en-IN') : '-' }}
+                  </div>
+                </template>
                 <div><strong>Ref:</strong> {{ previewInvoice.ref || '-' }}</div>
                 <div v-if="isDeliveryChallan(previewInvoice)"><strong>Purpose:</strong> Job Work</div>
                 <div v-else><strong>Payment:</strong> {{ previewInvoice.payment }}</div>
@@ -2707,6 +2876,13 @@ onMounted(async () => {
           <td class="w-[30%] border border-black p-2 align-top text-[11px] space-y-1 break-words">
             <div><strong>{{ docNoLabel(previewInvoice) }}:</strong> {{ previewInvoice.bill_no }}</div>
             <div><strong>Date:</strong> {{ new Date(previewInvoice.date).toLocaleDateString('en-IN') }}</div>
+            <template v-if="isCreditOrDebitNote(previewInvoice)">
+              <div><strong>Against Invoice:</strong> {{ previewInvoice.against_bill_no || '-' }}</div>
+              <div>
+                <strong>Invoice Date:</strong>
+                {{ previewInvoice.against_bill_date ? new Date(previewInvoice.against_bill_date).toLocaleDateString('en-IN') : '-' }}
+              </div>
+            </template>
             <div><strong>Ref:</strong> {{ previewInvoice.ref || '-' }}</div>
             <div v-if="isDeliveryChallan(previewInvoice)"><strong>Purpose:</strong> Job Work</div>
             <div v-else><strong>Payment:</strong> {{ previewInvoice.payment }}</div>

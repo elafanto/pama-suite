@@ -65,6 +65,8 @@ const blank = (): NewFirm => ({
   name: '', gst: '', addr: '', city: '', state: '05', pin: '', phone: '', email: '',
   bank_name: '', bank_acno: '', bank_ifsc: '',
   prefix: 'INV', next_bill_no: 1, bill_no_format: 'dash_4' as BillNoFormat,
+  cn_prefix: 'CN', next_cn_no: 1,
+  dn_prefix: 'DN', next_dn_no: 1,
   terms: DEFAULT_INVOICE_TERMS,
   signature: undefined,
 })
@@ -82,6 +84,8 @@ function openEdit(f: Firm) {
     phone: f.phone, email: f.email, bank_name: f.bank_name, bank_acno: f.bank_acno, bank_ifsc: f.bank_ifsc,
     prefix: f.prefix || 'INV', next_bill_no: f.next_bill_no || 1,
     bill_no_format: f.bill_no_format || 'dash_4',
+    cn_prefix: f.cn_prefix || 'CN', next_cn_no: f.next_cn_no || 1,
+    dn_prefix: f.dn_prefix || 'DN', next_dn_no: f.next_dn_no || 1,
     terms: (f.terms || '').trim() || DEFAULT_INVOICE_TERMS,
     signature: f.signature || undefined,
   })
@@ -627,6 +631,14 @@ onMounted(async () => {
         <div class="grid grid-cols-2 gap-3">
           <div><label class="pp-label">Bill Prefix</label><input v-model="form.prefix" class="pp-input uppercase" placeholder="INV" /></div>
           <div><label class="pp-label">Next Bill No.</label><input v-model.number="form.next_bill_no" type="number" min="1" class="pp-input" /></div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="pp-label">Credit Note Prefix</label><input v-model="form.cn_prefix" class="pp-input uppercase" placeholder="CN" /></div>
+          <div><label class="pp-label">Next CN No.</label><input v-model.number="form.next_cn_no" type="number" min="1" class="pp-input" /></div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="pp-label">Debit Note Prefix</label><input v-model="form.dn_prefix" class="pp-input uppercase" placeholder="DN" /></div>
+          <div><label class="pp-label">Next DN No.</label><input v-model.number="form.next_dn_no" type="number" min="1" class="pp-input" /></div>
         </div>
         <div>
           <label class="pp-label">Invoice Number Format</label>

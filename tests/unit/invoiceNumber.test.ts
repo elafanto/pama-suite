@@ -6,9 +6,14 @@ import {
   resolveNextSequence,
   allocateBillNo,
   allocateChallanNo,
+  allocateCreditNoteNo,
+  allocateDebitNoteNo,
   findDuplicateBillNoGroups,
   peekBillNo,
   peekChallanNo,
+  peekCreditNoteNo,
+  peekDebitNoteNo,
+  peekDocNo,
   indianFYShort,
 } from '@/services/invoiceNumber'
 
@@ -120,5 +125,28 @@ describe('challan numbering', () => {
 
   it('starts DC-0001 when no challans exist yet', () => {
     expect(peekChallanNo(firm({ next_bill_no: 40 }), [inv({ bill_no: 'INV-0039' })])).toBe('DC-0001')
+  })
+})
+
+describe('credit / debit note numbering', () => {
+  it('uses separate CN / DN series and does not consume invoice numbers', () => {
+    const invoices = [
+      inv({ bill_no: 'INV-0008', doc_type: 'INVOICE' }),
+      inv({ bill_no: 'CN-0002', doc_type: 'CREDIT_NOTE' }),
+      inv({ bill_no: 'DN-0001', doc_type: 'DEBIT_NOTE' }),
+    ]
+    const f = firm({ next_bill_no: 9, next_cn_no: 1, next_dn_no: 1 })
+    expect(peekCreditNoteNo(f, invoices)).toBe('CN-0003')
+    expect(peekDebitNoteNo(f, invoices)).toBe('DN-0002')
+    expect(peekBillNo(f, invoices)).toBe('INV-0009')
+    expect(peekDocNo(f, invoices, 'CREDIT_NOTE')).toBe('CN-0003')
+    expect(allocateCreditNoteNo(f, invoices).billNo).toBe('CN-0003')
+    expect(allocateDebitNoteNo(f, invoices).billNo).toBe('DN-0002')
+  })
+
+  it('honours custom CN/DN prefixes', () => {
+    const f = firm({ cn_prefix: 'CRN', next_cn_no: 5, dn_prefix: 'DBN', next_dn_no: 2 })
+    expect(peekCreditNoteNo(f, [])).toBe('CRN-0005')
+    expect(peekDebitNoteNo(f, [])).toBe('DBN-0002')
   })
 })

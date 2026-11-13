@@ -7,8 +7,13 @@ import { useFirmStore } from './firm'
 import { useAccountingStore } from './accounting'
 import { logActivity } from '@/services/activityLog'
 import { recordInvoiceMovements } from '@/services/inventoryLedger'
-import { allocateBillNo, allocateChallanNo } from '@/services/invoiceNumber'
-import { isDeliveryChallan } from '@/services/invoiceDoc'
+import {
+  allocateBillNo,
+  allocateChallanNo,
+  allocateCreditNoteNo,
+  allocateDebitNoteNo,
+} from '@/services/invoiceNumber'
+import { docKind, isDeliveryChallan } from '@/services/invoiceDoc'
 import { notifyLocalDirty } from '@/services/localDirty'
 import { isInvoiceCancelled, isInvoiceActive } from '@/services/invoiceStatus'
 import {
@@ -120,6 +125,26 @@ export const useInvoiceStore = defineStore('invoices', () => {
         if (isDeliveryChallan(payload)) {
           const { billNo } = allocateChallanNo(firm, invoices, payload.date)
           payload.bill_no = billNo
+        } else if (docKind(payload) === 'CREDIT_NOTE') {
+          const { billNo, nextSequenceAfter } = allocateCreditNoteNo(firm, invoices, payload.date)
+          payload.bill_no = billNo
+          await db.firms.put(plain({
+            ...firm,
+            cn_prefix: firm.cn_prefix || 'CN',
+            next_cn_no: nextSequenceAfter,
+            updated_at: nowISO(),
+            _dirty: true,
+          }))
+        } else if (docKind(payload) === 'DEBIT_NOTE') {
+          const { billNo, nextSequenceAfter } = allocateDebitNoteNo(firm, invoices, payload.date)
+          payload.bill_no = billNo
+          await db.firms.put(plain({
+            ...firm,
+            dn_prefix: firm.dn_prefix || 'DN',
+            next_dn_no: nextSequenceAfter,
+            updated_at: nowISO(),
+            _dirty: true,
+          }))
         } else {
           const { billNo, nextSequenceAfter } = allocateBillNo(firm, invoices, payload.date)
           payload.bill_no = billNo

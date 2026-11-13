@@ -260,7 +260,7 @@ async function upsertCloudRow(
   if (localName === 'firms') {
     const { data: remoteFirm } = await sb
       .from(remoteName)
-      .select('next_bill_no')
+      .select('next_bill_no, next_cn_no, next_dn_no')
       .eq('id', rec.id)
       .eq('org_id', orgId)
       .maybeSingle()
@@ -271,6 +271,10 @@ async function upsertCloudRow(
       logo: rec.logo, signature: rec.signature, decl: rec.decl, terms: rec.terms,
       prefix: rec.prefix || 'INV',
       next_bill_no: Math.max(Number(rec.next_bill_no) || 1, Number(remoteFirm?.next_bill_no) || 1),
+      cn_prefix: rec.cn_prefix || 'CN',
+      next_cn_no: Math.max(Number(rec.next_cn_no) || 1, Number(remoteFirm?.next_cn_no) || 1),
+      dn_prefix: rec.dn_prefix || 'DN',
+      next_dn_no: Math.max(Number(rec.next_dn_no) || 1, Number(remoteFirm?.next_dn_no) || 1),
       bill_no_format: rec.bill_no_format || 'dash_4',
       locked_sales_months: Array.isArray(rec.locked_sales_months) ? rec.locked_sales_months : [],
     })
@@ -297,7 +301,11 @@ async function upsertCloudRow(
   let { error } = await sb.from(remoteName).upsert(row)
   if (error && /column .* does not exist|Could not find .* column/i.test(error.message || '')) {
     // Older Supabase schemas keep syncing core data until the latest migration is applied.
-    for (const k of ['signature', 'track_stock', 'opening_stock', 'reorder_level', 'purchase_rate', 'locked_sales_months', 'payment_days']) {
+    for (const k of [
+      'signature', 'track_stock', 'opening_stock', 'reorder_level', 'purchase_rate',
+      'locked_sales_months', 'payment_days',
+      'cn_prefix', 'next_cn_no', 'dn_prefix', 'next_dn_no',
+    ]) {
       delete row[k]
     }
     ;({ error } = await sb.from(remoteName).upsert(row))
@@ -506,6 +514,10 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
         terms: r.terms || '',
         prefix: r.prefix || 'INV',
         next_bill_no: r.next_bill_no || 1,
+        cn_prefix: r.cn_prefix || 'CN',
+        next_cn_no: r.next_cn_no || 1,
+        dn_prefix: r.dn_prefix || 'DN',
+        next_dn_no: r.next_dn_no || 1,
         bill_no_format: r.bill_no_format || 'dash_4',
         locked_sales_months: Array.isArray(r.locked_sales_months) ? r.locked_sales_months : [],
         created_at: r.created_at,
@@ -521,13 +533,22 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
           continue
         }
         const nextBillNo = Math.max(local.next_bill_no || 1, firm.next_bill_no || 1)
+        const nextCnNo = Math.max(local.next_cn_no || 1, firm.next_cn_no || 1)
+        const nextDnNo = Math.max(local.next_dn_no || 1, firm.next_dn_no || 1)
         await db.firms.put({
           ...firm,
           next_bill_no: nextBillNo,
+          next_cn_no: nextCnNo,
+          next_dn_no: nextDnNo,
+          cn_prefix: firm.cn_prefix || local.cn_prefix || 'CN',
+          dn_prefix: firm.dn_prefix || local.dn_prefix || 'DN',
           locked_sales_months: Array.isArray(r.locked_sales_months)
             ? r.locked_sales_months
             : (local.locked_sales_months || []),
-          _dirty: nextBillNo > (firm.next_bill_no || 1),
+          _dirty:
+            nextBillNo > (firm.next_bill_no || 1)
+            || nextCnNo > (firm.next_cn_no || 1)
+            || nextDnNo > (firm.next_dn_no || 1),
         })
         pulled++
       } else if (!local) {

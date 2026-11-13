@@ -14,6 +14,7 @@ import {
   docNoLabel,
   docPdfSubtitle,
   docPdfTitle,
+  isCreditOrDebitNote,
   isDeliveryChallan,
   JOB_WORK_CHALLAN_NOTE,
 } from '@/services/invoiceDoc'
@@ -112,6 +113,8 @@ interface PdfBill {
   billNo: string
   date: string
   ref?: string
+  againstBillNo?: string
+  againstBillDate?: string
   payment?: string
   payStatus: string
   amtPaid: number
@@ -171,6 +174,8 @@ function toPdfBill(inv: Invoice, partyLookup?: PartyLookup): PdfBill {
     billNo: inv.bill_no,
     date: inv.date,
     ref: inv.ref,
+    againstBillNo: inv.against_bill_no || '',
+    againstBillDate: inv.against_bill_date || '',
     payment: inv.payment,
     payStatus: inv.pay_status,
     amtPaid: inv.amt_paid || 0,
@@ -303,6 +308,7 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
       { text: 'SHIP TO (CONSIGNEE):', font: 'bold', size: 8 },
       { text: '— Same as Buyer Address —', font: 'italic', size: 8 },
     ]
+  const isNote = isCreditOrDebitNote(b.docType)
   const infoRows: Array<{ text: string; font?: 'bold' | 'normal' | 'italic'; size?: number }> = isChallan
     ? [
       { text: 'CHALLAN DETAILS:', font: 'bold', size: 8 },
@@ -311,14 +317,24 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
       { text: `Ref: ${b.ref || '-'}`, font: 'normal', size: 8 },
       { text: 'Purpose: Job Work', font: 'normal', size: 8 },
     ]
-    : [
-      { text: 'INVOICE DETAILS:', font: 'bold', size: 8 },
-      { text: `Invoice No: ${b.billNo}`, font: 'normal', size: 8 },
-      { text: `Date: ${fmtDate(b.date)}`, font: 'normal', size: 8 },
-      { text: `Ref: ${b.ref || '-'}`, font: 'normal', size: 8 },
-      { text: `Payment: ${b.payment || '-'}`, font: 'normal', size: 8 },
-      { text: `Status: ${formatPayStatusForPdf(b.payStatus, b.amtPaid)}`, font: 'normal', size: 8 },
-    ]
+    : isNote
+      ? [
+        { text: 'NOTE DETAILS:', font: 'bold', size: 8 },
+        { text: `${docNoLabel(b.docType)}: ${b.billNo}`, font: 'normal', size: 8 },
+        { text: `Date: ${fmtDate(b.date)}`, font: 'normal', size: 8 },
+        { text: `Against Invoice: ${b.againstBillNo || '-'}`, font: 'bold', size: 8 },
+        { text: `Invoice Date: ${b.againstBillDate ? fmtDate(b.againstBillDate) : '-'}`, font: 'normal', size: 8 },
+        { text: `Ref: ${b.ref || '-'}`, font: 'normal', size: 8 },
+        { text: `Payment: ${b.payment || '-'}`, font: 'normal', size: 8 },
+      ]
+      : [
+        { text: 'INVOICE DETAILS:', font: 'bold', size: 8 },
+        { text: `Invoice No: ${b.billNo}`, font: 'normal', size: 8 },
+        { text: `Date: ${fmtDate(b.date)}`, font: 'normal', size: 8 },
+        { text: `Ref: ${b.ref || '-'}`, font: 'normal', size: 8 },
+        { text: `Payment: ${b.payment || '-'}`, font: 'normal', size: 8 },
+        { text: `Status: ${formatPayStatusForPdf(b.payStatus, b.amtPaid)}`, font: 'normal', size: 8 },
+      ]
 
   const partyH = Math.max(
     wrappedBlockHeight(pdf, buyerRows, innerW, lineH),

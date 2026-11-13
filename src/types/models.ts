@@ -82,6 +82,12 @@ export interface Firm {
   signature?: string
   prefix?: string
   next_bill_no?: number
+  /** Credit note series prefix — default CN. */
+  cn_prefix?: string
+  next_cn_no?: number
+  /** Debit note series prefix — default DN. */
+  dn_prefix?: string
+  next_dn_no?: number
   /** Sales invoice number layout — per firm. Default INV-0001 style. */
   bill_no_format?: BillNoFormat
   /** YYYY-MM months whose sales invoices are locked (after GSTR-1 filing). */
@@ -126,6 +132,10 @@ export interface Invoice extends BaseRecord {
   bill_no: string
   date: string
   ref?: string
+  /** Original tax invoice this credit/debit note is against. */
+  against_invoice_id?: string | null
+  against_bill_no?: string
+  against_bill_date?: string
   party_id: string | null
   party_name: string
   party_snapshot: Partial<Party>   // frozen at bill time

@@ -1,5 +1,8 @@
 import type { BillNoFormat, Firm, Invoice } from '@/types/models'
-import { CHALLAN_PREFIX, isDeliveryChallan } from '@/services/invoiceDoc'
+import { CHALLAN_PREFIX, docKind, isDeliveryChallan } from '@/services/invoiceDoc'
+
+export const DEFAULT_CN_PREFIX = 'CN'
+export const DEFAULT_DN_PREFIX = 'DN'
 
 export type { BillNoFormat }
 
@@ -224,4 +227,75 @@ export function allocateChallanNo(
   refDate?: string,
 ): { billNo: string; nextSequenceAfter: number } {
   return allocateBillNo(challanNumberFirm(firm), challanDocsForFirm(invoices, firm.id), refDate)
+}
+
+function noteKindFirm(firm: Firm, kind: 'CREDIT_NOTE' | 'DEBIT_NOTE'): Firm {
+  if (kind === 'CREDIT_NOTE') {
+    const prefix = (firm.cn_prefix || DEFAULT_CN_PREFIX).trim().toUpperCase() || DEFAULT_CN_PREFIX
+    return { ...firm, prefix, next_bill_no: firm.next_cn_no || 1 }
+  }
+  const prefix = (firm.dn_prefix || DEFAULT_DN_PREFIX).trim().toUpperCase() || DEFAULT_DN_PREFIX
+  return { ...firm, prefix, next_bill_no: firm.next_dn_no || 1 }
+}
+
+function noteDocsForFirm(
+  invoices: Invoice[],
+  firmId: string,
+  kind: 'CREDIT_NOTE' | 'DEBIT_NOTE',
+): Invoice[] {
+  return invoices.filter((inv) => inv.firm_id === firmId && docKind(inv) === kind)
+}
+
+export function peekCreditNoteNo(firm: Firm, invoices: Invoice[], refDate?: string): string {
+  return peekBillNo(
+    noteKindFirm(firm, 'CREDIT_NOTE'),
+    noteDocsForFirm(invoices, firm.id, 'CREDIT_NOTE'),
+    refDate,
+  )
+}
+
+export function peekDebitNoteNo(firm: Firm, invoices: Invoice[], refDate?: string): string {
+  return peekBillNo(
+    noteKindFirm(firm, 'DEBIT_NOTE'),
+    noteDocsForFirm(invoices, firm.id, 'DEBIT_NOTE'),
+    refDate,
+  )
+}
+
+export function allocateCreditNoteNo(
+  firm: Firm,
+  invoices: Invoice[],
+  refDate?: string,
+): { billNo: string; nextSequenceAfter: number } {
+  return allocateBillNo(
+    noteKindFirm(firm, 'CREDIT_NOTE'),
+    noteDocsForFirm(invoices, firm.id, 'CREDIT_NOTE'),
+    refDate,
+  )
+}
+
+export function allocateDebitNoteNo(
+  firm: Firm,
+  invoices: Invoice[],
+  refDate?: string,
+): { billNo: string; nextSequenceAfter: number } {
+  return allocateBillNo(
+    noteKindFirm(firm, 'DEBIT_NOTE'),
+    noteDocsForFirm(invoices, firm.id, 'DEBIT_NOTE'),
+    refDate,
+  )
+}
+
+/** Preview next document number for any sales doc type. */
+export function peekDocNo(
+  firm: Firm,
+  invoices: Invoice[],
+  docType: string | null | undefined,
+  refDate?: string,
+): string {
+  const k = docKind(docType)
+  if (k === 'DELIVERY_CHALLAN') return peekChallanNo(firm, invoices, refDate)
+  if (k === 'CREDIT_NOTE') return peekCreditNoteNo(firm, invoices, refDate)
+  if (k === 'DEBIT_NOTE') return peekDebitNoteNo(firm, invoices, refDate)
+  return peekBillNo(firm, invoices, refDate)
 }

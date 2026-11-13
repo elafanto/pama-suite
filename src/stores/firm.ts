@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { db } from '@/data/db'
 import { uid, nowISO } from '@/data/util'
 import { resolveNextSequence } from '@/services/invoiceNumber'
+import { docKind } from '@/services/invoiceDoc'
 import { logActivity } from '@/services/activityLog'
 import {
   archiveFirmSignature,
@@ -48,6 +49,8 @@ export const useFirmStore = defineStore('firm', () => {
         state: '05', pin: '', phone: '', email: '',
         bank_name: 'Union Bank of India', bank_acno: '663205090000180', bank_ifsc: '',
         prefix: 'INV', next_bill_no: 1, bill_no_format: 'dash_4',
+        cn_prefix: 'CN', next_cn_no: 1,
+        dn_prefix: 'DN', next_dn_no: 1,
         terms: DEFAULT_INVOICE_TERMS,
         created_at: now, updated_at: now, is_deleted: false, _dirty: true,
       }
@@ -62,14 +65,19 @@ export const useFirmStore = defineStore('firm', () => {
     let firmMetaTouched = false
     for (const f of firms.value) {
       const needsPrefix = !f.prefix || !f.next_bill_no || !f.bill_no_format
+      const needsNoteSeries = !f.cn_prefix || !f.next_cn_no || !f.dn_prefix || !f.next_dn_no
       const needsTerms = shouldUpgradeInvoiceTerms(f.terms)
-      if (!needsPrefix && !needsTerms) continue
+      if (!needsPrefix && !needsNoteSeries && !needsTerms) continue
       firmMetaTouched = true
       await db.firms.put(plain({
         ...f,
         prefix: f.prefix || 'INV',
         next_bill_no: f.next_bill_no || 1,
         bill_no_format: f.bill_no_format || 'dash_4',
+        cn_prefix: f.cn_prefix || 'CN',
+        next_cn_no: f.next_cn_no || 1,
+        dn_prefix: f.dn_prefix || 'DN',
+        next_dn_no: f.next_dn_no || 1,
         terms: needsTerms ? DEFAULT_INVOICE_TERMS : f.terms,
         updated_at: nowISO(),
         _dirty: true,
@@ -102,6 +110,10 @@ export const useFirmStore = defineStore('firm', () => {
       prefix: data.prefix || 'INV',
       next_bill_no: data.next_bill_no || 1,
       bill_no_format: data.bill_no_format || 'dash_4',
+      cn_prefix: data.cn_prefix || 'CN',
+      next_cn_no: data.next_cn_no || 1,
+      dn_prefix: data.dn_prefix || 'DN',
+      next_dn_no: data.next_dn_no || 1,
       terms: (data.terms || '').trim() || DEFAULT_INVOICE_TERMS,
       id: uid(),
       created_at: now,
@@ -182,10 +194,22 @@ export const useFirmStore = defineStore('firm', () => {
     if (!firmId) return
     const firm = firms.value.find((f) => f.id === firmId)
     if (!firm) return
+    const patch: Partial<Firm> = {}
     const resolved = resolveNextSequence(firm, invoices)
-    if ((firm.next_bill_no || 1) < resolved) {
-      await update(firmId, { next_bill_no: resolved })
-    }
+    if ((firm.next_bill_no || 1) < resolved) patch.next_bill_no = resolved
+    const cnNext = resolveNextSequence(
+      { ...firm, prefix: firm.cn_prefix || 'CN', next_bill_no: firm.next_cn_no || 1 },
+      invoices.filter((i) => i.firm_id === firmId && docKind(i) === 'CREDIT_NOTE'),
+    )
+    const dnNext = resolveNextSequence(
+      { ...firm, prefix: firm.dn_prefix || 'DN', next_bill_no: firm.next_dn_no || 1 },
+      invoices.filter((i) => i.firm_id === firmId && docKind(i) === 'DEBIT_NOTE'),
+    )
+    if ((firm.next_cn_no || 1) < cnNext) patch.next_cn_no = cnNext
+    if ((firm.next_dn_no || 1) < dnNext) patch.next_dn_no = dnNext
+    if (!firm.cn_prefix) patch.cn_prefix = 'CN'
+    if (!firm.dn_prefix) patch.dn_prefix = 'DN'
+    if (Object.keys(patch).length) await update(firmId, patch)
   }
 
   function isSalesLocked(dateOrPeriod: string | undefined | null, firmId = activeFirmId.value): boolean {

@@ -50,7 +50,11 @@ export function docPdfSubtitle(inv: Pick<Invoice, 'doc_type'> | string | null | 
 }
 
 export function docNoLabel(inv: Pick<Invoice, 'doc_type'> | string | null | undefined): string {
-  return isDeliveryChallan(inv) ? 'Challan No' : 'Invoice No'
+  const k = docKind(inv)
+  if (k === 'DELIVERY_CHALLAN') return 'Challan No'
+  if (k === 'CREDIT_NOTE') return 'Credit Note No'
+  if (k === 'DEBIT_NOTE') return 'Debit Note No'
+  return 'Invoice No'
 }
 
 export function docShortLabel(inv: Pick<Invoice, 'doc_type'> | string | null | undefined): string {
