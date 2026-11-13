@@ -6,8 +6,7 @@ export const DEFAULT_INVOICE_TERMS = [
   '1. Payment is due within {{payment_days}} days from the date of invoice.',
   '   Late payment will attract interest @ 1.5% per month from the due date.',
   '',
-  '2. Any discrepancy, shortage or quality issue must be reported in writing within 3 days of receipt.',
-  '   After that the goods will be deemed accepted.',
+  '2. Any discrepancy, shortage or quality issue must be reported in writing within 3 days of receipt. After that the goods will be deemed accepted.',
   '',
   '3. Subject to the exclusive jurisdiction of the courts at Kashipur.',
 ].join('\n')
