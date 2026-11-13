@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_INVOICE_TERMS,
   LEGACY_INVOICE_TERMS_V1,
+  LEGACY_INVOICE_TERMS_V2,
   normalizePaymentDays,
   resolveInvoiceTerms,
   shouldUpgradeInvoiceTerms,
@@ -78,6 +79,7 @@ describe('shouldUpgradeInvoiceTerms', () => {
   it('upgrades blank and legacy defaults', () => {
     expect(shouldUpgradeInvoiceTerms('')).toBe(true)
     expect(shouldUpgradeInvoiceTerms(LEGACY_INVOICE_TERMS_V1)).toBe(true)
+    expect(shouldUpgradeInvoiceTerms(LEGACY_INVOICE_TERMS_V2)).toBe(true)
     expect(shouldUpgradeInvoiceTerms(DEFAULT_INVOICE_TERMS)).toBe(false)
     expect(shouldUpgradeInvoiceTerms('Custom short terms')).toBe(false)
   })

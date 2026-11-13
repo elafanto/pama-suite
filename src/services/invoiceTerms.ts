@@ -28,14 +28,33 @@ export const LEGACY_INVOICE_TERMS_V1 = [
   '5. Subject to the exclusive jurisdiction of the courts at Kashipur.',
 ].join('\n')
 
+/** Previous 3-clause default with clause 2 split across two lines. */
+export const LEGACY_INVOICE_TERMS_V2 = [
+  '1. Payment is due within {{payment_days}} days from the date of invoice.',
+  '   Late payment will attract interest @ 1.5% per month from the due date.',
+  '',
+  '2. Any discrepancy, shortage or quality issue must be reported in writing within 3 days of receipt.',
+  '   After that the goods will be deemed accepted.',
+  '',
+  '3. Subject to the exclusive jurisdiction of the courts at Kashipur.',
+].join('\n')
+
 /** True when stored firm terms should be replaced with the current default. */
 export function shouldUpgradeInvoiceTerms(terms: string | null | undefined): boolean {
   const t = String(terms || '').trim()
   if (!t) return true
   if (t === LEGACY_INVOICE_TERMS_V1.trim()) return true
+  if (t === LEGACY_INVOICE_TERMS_V2.trim()) return true
   // Heuristic: old 5-clause default still on the firm
   if (/Goods remain our property/i.test(t) && /Custom size \/ printed boxes/i.test(t)) return true
   if (/within 7 days of receipt/i.test(t) && /^5\./m.test(t)) return true
+  // Split clause-2 “After that…” on its own indented line
+  if (
+    /within 3 days of receipt\.\s*$/m.test(t) &&
+    /^\s+After that the goods will be deemed accepted\./m.test(t)
+  ) {
+    return true
+  }
   return false
 }
 
