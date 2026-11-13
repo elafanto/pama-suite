@@ -17,6 +17,7 @@ import {
   isDeliveryChallan,
   JOB_WORK_CHALLAN_NOTE,
 } from '@/services/invoiceDoc'
+import { resolveInvoiceTerms, normalizePaymentDays } from '@/services/invoiceTerms'
 import type { Firm, Invoice, Party } from '@/types/models'
 
 function n2(n: number) {
@@ -134,7 +135,7 @@ interface PdfBill {
   cancelled?: boolean
 }
 
-function toPdfFirm(firm: Firm): PdfFirm {
+function toPdfFirm(firm: Firm, paymentDays?: number | null): PdfFirm {
   return {
     name: firm.name || 'Firm',
     addr: firm.addr || '',
@@ -145,9 +146,14 @@ function toPdfFirm(firm: Firm): PdfFirm {
     state: firm.state || '',
     bank: firmBankText(firm),
     decl: firm.decl || 'We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.',
-    terms: firm.terms || '',
+    terms: resolveInvoiceTerms({ firmTerms: firm.terms, paymentDays }),
     signature: resolveFirmSignature(firm),
   }
+}
+
+function paymentDaysForInvoice(invoice: Invoice, partyLookup?: PartyLookup): number | null {
+  const live = resolvePartyById(partyLookup, invoice.party_id)
+  return normalizePaymentDays(live?.payment_days ?? invoice.party_snapshot?.payment_days)
 }
 
 function toPdfBill(inv: Invoice, partyLookup?: PartyLookup): PdfBill {
@@ -195,7 +201,40 @@ function pdfFilename(inv: Invoice): string {
   return `${docPrefix}_${inv.bill_no}_${safeName}.pdf`
 }
 
-function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', copySub = '') {
+function drawTermsPage(pdf: jsPDF, firmName: string, termsText: string) {
+  const PW = 210
+  const PH = 297
+  const M = 12
+  let y = M
+  pdf.setFont('helvetica', 'bold').setFontSize(12)
+  pdf.text('Terms & Conditions', M, y)
+  y += 6
+  pdf.setFont('helvetica', 'normal').setFontSize(9)
+  pdf.setTextColor(80, 80, 80)
+  pdf.text(firmName || 'Firm', M, y)
+  pdf.setTextColor(0, 0, 0)
+  y += 8
+  pdf.setFont('helvetica', 'normal').setFontSize(9)
+  const maxW = PW - M * 2
+  for (const line of termsText.split('\n')) {
+    if (!line.trim()) {
+      y += 3
+      continue
+    }
+    const wrapped = pdf.splitTextToSize(line, maxW) as string[]
+    for (const ww of wrapped) {
+      if (y > PH - M) {
+        pdf.addPage()
+        y = M
+      }
+      pdf.text(ww, M, y)
+      y += 4.2
+    }
+  }
+}
+
+/** Returns optional overflow T&C text that should be printed on the next page. */
+function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', copySub = ''): string | null {
   const PW = 210
   const PH = 297
   const M = 6
@@ -204,6 +243,7 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
   const R = PW - M - P
   const W = R - L
   let y = M + P
+  let pendingTermsPage: string | null = null
 
   pdf.setLineWidth(0.6)
   pdf.setDrawColor(0, 0, 0)
@@ -621,26 +661,51 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
         by += 3.8
       })
     })
-    by += 3
-    pdf.setFont('helvetica', 'bold').setFontSize(7.5)
-    pdf.text('Declaration:', L + 3, by)
-    by += 3.5
-    pdf.setFont('helvetica', 'normal').setFontSize(7)
-    pdf.splitTextToSize(f.decl || '', footHalf - 6).forEach((line: string) => {
-      pdf.text(line, L + 3, by)
-      by += 2.8
-    })
-    by += 3
-    pdf.setFont('helvetica', 'bold').setFontSize(7.5)
-    pdf.text('Terms & Conditions:', L + 3, by)
-    by += 3.5
-    pdf.setFont('helvetica', 'normal').setFontSize(7)
-    ;(f.terms || '').split('\n').forEach((line) => {
-      pdf.splitTextToSize(line, footHalf - 6).forEach((ww: string) => {
-        pdf.text(ww, L + 3, by)
+    by += 2
+    const termsText = (f.terms || '').trim()
+    const termsLines: string[] = []
+    if (termsText) {
+      pdf.setFont('helvetica', 'normal').setFontSize(5.5)
+      termsText.split('\n').forEach((line) => {
+        if (!line.trim()) {
+          termsLines.push('')
+          return
+        }
+        termsLines.push(...(pdf.splitTextToSize(line, footHalf - 6) as string[]))
+      })
+    }
+    const footerLimit = PH - M - 4
+    const termsHeaderH = 6
+    const termsLineH = 2.45
+    const fitsInFooter =
+      termsLines.length > 0 &&
+      by + termsHeaderH + termsLines.length * termsLineH <= footerLimit
+
+    if (fitsInFooter) {
+      pdf.setFont('helvetica', 'bold').setFontSize(7)
+      pdf.text('Terms & Conditions:', L + 3, by)
+      by += 3.2
+      pdf.setFont('helvetica', 'normal').setFontSize(5.5)
+      for (const ww of termsLines) {
+        if (ww) pdf.text(ww, L + 3, by)
+        by += termsLineH
+      }
+    } else if (termsText) {
+      pdf.setFont('helvetica', 'normal').setFontSize(6.5)
+      pdf.setTextColor(80, 80, 80)
+      pdf.text('Terms & Conditions: see next page', L + 3, by)
+      pdf.setTextColor(0, 0, 0)
+      pendingTermsPage = termsText
+    } else if (f.decl) {
+      pdf.setFont('helvetica', 'bold').setFontSize(7.5)
+      pdf.text('Declaration:', L + 3, by)
+      by += 3.5
+      pdf.setFont('helvetica', 'normal').setFontSize(7)
+      pdf.splitTextToSize(f.decl || '', footHalf - 6).forEach((line: string) => {
+        pdf.text(line, L + 3, by)
         by += 2.8
       })
-    })
+    }
   }
 
   const sigX = L + footHalf
@@ -672,6 +737,7 @@ function drawInvoiceOnPDF(pdf: jsPDF, b: PdfBill, f: PdfFirm, copyLabel = '', co
     pdf.text('CANCELLED', PW / 2, PH / 2, { align: 'center', angle: -28 })
     pdf.setTextColor(0, 0, 0)
   }
+  return pendingTermsPage
 }
 
 export type InvoicePdfCopy = 'office' | 'transporter' | 'recipient'
@@ -713,12 +779,16 @@ export function invoicePdfCopyMeta(copy: InvoicePdfCopy = 'office', docType?: st
 
 export function generateInvoicePdf(invoice: Invoice, firm: Firm, partyLookup?: PartyLookup): jsPDF {
   const b = toPdfBill(invoice, partyLookup)
-  const f = toPdfFirm(firm)
+  const f = toPdfFirm(firm, paymentDaysForInvoice(invoice, partyLookup))
   const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true })
   const copies = isDeliveryChallan(invoice) ? CHALLAN_PDF_ALL_COPIES : INVOICE_PDF_ALL_COPIES
   copies.forEach((copy, i) => {
     if (i > 0) pdf.addPage()
-    drawInvoiceOnPDF(pdf, b, f, copy.label, copy.sub)
+    const pendingTerms = drawInvoiceOnPDF(pdf, b, f, copy.label, copy.sub)
+    if (pendingTerms) {
+      pdf.addPage()
+      drawTermsPage(pdf, f.name, pendingTerms)
+    }
   })
   return pdf
 }

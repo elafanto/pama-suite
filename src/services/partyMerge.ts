@@ -19,6 +19,7 @@ export type PartyMergeField =
   | 'acno'
   | 'ifsc'
   | 'acname'
+  | 'payment_days'
 
 export interface PartyMergeFieldPicks {
   /** For each conflict field, which party id wins. Missing = prefer winner if non-empty else loser. */
@@ -67,12 +68,17 @@ function unionRoles(a: PartyRole[], b: PartyRole[]): PartyRole[] {
 function fieldConflicts(winner: Party, loser: Party): PartyMergeField[] {
   const fields: PartyMergeField[] = [
     'name', 'gst', 'phone', 'email', 'addr', 'city', 'pin', 'state',
-    'bank', 'acno', 'ifsc', 'acname',
+    'bank', 'acno', 'ifsc', 'acname', 'payment_days',
   ]
   return fields.filter((f) => {
-    const w = String((winner as any)[f] || '').trim()
-    const l = String((loser as any)[f] || '').trim()
-    return w && l && w.toLowerCase() !== l.toLowerCase()
+    if (f === 'payment_days') {
+      const w = winner.payment_days
+      const l = loser.payment_days
+      return w != null && l != null && Number(w) !== Number(l)
+    }
+    const wv = String((winner as any)[f] || '').trim()
+    const lv = String((loser as any)[f] || '').trim()
+    return wv && lv && wv.toLowerCase() !== lv.toLowerCase()
   })
 }
 
@@ -154,6 +160,14 @@ export async function mergeParties(
     acno: String(pickValue(winner, loser, 'acno', fieldPicks) || ''),
     ifsc: String(pickValue(winner, loser, 'ifsc', fieldPicks) || ''),
     acname: String(pickValue(winner, loser, 'acname', fieldPicks) || ''),
+    payment_days: (() => {
+      const picked = pickValue(winner, loser, 'payment_days', fieldPicks)
+      if (picked == null || picked === '') {
+        return winner.payment_days ?? loser.payment_days ?? null
+      }
+      const n = Number(picked)
+      return Number.isFinite(n) ? n : null
+    })(),
     roles: unionRoles(winner.roles || [], loser.roles || []),
     updated_at: now,
     _dirty: true,

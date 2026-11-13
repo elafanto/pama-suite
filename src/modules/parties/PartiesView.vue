@@ -33,6 +33,7 @@ const blank = (): NewParty => ({
   name: '', roles: ['customer'], gst: '', phone: '', email: '', addr: '',
   city: '', pin: '', state: '', is_consumer: false,
   bank: '', acno: '', ifsc: '', acname: '',
+  payment_days: null,
 })
 const form = reactive<NewParty>(blank())
 
@@ -133,6 +134,7 @@ function openEdit(p: Party) {
     name: p.name, roles: [...p.roles], gst: p.gst, phone: p.phone, email: p.email,
     addr: p.addr, city: p.city, pin: p.pin, state: p.state, is_consumer: p.is_consumer,
     bank: p.bank, acno: p.acno, ifsc: p.ifsc, acname: p.acname,
+    payment_days: p.payment_days == null ? null : Number(p.payment_days),
   })
   resetFormHints()
   if (form.gst.trim()) applyGstValidation()
@@ -147,7 +149,16 @@ async function save() {
   if (!form.name.trim()) return alert('Name required')
   if (form.roles.length === 0) form.roles.push('customer')
   if (form.gst && !form.state) form.state = form.gst.slice(0, 2)
-  const payload = { ...form, gst: formatGstin(form.gst) }
+  const daysRaw = form.payment_days as number | string | null | undefined
+  const days = daysRaw === '' || daysRaw == null ? null : Number(daysRaw)
+  if (days != null && (!Number.isFinite(days) || days < 0)) {
+    return alert('Payment days 0 ya positive number hona chahiye')
+  }
+  const payload = {
+    ...form,
+    gst: formatGstin(form.gst),
+    payment_days: days == null ? null : Math.round(days),
+  }
   if (editingId.value) await store.update(editingId.value, payload)
   else await store.add(payload)
   showModal.value = false
@@ -349,6 +360,20 @@ onMounted(store.load)
           <div><label class="pp-label">City</label><input v-model="form.city" class="pp-input" /></div>
           <div><label class="pp-label">PIN</label><input v-model="form.pin" class="pp-input" /></div>
           <div><label class="pp-label">State code</label><input v-model="form.state" class="pp-input" placeholder="05" /></div>
+        </div>
+        <div>
+          <label class="pp-label">Payment due (days)</label>
+          <input
+            v-model.number="form.payment_days"
+            type="number"
+            min="0"
+            step="1"
+            class="pp-input !w-40"
+            placeholder="e.g. 7 / 15 / 30"
+          />
+          <p class="text-xs text-slate-500 mt-1">
+            Bill Terms &amp; Conditions me “Payment is due within <strong>X</strong> days” yahi se aayega.
+          </p>
         </div>
 
         <div class="border-t border-slate-200 pt-3">

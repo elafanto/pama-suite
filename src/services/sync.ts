@@ -22,6 +22,7 @@ import {
 } from '@/services/payrollCloud'
 import { dedupeAllPayrollRuns } from '@/services/payrollRuns'
 import { onLocalDirty } from '@/services/localDirty'
+import { normalizePaymentDays } from '@/services/invoiceTerms'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 
 type SyncTable =
@@ -279,6 +280,7 @@ async function upsertCloudRow(
       phone: rec.phone, email: rec.email, addr: rec.addr, city: rec.city,
       pin: rec.pin, state: rec.state, is_consumer: rec.is_consumer,
       bank: rec.bank, acno: rec.acno, ifsc: rec.ifsc, acname: rec.acname,
+      payment_days: normalizePaymentDays(rec.payment_days),
     })
   } else if (localName === 'items') {
     Object.assign(row, {
@@ -295,7 +297,7 @@ async function upsertCloudRow(
   let { error } = await sb.from(remoteName).upsert(row)
   if (error && /column .* does not exist|Could not find .* column/i.test(error.message || '')) {
     // Older Supabase schemas keep syncing core data until the latest migration is applied.
-    for (const k of ['signature', 'track_stock', 'opening_stock', 'reorder_level', 'purchase_rate', 'locked_sales_months']) {
+    for (const k of ['signature', 'track_stock', 'opening_stock', 'reorder_level', 'purchase_rate', 'locked_sales_months', 'payment_days']) {
       delete row[k]
     }
     ;({ error } = await sb.from(remoteName).upsert(row))
@@ -552,6 +554,7 @@ export async function pullFromCloud(since?: string): Promise<{ ok: boolean; pull
         acno: r.acno || '',
         ifsc: r.ifsc || '',
         acname: r.acname || '',
+        payment_days: normalizePaymentDays(r.payment_days),
         created_at: r.created_at,
         updated_at: r.updated_at,
         is_deleted: r.is_deleted,
