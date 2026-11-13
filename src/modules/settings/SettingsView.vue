@@ -21,6 +21,10 @@ import { peekBillNo, BILL_NO_FORMAT_OPTIONS } from '@/services/invoiceNumber'
 import { formatGstin } from '@/services/gst'
 import { getDocumentStorageStats } from '@/services/documentAttachments'
 import { exportGstAuditZip, listRecentIndianFYLabels } from '@/services/documentAuditExport'
+import { DEFAULT_INVOICE_TERMS } from '@/services/invoiceTerms'
+
+/** Shown in Settings help — must not be written as raw mustache in the template. */
+const paymentDaysToken = '{{payment_days}}'
 
 const firmStore = useFirmStore()
 const auth = useAuthStore()
@@ -61,6 +65,7 @@ const blank = (): NewFirm => ({
   name: '', gst: '', addr: '', city: '', state: '05', pin: '', phone: '', email: '',
   bank_name: '', bank_acno: '', bank_ifsc: '',
   prefix: 'INV', next_bill_no: 1, bill_no_format: 'dash_4' as BillNoFormat,
+  terms: DEFAULT_INVOICE_TERMS,
   signature: undefined,
 })
 const form = reactive<NewFirm>(blank())
@@ -77,9 +82,14 @@ function openEdit(f: Firm) {
     phone: f.phone, email: f.email, bank_name: f.bank_name, bank_acno: f.bank_acno, bank_ifsc: f.bank_ifsc,
     prefix: f.prefix || 'INV', next_bill_no: f.next_bill_no || 1,
     bill_no_format: f.bill_no_format || 'dash_4',
+    terms: (f.terms || '').trim() || DEFAULT_INVOICE_TERMS,
     signature: f.signature || undefined,
   })
   showModal.value = true
+}
+
+function resetDefaultTerms() {
+  form.terms = DEFAULT_INVOICE_TERMS
 }
 
 function onSignatureFile(e: Event) {
@@ -659,6 +669,24 @@ onMounted(async () => {
             </div>
           </div>
           <p class="text-xs text-slate-400 mt-1">Transparent PNG recommended. Used on invoice PDF and bill preview.</p>
+        </div>
+        <div class="border-t border-slate-200 pt-3">
+          <div class="flex items-center justify-between gap-2 mb-1 flex-wrap">
+            <label class="pp-label !mb-0">Invoice Terms &amp; Conditions</label>
+            <button type="button" class="pp-btn pp-btn-ghost !py-1 text-xs" @click="resetDefaultTerms">
+              Load default T&amp;C
+            </button>
+          </div>
+          <textarea
+            v-model="form.terms"
+            class="pp-input font-mono text-xs min-h-[160px]"
+            rows="10"
+            spellcheck="true"
+          />
+          <p class="text-xs text-slate-500 mt-1">
+            Use <code class="bg-slate-100 px-1 rounded">{{ paymentDaysToken }}</code> for party payment days
+            (Parties → Payment due). Blank days show as ______ on the bill.
+          </p>
         </div>
         <div class="flex justify-end gap-2 pt-2">
           <button class="pp-btn pp-btn-ghost" @click="showModal = false">Cancel</button>

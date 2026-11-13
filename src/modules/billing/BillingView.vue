@@ -45,6 +45,7 @@ import { billUpdatesStock } from '@/services/billStock'
 import { periodLabelYm, salesMonthLockMessage, salesPeriodFromDate } from '@/services/salesMonthLock'
 import { isInvoiceActive, isInvoiceCancelled } from '@/services/invoiceStatus'
 import { computeInvoiceTotals, inferInvoiceDiscountMode, type InvoiceDiscountMode } from '@/services/invoiceTotals'
+import { resolveInvoiceTerms, normalizePaymentDays } from '@/services/invoiceTerms'
 import {
   allocateCustomerReceipt,
   allocationAppliedTotal,
@@ -72,6 +73,7 @@ const showQuickItem = ref(false)
 const quickCust = reactive<NewParty>({
   name: '', roles: ['customer'], gst: '', phone: '', email: '', addr: '',
   city: '', pin: '', state: '05', is_consumer: false, bank: '', acno: '', ifsc: '', acname: '',
+  payment_days: null,
 })
 const quickItem = reactive<NewItem>({
   name: '', unit: 'KG', hsn: '4804', gst: 18, rate: 0, size: '', gsm: '', bf: '',
@@ -520,6 +522,28 @@ const formGstKind = computed({
 })
 const formIsIntra = computed(() => !isInterstateGst(form.gst_type))
 
+/** Live party payment days → Terms clause “within X days”. */
+const formInvoiceTerms = computed(() => {
+  const live = form.party_id
+    ? partyStore.list.find((p) => !p.is_deleted && p.id === form.party_id)
+    : undefined
+  const days = normalizePaymentDays(live?.payment_days)
+  return resolveInvoiceTerms({
+    firmTerms: firmStore.activeFirm?.terms,
+    paymentDays: days,
+  })
+})
+
+const previewInvoiceTerms = computed(() => {
+  const inv = previewInvoice.value
+  if (!inv) return formInvoiceTerms.value
+  const live = partyLookup(inv.party_id)
+  return resolveInvoiceTerms({
+    firmTerms: firmStore.activeFirm?.terms,
+    paymentDays: normalizePaymentDays(live?.payment_days ?? inv.party_snapshot?.payment_days),
+  })
+})
+
 const stockRows = computed(() =>
   computeStock(itemStore.list, purchaseStore.list, invoiceStore.list, firmStore.activeFirmId, stockMovements.value),
 )
@@ -668,6 +692,7 @@ function openQuickCust() {
   Object.assign(quickCust, {
     name: form.party_name.trim() || '', roles: ['customer'], gst: '', phone: '', email: '', addr: '',
     city: '', pin: '', state: '05', is_consumer: false, bank: '', acno: '', ifsc: '', acname: '',
+    payment_days: null,
   })
   showQuickCust.value = true
 }
@@ -955,7 +980,8 @@ async function saveInvoice() {
       phone: customerObj.phone,
       gst: formatGstin(customerObj.gst),
       state: customerObj.state,
-      is_consumer: customerObj.is_consumer
+      is_consumer: customerObj.is_consumer,
+      payment_days: customerObj.payment_days == null ? null : Number(customerObj.payment_days),
     } : { name: form.party_name.trim() },
     sameAsBuyer: form.sameAsBuyer,
     ship: form.sameAsBuyer ? null : {
@@ -2389,6 +2415,17 @@ onMounted(async () => {
           <div><label class="pp-label">PIN</label><input v-model="quickCust.pin" class="pp-input" /></div>
           <div><label class="pp-label">State</label><input v-model="quickCust.state" class="pp-input" placeholder="05" /></div>
         </div>
+        <div>
+          <label class="pp-label">Payment due (days)</label>
+          <input
+            v-model.number="quickCust.payment_days"
+            type="number"
+            min="0"
+            step="1"
+            class="pp-input !w-40"
+            placeholder="e.g. 7 / 15 / 30"
+          />
+        </div>
         <div class="flex justify-end gap-2 pt-2">
           <button class="pp-btn pp-btn-ghost" @click="showQuickCust = false">Cancel</button>
           <button class="pp-btn pp-btn-primary" @click="saveQuickCust">Save Customer</button>
@@ -2602,9 +2639,12 @@ onMounted(async () => {
                 <strong>Job work note:</strong><br />
                 {{ JOB_WORK_CHALLAN_NOTE }}
               </div>
-              <div class="pt-2 text-[9px] text-slate-500 leading-normal">
-                <strong>Terms &amp; Declaration:</strong><br />
-                {{ firmStore.activeFirm?.terms || 'We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.' }}
+              <div
+                v-if="!isDeliveryChallan(previewInvoice)"
+                class="pt-2 text-[9px] text-slate-500 leading-normal"
+              >
+                <strong>Terms &amp; Conditions:</strong><br />
+                <span class="whitespace-pre-wrap">{{ previewInvoiceTerms }}</span>
               </div>
             </div>
             <div class="text-center flex flex-col justify-between items-center min-h-28 pt-2">
@@ -2788,9 +2828,12 @@ onMounted(async () => {
               <strong>Job work note:</strong><br />
               {{ JOB_WORK_CHALLAN_NOTE }}
             </div>
-          <div class="pt-2 text-[9px] text-slate-500 leading-normal">
-            <strong>Terms &amp; Declaration:</strong><br />
-            {{ firmStore.activeFirm?.terms || 'We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.' }}
+          <div
+            v-if="!isDeliveryChallan(previewInvoice)"
+            class="pt-2 text-[9px] text-slate-500 leading-normal"
+          >
+            <strong>Terms &amp; Conditions:</strong><br />
+            <span class="whitespace-pre-wrap">{{ previewInvoiceTerms }}</span>
           </div>
         </div>
         <div class="text-center flex flex-col justify-between items-center min-h-28 pt-2">

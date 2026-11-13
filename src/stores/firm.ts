@@ -18,6 +18,7 @@ import {
   salesPeriodFromDate,
   withLockedSalesMonth,
 } from '@/services/salesMonthLock'
+import { DEFAULT_INVOICE_TERMS } from '@/services/invoiceTerms'
 
 export type FirmLinkedCounts = { parties: number; invoices: number; purchases: number }
 
@@ -47,6 +48,7 @@ export const useFirmStore = defineStore('firm', () => {
         state: '05', pin: '', phone: '', email: '',
         bank_name: 'Union Bank of India', bank_acno: '663205090000180', bank_ifsc: '',
         prefix: 'INV', next_bill_no: 1, bill_no_format: 'dash_4',
+        terms: DEFAULT_INVOICE_TERMS,
         created_at: now, updated_at: now, is_deleted: false, _dirty: true,
       }
       await db.firms.add(def)
@@ -57,19 +59,23 @@ export const useFirmStore = defineStore('firm', () => {
       setActive(firms.value[0].id)
     }
 
+    let firmMetaTouched = false
     for (const f of firms.value) {
-      if (!f.prefix || !f.next_bill_no || !f.bill_no_format) {
-        await db.firms.put(plain({
-          ...f,
-          prefix: f.prefix || 'INV',
-          next_bill_no: f.next_bill_no || 1,
-          bill_no_format: f.bill_no_format || 'dash_4',
-          updated_at: nowISO(),
-          _dirty: true,
-        }))
-      }
+      const needsPrefix = !f.prefix || !f.next_bill_no || !f.bill_no_format
+      const needsTerms = !(f.terms || '').trim()
+      if (!needsPrefix && !needsTerms) continue
+      firmMetaTouched = true
+      await db.firms.put(plain({
+        ...f,
+        prefix: f.prefix || 'INV',
+        next_bill_no: f.next_bill_no || 1,
+        bill_no_format: f.bill_no_format || 'dash_4',
+        terms: needsTerms ? DEFAULT_INVOICE_TERMS : f.terms,
+        updated_at: nowISO(),
+        _dirty: true,
+      }))
     }
-    if (firms.value.some((f) => !f.prefix || !f.next_bill_no || !f.bill_no_format)) {
+    if (firmMetaTouched) {
       firms.value = (await db.firms.filter((x) => !x.is_deleted).toArray())
         .sort((a, b) => a.name.localeCompare(b.name))
     }
@@ -96,6 +102,7 @@ export const useFirmStore = defineStore('firm', () => {
       prefix: data.prefix || 'INV',
       next_bill_no: data.next_bill_no || 1,
       bill_no_format: data.bill_no_format || 'dash_4',
+      terms: (data.terms || '').trim() || DEFAULT_INVOICE_TERMS,
       id: uid(),
       created_at: now,
       updated_at: now,

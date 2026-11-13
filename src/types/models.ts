@@ -28,6 +28,8 @@ export interface Party extends BaseRecord {
   acno: string
   ifsc: string
   acname: string
+  /** Credit period in days — filled into invoice Terms & Conditions payment clause. */
+  payment_days?: number | null
 }
 
 export type ItemUnit = 'PCS' | 'KG' | 'MTR' | 'NOS' | 'BOX' | 'SET' | string
