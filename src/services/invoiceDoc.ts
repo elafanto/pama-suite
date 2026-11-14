@@ -32,6 +32,15 @@ export function isCreditOrDebitNote(inv: Pick<Invoice, 'doc_type'> | string | nu
   return k === 'CREDIT_NOTE' || k === 'DEBIT_NOTE'
 }
 
+export function isCreditNote(inv: Pick<Invoice, 'doc_type'> | string | null | undefined): boolean {
+  return docKind(inv) === 'CREDIT_NOTE'
+}
+
+/** Docs that are not customer receivables (no paid / outstanding columns). */
+export function hidesBillReceivable(inv: Pick<Invoice, 'doc_type'> | string | null | undefined): boolean {
+  return isDeliveryChallan(inv) || isCreditNote(inv)
+}
+
 export function isGstrMonthDoc(inv: Pick<Invoice, 'doc_type'> | string | null | undefined): boolean {
   return isTaxInvoiceDoc(inv) || isCreditOrDebitNote(inv) || isDeliveryChallan(inv)
 }

@@ -30,9 +30,11 @@ import {
   docNoLabel,
   docPdfSubtitle,
   docPdfTitle,
+  isCreditNote,
   isCreditOrDebitNote,
   isDeliveryChallan,
   isTaxInvoiceDoc,
+  hidesBillReceivable,
   JOB_WORK_CHALLAN_NOTE,
 } from '@/services/invoiceDoc'
 import {
@@ -1273,8 +1275,8 @@ const filteredInvoicesBase = computed(() => {
     if (statusFilter.value === 'cancelled') {
       if (!isInvoiceCancelled(inv)) return false
     } else if (statusFilter.value !== 'all') {
-      // Job-work challans are not receivables — keep them out of Paid/Partial/Unpaid filters
-      if (isDeliveryChallan(inv) || inv.pay_status !== statusFilter.value) return false
+      // Challan / credit note are not receivables — keep them out of Paid/Partial/Unpaid filters
+      if (hidesBillReceivable(inv) || inv.pay_status !== statusFilter.value) return false
     }
     if (histFrom.value && inv.date < histFrom.value) return false
     if (histTo.value && inv.date > histTo.value) return false
@@ -1291,13 +1293,20 @@ const filteredInvoices = salesSort.sortedFrom(filteredInvoicesBase, {
   bill_no: (r) => r.bill_no,
   party_name: (r) => r.party_name,
   grand_total: (r) => r.grand_total,
-  amt_paid: (r) => (isDeliveryChallan(r) ? 0 : r.amt_paid || 0),
-  outstanding: (r) => (isDeliveryChallan(r) ? 0 : r.grand_total - (r.amt_paid || 0)),
-  pay_status: (r) => (isDeliveryChallan(r) ? 'CHALLAN' : r.pay_status),
+  amt_paid: (r) => (hidesBillReceivable(r) ? 0 : r.amt_paid || 0),
+  outstanding: (r) => (hidesBillReceivable(r) ? 0 : r.grand_total - (r.amt_paid || 0)),
+  pay_status: (r) => (
+    isDeliveryChallan(r) ? 'CHALLAN' : isCreditNote(r) ? 'CREDIT_NOTE' : r.pay_status
+  ),
 })
 
 // Outstanding payment recorder modal actions
 function openPaymentModal(inv: Invoice) {
+  if (hidesBillReceivable(inv)) {
+    return alert(isCreditNote(inv)
+      ? 'Credit note pe outstanding / payment record nahi hota.'
+      : 'Is document pe payment record nahi hota.')
+  }
   payInvoiceId.value = inv.id
   const outstanding = inv.grand_total - inv.amt_paid
   payAmount.value = outstanding > 0 ? parseFloat(outstanding.toFixed(2)) : 0
@@ -2189,21 +2198,29 @@ onMounted(async () => {
                   class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 font-semibold uppercase tracking-wide"
                 >DC</span>
                 <span
+                  v-if="isCreditNote(inv)"
+                  class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-800 font-semibold uppercase tracking-wide"
+                >CN</span>
+                <span
                   v-if="isInvoiceCancelled(inv)"
                   class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-white font-semibold uppercase tracking-wide"
                 >Cancelled</span>
               </td>
               <td class="px-4 py-2.5">{{ inv.party_name }}</td>
               <td class="px-4 py-2.5 text-right font-semibold text-slate-700">₹{{ inv.grand_total.toLocaleString('en-IN') }}</td>
-              <td class="px-4 py-2.5 text-right" :class="isDeliveryChallan(inv) ? 'text-slate-400' : 'text-emerald-600'">
-                {{ isDeliveryChallan(inv) ? '—' : `₹${(inv.amt_paid || 0).toLocaleString('en-IN')}` }}
+              <td class="px-4 py-2.5 text-right" :class="hidesBillReceivable(inv) ? 'text-slate-400' : 'text-emerald-600'">
+                {{ hidesBillReceivable(inv) ? '—' : `₹${(inv.amt_paid || 0).toLocaleString('en-IN')}` }}
               </td>
               <td
                 class="px-4 py-2.5 text-right font-semibold"
-                :class="isDeliveryChallan(inv) ? 'text-slate-400' : 'text-rose-600'"
-                :title="isDeliveryChallan(inv) ? 'Job-work delivery challan — not a receivable' : undefined"
+                :class="hidesBillReceivable(inv) ? 'text-slate-400' : 'text-rose-600'"
+                :title="isDeliveryChallan(inv)
+                  ? 'Job-work delivery challan — not a receivable'
+                  : isCreditNote(inv)
+                    ? 'Credit note — not a receivable outstanding'
+                    : undefined"
               >
-                {{ isDeliveryChallan(inv) ? '—' : `₹${(inv.grand_total - (inv.amt_paid || 0)).toLocaleString('en-IN')}` }}
+                {{ hidesBillReceivable(inv) ? '—' : `₹${(inv.grand_total - (inv.amt_paid || 0)).toLocaleString('en-IN')}` }}
               </td>
               <td class="px-4 py-2.5 text-center">
                 <span
@@ -2216,6 +2233,11 @@ onMounted(async () => {
                   title="Job-work challan — not billed / not receivable"
                 >JOB WORK</span>
                 <span
+                  v-else-if="isCreditNote(inv)"
+                  class="pp-badge bg-violet-100 text-violet-800"
+                  title="Credit note — reduces receivable; no outstanding"
+                >CREDIT NOTE</span>
+                <span
                   v-else
                   :class="['pp-badge',
                               inv.pay_status === 'PAID' ? 'bg-emerald-100 text-emerald-700' :
@@ -2227,13 +2249,13 @@ onMounted(async () => {
               <td class="px-4 py-2.5 text-right whitespace-nowrap">
                 <div class="inline-flex items-center justify-end gap-1 relative">
                   <button
-                    v-if="isInvoiceActive(inv) && !isDeliveryChallan(inv)"
+                    v-if="isInvoiceActive(inv) && !hidesBillReceivable(inv)"
                     @click="openPaymentModal(inv)"
                     class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs"
                     title="Record Payment"
                   >💳</button>
                   <button
-                    v-if="isInvoiceActive(inv) && !isDeliveryChallan(inv) && (inv.amt_paid || 0) > 0"
+                    v-if="isInvoiceActive(inv) && !hidesBillReceivable(inv) && (inv.amt_paid || 0) > 0"
                     type="button"
                     class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs text-rose-700"
                     title="Remove recorded payment"
