@@ -229,6 +229,30 @@ const itemAttrsOpen = ref<Record<number, boolean>>({})
 /** Extra transport fields: LR/RR, Transporter ID, Document No. */
 const transportExtraOpen = ref(false)
 
+/** Last auto-filled Destination — skip overwrite if user typed a custom value. */
+const lastAutoDest = ref('')
+
+function shippingDestinationText(): string {
+  if (form.sameAsBuyer) {
+    const key = form.party_name.trim().toLowerCase()
+    const party = partyStore.list.find((p) => !p.is_deleted && p.name.toLowerCase() === key)
+    if (party) {
+      return [party.city, party.pin].map((x) => String(x || '').trim()).filter(Boolean).join(' - ')
+    }
+  }
+  return [form.ship.city, form.ship.pin].map((x) => String(x || '').trim()).filter(Boolean).join(' - ')
+}
+
+function syncDestinationFromShip() {
+  const text = shippingDestinationText()
+  if (!text) return
+  const current = String(form.dest || '').trim()
+  if (!current || current === lastAutoDest.value) {
+    form.dest = text
+    lastAutoDest.value = text
+  }
+}
+
 function hasTransportExtraValues() {
   return !!(
     String(form.lr || '').trim()
@@ -397,6 +421,7 @@ function resetForm() {
   editingId.value = null
   itemAttrsOpen.value = {}
   transportExtraOpen.value = false
+  lastAutoDest.value = ''
   Object.assign(form, initialFormState())
   addRow()
 }
@@ -540,6 +565,7 @@ function handleCustSelect() {
     // Prefer GSTIN prefix — party.state may be a name like "Uttarakhand" from old data.
     form.ship.state = resolvePlaceOfSupplyState({ gstin: match.gst, state: match.state }) || match.state
     detectGstType()
+    syncDestinationFromShip()
   } else {
     form.party_id = null
   }
@@ -576,7 +602,15 @@ function detectGstType() {
   )
 }
 
-watch(() => form.sameAsBuyer, detectGstType)
+watch(() => form.sameAsBuyer, () => {
+  detectGstType()
+  syncDestinationFromShip()
+})
+
+watch(
+  () => [form.ship.city, form.ship.pin] as const,
+  () => { syncDestinationFromShip() },
+)
 
 watch(() => form.doc_type, (dt) => {
   if (isDeliveryChallan(dt)) {
