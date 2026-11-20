@@ -202,7 +202,7 @@ const initialFormState = () => ({
   },
   dispatch: 'Road',
   lr: '',
-  vehicle: '',
+  vehicle: 'UK 04 CA 5262',
   transMode: '1',
   transporterName: '',
   transporterId: '',
@@ -1872,7 +1872,7 @@ onMounted(async () => {
             </summary>
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
               <div><label class="pp-label">Dispatch via</label><input v-model="form.dispatch" class="pp-input" placeholder="Road" /></div>
-              <div><label class="pp-label">Vehicle Number</label><input v-model="form.vehicle" class="pp-input uppercase" placeholder="UA-07-C-1234" /></div>
+              <div><label class="pp-label">Vehicle Number</label><input v-model="form.vehicle" class="pp-input uppercase" placeholder="UK 04 CA 5262" /></div>
               <div><label class="pp-label">Transporter Name</label><input v-model="form.transporterName" class="pp-input" /></div>
               <div><label class="pp-label">E-Way Bill No.</label><input v-model="form.eway" class="pp-input" /></div>
               <div><label class="pp-label">Destination</label><input v-model="form.dest" class="pp-input" /></div>
