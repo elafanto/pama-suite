@@ -1872,7 +1872,7 @@ onMounted(async () => {
               <thead class="bg-slate-100 text-slate-500 uppercase font-semibold">
                 <tr>
                   <th class="px-2 py-2 text-center w-8">Sl</th>
-                  <th class="px-2 py-2 text-left min-w-[220px]">Item Description</th>
+                  <th class="px-2 py-2 text-left min-w-[340px]">Item Description</th>
                   <th class="px-2 py-2 text-center w-24">HSN</th>
                   <th class="px-2 py-2 text-right w-24">Qty</th>
                   <th class="px-2 py-2 text-center w-20">Unit</th>
@@ -1886,13 +1886,33 @@ onMounted(async () => {
                 <tr v-for="(row, idx) in form.items" :key="idx"
                   :class="['border-t border-slate-100 align-top', rowHasStockWarning(row) ? 'bg-red-50' : isRowIncomplete(row) ? 'bg-amber-50/50' : 'hover:bg-slate-50/30']">
                   <td class="text-center font-bold text-slate-400 py-2">{{ idx + 1 }}</td>
-                  <td class="p-1 min-w-[220px]">
+                  <td class="p-1 min-w-[340px]">
                     <input v-model="row.name" list="itemList" @input="handleItemSelect(row)" class="pp-input !py-1.5 !px-2 w-full" placeholder="Product name..." />
-                    <div class="mt-1.5 grid grid-cols-2 gap-1.5 sm:grid-cols-[5.25rem_3.75rem_3.25rem_minmax(0,1fr)]">
-                      <input v-model="row.size" class="pp-input !py-1 !px-1.5 text-center min-w-0 text-xs" placeholder="Size" title="Size" />
-                      <input v-model="row.gsm" class="pp-input !py-1 !px-1 text-center min-w-0 text-xs" placeholder="GSM" title="GSM" />
-                      <input v-model="row.bf" class="pp-input !py-1 !px-1 text-center min-w-0 text-xs" placeholder="BF" title="BF" />
-                      <input v-model="row.extra" class="pp-input !py-1 !px-2 min-w-0 sm:col-auto col-span-2" placeholder="Extra" title="Extra" />
+                    <div class="mt-1.5 flex flex-nowrap items-center gap-1">
+                      <input
+                        v-model="row.size"
+                        class="pp-input !py-1 !px-1 text-center text-xs w-[4.25rem] shrink-0"
+                        placeholder="Size"
+                        title="Size"
+                      />
+                      <input
+                        v-model="row.gsm"
+                        class="pp-input !py-1 !px-1 text-center text-xs w-[3rem] shrink-0"
+                        placeholder="GSM"
+                        title="GSM"
+                      />
+                      <input
+                        v-model="row.bf"
+                        class="pp-input !py-1 !px-1 text-center text-xs w-[2.75rem] shrink-0"
+                        placeholder="BF"
+                        title="BF"
+                      />
+                      <input
+                        v-model="row.extra"
+                        class="pp-input !py-1 !px-2 text-xs min-w-[9rem] flex-1"
+                        placeholder="Extra"
+                        title="Extra"
+                      />
                     </div>
                   </td>
                   <td class="p-1">
