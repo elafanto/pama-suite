@@ -223,6 +223,29 @@ const initialFormState = () => ({
 
 const form = reactive(initialFormState())
 
+/** Per-row expand for Size / GSM / BF (hidden by default). */
+const itemAttrsOpen = ref<Record<number, boolean>>({})
+
+function isItemAttrsOpen(idx: number) {
+  return !!itemAttrsOpen.value[idx]
+}
+
+function toggleItemAttrs(idx: number) {
+  itemAttrsOpen.value = { ...itemAttrsOpen.value, [idx]: !itemAttrsOpen.value[idx] }
+}
+
+function rowHasSizeGsmBf(row: Pick<InvoiceItemLine, 'size' | 'gsm' | 'bf'>) {
+  return !!(String(row.size || '').trim() || String(row.gsm || '').trim() || String(row.bf || '').trim())
+}
+
+function openItemAttrsWhereFilled() {
+  const next: Record<number, boolean> = {}
+  form.items.forEach((row, idx) => {
+    if (rowHasSizeGsmBf(row)) next[idx] = true
+  })
+  itemAttrsOpen.value = next
+}
+
 const editingInvoice = computed(() =>
   editingId.value ? invoiceStore.list.find((i) => i.id === editingId.value) : undefined,
 )
@@ -357,6 +380,7 @@ function removeRow(idx: number) {
 
 function resetForm() {
   editingId.value = null
+  itemAttrsOpen.value = {}
   Object.assign(form, initialFormState())
   addRow()
 }
@@ -1206,6 +1230,7 @@ function editInvoice(inv: Invoice) {
   })
 
   form.items = inv.items.map(row => ({ ...row }))
+  openItemAttrsWhereFilled()
   activeTab.value = 'new'
 }
 
@@ -1257,6 +1282,7 @@ function copyInvoice(inv: Invoice) {
   })
 
   form.items = inv.items.map(row => ({ ...row }))
+  openItemAttrsWhereFilled()
   activeTab.value = 'new'
   alert('Invoice copied as a new draft!')
 }
@@ -1520,6 +1546,7 @@ function applyTemplate(tpl: Template) {
       gst: item.gst
     })
   })
+  openItemAttrsWhereFilled()
 
   activeTab.value = 'new'
   alert(`Template "${tpl.name}" applied successfully.`)
@@ -1539,6 +1566,7 @@ function applyBoxCalcPrefill() {
     form.items = []
     for (const it of pre.items || []) addRow(it)
     if (form.items.length === 0) addRow()
+    openItemAttrsWhereFilled()
     activeTab.value = 'new'
     return true
   } catch {
@@ -1891,6 +1919,28 @@ onMounted(async () => {
                     <div class="mt-1.5 space-y-1">
                       <div class="flex items-center gap-1">
                         <input
+                          v-model="row.extra"
+                          class="pp-input !py-1 !px-2 text-xs min-w-0 flex-1"
+                          placeholder="Extra"
+                          title="Extra"
+                        />
+                        <button
+                          type="button"
+                          class="pp-btn pp-btn-ghost !px-1.5 !py-1 text-xs shrink-0 text-slate-600"
+                          :title="isItemAttrsOpen(idx) ? 'Hide Size / GSM / BF' : 'Show Size / GSM / BF'"
+                          :aria-expanded="isItemAttrsOpen(idx)"
+                          @click="toggleItemAttrs(idx)"
+                        >
+                          <span class="inline-block w-3 text-center font-bold">{{ isItemAttrsOpen(idx) ? '▾' : '▸' }}</span>
+                          <span
+                            v-if="!isItemAttrsOpen(idx) && rowHasSizeGsmBf(row)"
+                            class="ml-0.5 inline-block h-1.5 w-1.5 rounded-full bg-accent"
+                            title="Size/GSM/BF filled"
+                          />
+                        </button>
+                      </div>
+                      <div v-if="isItemAttrsOpen(idx)" class="flex items-center gap-1">
+                        <input
                           v-model="row.size"
                           class="pp-input !py-1 !px-1 text-center text-xs !w-16 shrink-0"
                           placeholder="Size"
@@ -1909,12 +1959,6 @@ onMounted(async () => {
                           title="BF"
                         />
                       </div>
-                      <input
-                        v-model="row.extra"
-                        class="pp-input !py-1 !px-2 text-xs w-full"
-                        placeholder="Extra"
-                        title="Extra"
-                      />
                     </div>
                   </td>
                   <td class="p-1">
