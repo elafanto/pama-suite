@@ -200,7 +200,7 @@ const initialFormState = () => ({
     gstin: '',
     state: ''
   },
-  dispatch: '',
+  dispatch: 'Road',
   lr: '',
   vehicle: '',
   transMode: '1',
@@ -225,6 +225,21 @@ const form = reactive(initialFormState())
 
 /** Per-row expand for Size / GSM / BF (hidden by default). */
 const itemAttrsOpen = ref<Record<number, boolean>>({})
+
+/** Extra transport fields: LR/RR, Transporter ID, Document No. */
+const transportExtraOpen = ref(false)
+
+function hasTransportExtraValues() {
+  return !!(
+    String(form.lr || '').trim()
+    || String(form.transporterId || '').trim()
+    || String(form.docNo || '').trim()
+  )
+}
+
+function syncTransportExtraOpen() {
+  transportExtraOpen.value = hasTransportExtraValues()
+}
 
 function isItemAttrsOpen(idx: number) {
   return !!itemAttrsOpen.value[idx]
@@ -381,6 +396,7 @@ function removeRow(idx: number) {
 function resetForm() {
   editingId.value = null
   itemAttrsOpen.value = {}
+  transportExtraOpen.value = false
   Object.assign(form, initialFormState())
   addRow()
 }
@@ -1231,6 +1247,7 @@ function editInvoice(inv: Invoice) {
 
   form.items = inv.items.map(row => ({ ...row }))
   openItemAttrsWhereFilled()
+  syncTransportExtraOpen()
   activeTab.value = 'new'
 }
 
@@ -1283,6 +1300,7 @@ function copyInvoice(inv: Invoice) {
 
   form.items = inv.items.map(row => ({ ...row }))
   openItemAttrsWhereFilled()
+  syncTransportExtraOpen()
   activeTab.value = 'new'
   alert('Invoice copied as a new draft!')
 }
@@ -1853,15 +1871,33 @@ onMounted(async () => {
               <span class="transition-transform group-open:rotate-180">▼</span>
             </summary>
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
-              <div><label class="pp-label">Dispatch via</label><input v-model="form.dispatch" class="pp-input" placeholder="Road, Courier..." /></div>
-              <div><label class="pp-label">LR/RR No.</label><input v-model="form.lr" class="pp-input" /></div>
+              <div><label class="pp-label">Dispatch via</label><input v-model="form.dispatch" class="pp-input" placeholder="Road" /></div>
               <div><label class="pp-label">Vehicle Number</label><input v-model="form.vehicle" class="pp-input uppercase" placeholder="UA-07-C-1234" /></div>
-              <div><label class="pp-label">Transporter ID</label><input v-model="form.transporterId" class="pp-input uppercase" /></div>
               <div><label class="pp-label">Transporter Name</label><input v-model="form.transporterName" class="pp-input" /></div>
               <div><label class="pp-label">E-Way Bill No.</label><input v-model="form.eway" class="pp-input" /></div>
               <div><label class="pp-label">Destination</label><input v-model="form.dest" class="pp-input" /></div>
               <div><label class="pp-label">Distance (km)</label><input v-model.number="form.distance" type="number" class="pp-input" /></div>
-              <div><label class="pp-label">Document No.</label><input v-model="form.docNo" class="pp-input" /></div>
+            </div>
+            <div class="mt-3">
+              <button
+                type="button"
+                class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs text-slate-600"
+                :aria-expanded="transportExtraOpen"
+                @click="transportExtraOpen = !transportExtraOpen"
+              >
+                <span class="inline-block w-3 text-center font-bold">{{ transportExtraOpen ? '▾' : '▸' }}</span>
+                More transport fields
+                <span
+                  v-if="!transportExtraOpen && hasTransportExtraValues()"
+                  class="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle"
+                  title="LR / Transporter ID / Document filled"
+                />
+              </button>
+              <div v-if="transportExtraOpen" class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-2">
+                <div><label class="pp-label">LR/RR No.</label><input v-model="form.lr" class="pp-input" /></div>
+                <div><label class="pp-label">Transporter ID</label><input v-model="form.transporterId" class="pp-input uppercase" /></div>
+                <div><label class="pp-label">Document No.</label><input v-model="form.docNo" class="pp-input" /></div>
+              </div>
             </div>
           </details>
         </div>
