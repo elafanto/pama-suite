@@ -1888,11 +1888,11 @@ onMounted(async () => {
                   <td class="text-center font-bold text-slate-400 py-2">{{ idx + 1 }}</td>
                   <td class="p-1 min-w-[220px]">
                     <input v-model="row.name" list="itemList" @input="handleItemSelect(row)" class="pp-input !py-1.5 !px-2 w-full" placeholder="Product name..." />
-                    <div class="mt-1.5 grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                      <input v-model="row.size" class="pp-input !py-1 !px-2 text-center min-w-0" placeholder="Size" title="Size" />
-                      <input v-model="row.gsm" class="pp-input !py-1 !px-2 text-center min-w-0" placeholder="GSM" title="GSM" />
-                      <input v-model="row.bf" class="pp-input !py-1 !px-2 text-center min-w-0" placeholder="BF" title="BF" />
-                      <input v-model="row.extra" class="pp-input !py-1 !px-2 min-w-0" placeholder="Extra" title="Extra" />
+                    <div class="mt-1.5 grid grid-cols-2 gap-1.5 sm:grid-cols-[5.25rem_3.75rem_3.25rem_minmax(0,1fr)]">
+                      <input v-model="row.size" class="pp-input !py-1 !px-1.5 text-center min-w-0 text-xs" placeholder="Size" title="Size" />
+                      <input v-model="row.gsm" class="pp-input !py-1 !px-1 text-center min-w-0 text-xs" placeholder="GSM" title="GSM" />
+                      <input v-model="row.bf" class="pp-input !py-1 !px-1 text-center min-w-0 text-xs" placeholder="BF" title="BF" />
+                      <input v-model="row.extra" class="pp-input !py-1 !px-2 min-w-0 sm:col-auto col-span-2" placeholder="Extra" title="Extra" />
                     </div>
                   </td>
                   <td class="p-1">
