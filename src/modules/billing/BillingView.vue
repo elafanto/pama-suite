@@ -204,7 +204,7 @@ const initialFormState = () => ({
   lr: '',
   vehicle: 'UK 04 CA 5262',
   transMode: '1',
-  transporterName: '',
+  transporterName: 'Yusuf',
   transporterId: '',
   eway: '',
   dest: '',
