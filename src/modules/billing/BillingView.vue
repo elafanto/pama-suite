@@ -1888,28 +1888,30 @@ onMounted(async () => {
                   <td class="text-center font-bold text-slate-400 py-2">{{ idx + 1 }}</td>
                   <td class="p-1 min-w-[340px]">
                     <input v-model="row.name" list="itemList" @input="handleItemSelect(row)" class="pp-input !py-1.5 !px-2 w-full" placeholder="Product name..." />
-                    <div class="mt-1.5 flex flex-nowrap items-center gap-1">
-                      <input
-                        v-model="row.size"
-                        class="pp-input !py-1 !px-1 text-center text-xs w-[4.25rem] shrink-0"
-                        placeholder="Size"
-                        title="Size"
-                      />
-                      <input
-                        v-model="row.gsm"
-                        class="pp-input !py-1 !px-1 text-center text-xs w-[3rem] shrink-0"
-                        placeholder="GSM"
-                        title="GSM"
-                      />
-                      <input
-                        v-model="row.bf"
-                        class="pp-input !py-1 !px-1 text-center text-xs w-[2.75rem] shrink-0"
-                        placeholder="BF"
-                        title="BF"
-                      />
+                    <div class="mt-1.5 space-y-1">
+                      <div class="flex items-center gap-1">
+                        <input
+                          v-model="row.size"
+                          class="pp-input !py-1 !px-1 text-center text-xs !w-16 shrink-0"
+                          placeholder="Size"
+                          title="Size"
+                        />
+                        <input
+                          v-model="row.gsm"
+                          class="pp-input !py-1 !px-1 text-center text-xs !w-12 shrink-0"
+                          placeholder="GSM"
+                          title="GSM"
+                        />
+                        <input
+                          v-model="row.bf"
+                          class="pp-input !py-1 !px-1 text-center text-xs !w-11 shrink-0"
+                          placeholder="BF"
+                          title="BF"
+                        />
+                      </div>
                       <input
                         v-model="row.extra"
-                        class="pp-input !py-1 !px-2 text-xs min-w-[9rem] flex-1"
+                        class="pp-input !py-1 !px-2 text-xs w-full"
                         placeholder="Extra"
                         title="Extra"
                       />
