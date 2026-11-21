@@ -1650,14 +1650,14 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="p-6 max-w-7xl mx-auto hide-on-print">
+  <div class="p-4 max-w-7xl mx-auto hide-on-print">
     <!-- Navbar Shell -->
-    <header class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+    <header class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
       <div>
-        <h1 class="text-2xl font-bold text-navy flex items-center gap-2">
+        <h1 class="text-xl font-bold text-navy flex items-center gap-2">
           🧾 Billing <span class="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700 font-semibold" v-if="editingId">EDIT MODE</span>
         </h1>
-        <p class="text-sm text-slate-500">GST invoices, Credit/Debit notes and client receipts</p>
+        <p class="text-xs text-slate-500">GST invoices, Credit/Debit notes and client receipts</p>
       </div>
 
       <div class="flex gap-2 self-start flex-wrap">
@@ -1687,7 +1687,7 @@ onMounted(async () => {
     </header>
 
     <!-- TAB 1: NEW BILL FORM -->
-    <div v-if="activeTab === 'new'" class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+    <div v-if="activeTab === 'new'" class="grid grid-cols-1 lg:grid-cols-4 gap-3">
       <!-- Autocompletes -->
       <datalist id="customerList">
         <option v-for="c in partyStore.list.filter(p => !p.is_deleted)" :key="c.id" :value="c.name" />
@@ -1700,61 +1700,49 @@ onMounted(async () => {
       </datalist>
 
       <!-- Main Form Area -->
-      <div class="lg:col-span-3 space-y-6">
-        <div v-if="isChallanForm" class="pp-card p-3 border border-sky-200 bg-sky-50 text-sm text-sky-900">
-          <strong>Job work delivery challan</strong> — sales, ledger, stock aur GSTR-1 B2B me nahi jayega.
-          Number alag series se lagta hai (<span class="font-mono">DC-0001</span>). GSTR-1 Table 13 me "Delivery Challan for job work" count hoga.
+      <div class="lg:col-span-3 space-y-3">
+        <div v-if="isChallanForm" class="pp-card !p-2 border border-sky-200 bg-sky-50 text-xs text-sky-900">
+          <strong>Job work delivery challan</strong> — number <span class="font-mono">DC-…</span> series; GSTR B2B me nahi.
         </div>
-        <div v-else-if="isNoteForm" class="pp-card p-3 border border-violet-200 bg-violet-50 text-sm text-violet-900">
+        <div v-else-if="isNoteForm" class="pp-card !p-2 border border-violet-200 bg-violet-50 text-xs text-violet-900">
           <strong>{{ docKind(form.doc_type) === 'CREDIT_NOTE' ? 'Credit Note' : 'Debit Note' }}</strong>
-          — alag number series
-          (<span class="font-mono">{{ docKind(form.doc_type) === 'CREDIT_NOTE' ? 'CN-0001' : 'DN-0001' }}</span>).
-          Against Invoice select karo — PDF pe bill no + date print hoga.
+          — series <span class="font-mono">{{ docKind(form.doc_type) === 'CREDIT_NOTE' ? 'CN' : 'DN' }}</span>; Against Invoice select karo.
         </div>
-        <div v-if="formEwayEligibility.show" class="pp-card p-3 border border-amber-200 bg-amber-50 text-sm text-amber-900">
+        <div v-if="formEwayEligibility.show" class="pp-card !p-2 border border-amber-200 bg-amber-50 text-xs text-amber-900">
           🚚 <strong>E-Way:</strong> {{ formEwayEligibility.reason }}
-          <span class="block text-xs mt-1 text-amber-800">
-            Save par ek saath NIC JSON download hoga (vehicle number transport me bharein).
-          </span>
-          <span v-if="formEwayEligibility.level === 'suggested'" class="block text-xs mt-1 text-amber-800">
-            Inter-state ₹50,000 se kam — JSON optional hai.
-          </span>
         </div>
-        <div class="pp-card p-5 space-y-4">
+        <div class="pp-card !p-3 space-y-2">
           <!-- Doc type, Date & Invoice No -->
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <div>
-              <label class="pp-label">Document Type</label>
-              <select v-model="form.doc_type" class="pp-input">
+              <label class="pp-label !mb-0.5">Document Type</label>
+              <select v-model="form.doc_type" class="pp-input !py-1.5 !text-sm">
                 <option v-for="opt in DOC_TYPE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
               </select>
             </div>
             <div>
-              <label class="pp-label">{{ docNoLabel(form.doc_type) }}</label>
+              <label class="pp-label !mb-0.5">{{ docNoLabel(form.doc_type) }}</label>
               <input
                 v-if="editingId"
                 v-model="form.bill_no"
-                class="pp-input"
+                class="pp-input !py-1.5 !text-sm"
               />
               <input
                 v-else
                 :value="nextBillPreview"
                 readonly
-                class="pp-input bg-slate-50 font-semibold text-navy"
+                class="pp-input !py-1.5 !text-sm bg-slate-50 font-semibold text-navy"
                 :placeholder="nextBillPreview || 'INV-0001'"
               />
-              <span v-if="!editingId" class="text-[10px] text-slate-500 mt-1 block">
-                Auto on save — next: <strong>{{ nextBillPreview || '—' }}</strong>
-              </span>
-              <span v-if="isDuplicateBillNo && editingId" class="text-xs text-danger font-semibold mt-1 block">⚠️ Duplicate Invoice Number</span>
+              <span v-if="isDuplicateBillNo && editingId" class="text-[10px] text-danger font-semibold mt-0.5 block">⚠️ Duplicate Invoice Number</span>
             </div>
             <div>
-              <label class="pp-label">Date</label>
-              <input v-model="form.date" type="date" class="pp-input" />
+              <label class="pp-label !mb-0.5">Date</label>
+              <input v-model="form.date" type="date" class="pp-input !py-1.5 !text-sm" />
             </div>
           </div>
 
-          <div v-if="isNoteForm" class="rounded-xl border border-violet-200 bg-violet-50/60 p-3 space-y-2">
+          <div v-if="isNoteForm" class="rounded-lg border border-violet-200 bg-violet-50/60 p-2 space-y-1.5">
             <div class="flex items-center justify-between gap-2 flex-wrap">
               <label class="pp-label !mb-0">Against Invoice *</label>
               <button
@@ -1766,171 +1754,171 @@ onMounted(async () => {
             </div>
             <input
               v-model="form.against_search"
-              class="pp-input"
+              class="pp-input !py-1.5 !text-sm"
               placeholder="Search bill no / party / date…"
               autocomplete="off"
             />
             <div
               v-if="againstInvoiceCandidates.length"
-              class="max-h-44 overflow-y-auto rounded-lg border border-violet-100 bg-white divide-y divide-slate-100"
+              class="max-h-28 overflow-y-auto rounded-lg border border-violet-100 bg-white divide-y divide-slate-100"
             >
               <button
                 v-for="inv in againstInvoiceCandidates"
                 :key="inv.id"
                 type="button"
-                class="w-full text-left px-3 py-2 text-sm hover:bg-violet-50"
+                class="w-full text-left px-2 py-1.5 text-xs hover:bg-violet-50"
                 :class="form.against_invoice_id === inv.id ? 'bg-violet-100' : ''"
                 @click="selectAgainstInvoice(inv)"
               >
                 <span class="font-semibold text-navy">{{ inv.bill_no }}</span>
                 <span class="text-slate-500"> · {{ new Date(inv.date).toLocaleDateString('en-IN') }}</span>
-                <span class="block text-xs text-slate-600 truncate">{{ inv.party_name }} · ₹{{ n2(inv.grand_total) }}</span>
+                <span class="block text-[10px] text-slate-600 truncate">{{ inv.party_name }} · ₹{{ n2(inv.grand_total) }}</span>
               </button>
             </div>
-            <p v-if="form.against_bill_no" class="text-xs text-violet-900">
+            <p v-if="form.against_bill_no" class="text-[10px] text-violet-900">
               Selected: <strong>{{ form.against_bill_no }}</strong>
               <span v-if="form.against_bill_date"> ({{ new Date(form.against_bill_date).toLocaleDateString('en-IN') }})</span>
-              — Reference: <strong>{{ form.ref || '—' }}</strong>
             </p>
-            <p v-else class="text-xs text-violet-800">Party select karke list me se invoice choose karo, ya upar search karo.</p>
           </div>
 
-          <!-- Tax split — visible on create + edit (legacy IGST bills need Intra switch) -->
-          <div class="rounded-xl border border-slate-200 bg-slate-50/80 p-3 space-y-2">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <label class="pp-label !mb-0">Tax type (CGST+SGST / IGST)</label>
-              <button type="button" class="text-xs text-accent underline" @click="detectGstType">Auto-detect from GSTIN</button>
-            </div>
-            <div class="flex flex-wrap gap-4">
-              <label class="flex items-center gap-2 text-sm font-medium cursor-pointer">
-                <input type="radio" v-model="formGstKind" value="intra" class="w-4 h-4 text-accent" />
-                CGST + SGST (Intra-state)
-              </label>
-              <label class="flex items-center gap-2 text-sm font-medium cursor-pointer">
-                <input type="radio" v-model="formGstKind" value="inter" class="w-4 h-4 text-accent" />
-                IGST (Inter-state)
-              </label>
-            </div>
-            <p v-if="editingId && !formIsIntra" class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-              Ye bill abhi IGST pe hai. Uttarakhand / same-state buyer ho to <strong>CGST + SGST</strong> select karke Update Bill dabayein.
+          <!-- Tax + buyer row -->
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-slate-200 bg-slate-50/80 px-2.5 py-1.5">
+            <span class="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Tax</span>
+            <label class="flex items-center gap-1.5 text-xs font-medium cursor-pointer">
+              <input type="radio" v-model="formGstKind" value="intra" class="w-3.5 h-3.5 text-accent" />
+              CGST+SGST
+            </label>
+            <label class="flex items-center gap-1.5 text-xs font-medium cursor-pointer">
+              <input type="radio" v-model="formGstKind" value="inter" class="w-3.5 h-3.5 text-accent" />
+              IGST
+            </label>
+            <button type="button" class="text-[11px] text-accent underline ml-auto" @click="detectGstType">Auto GSTIN</button>
+            <p v-if="editingId && !formIsIntra" class="basis-full text-[10px] text-amber-800">
+              IGST bill — same-state buyer ho to CGST+SGST select karke update karo.
             </p>
           </div>
 
           <!-- Customer details -->
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-slate-100 pt-4">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <div>
-              <div class="flex items-center justify-between gap-2 mb-1">
+              <div class="flex items-center justify-between gap-2 mb-0.5">
                 <label class="pp-label !mb-0">Client / Buyer *</label>
-                <button type="button" class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs" @click="openQuickCust">+ Add Customer</button>
+                <button type="button" class="pp-btn pp-btn-ghost !px-1.5 !py-0.5 text-[11px]" @click="openQuickCust">+ Add</button>
               </div>
-              <input v-model="form.party_name" list="customerList" @input="handleCustSelect" class="pp-input" placeholder="Search or type buyer name..." />
-              <p v-if="gstinFeedback.msg" class="text-xs mt-1" :class="gstinFeedback.ok ? 'text-emerald-600' : 'text-amber-600'">{{ gstinFeedback.msg }}</p>
+              <input v-model="form.party_name" list="customerList" @input="handleCustSelect" class="pp-input !py-1.5 !text-sm" placeholder="Search or type buyer name..." />
+              <p v-if="gstinFeedback.msg" class="text-[10px] mt-0.5" :class="gstinFeedback.ok ? 'text-emerald-600' : 'text-amber-600'">{{ gstinFeedback.msg }}</p>
             </div>
             <div>
-              <label class="pp-label">Reference / PO No.</label>
-              <input v-model="form.ref" class="pp-input" placeholder="PO-12345 (Optional)" />
+              <label class="pp-label !mb-0.5">Reference / PO No.</label>
+              <input v-model="form.ref" class="pp-input !py-1.5 !text-sm" placeholder="PO-12345 (Optional)" />
             </div>
           </div>
 
-          <!-- Billing & shipping address preview -->
-          <div v-if="showFormAddresses" class="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-slate-100 pt-4">
-            <div class="p-3 rounded-xl border border-blue-200 bg-blue-50/60">
-              <h3 class="text-xs font-bold text-blue-900 uppercase tracking-wider mb-2">Bill To (Billing)</h3>
-              <p class="font-semibold text-navy text-sm">{{ formBuyerDisplay!.name }}</p>
-              <p v-if="formBuyerDisplay!.addr" class="text-xs text-slate-700 mt-1 whitespace-pre-wrap">{{ formBuyerDisplay!.addr }}</p>
-              <p v-if="formBuyerDisplay!.city || formBuyerDisplay!.pin" class="text-xs text-slate-600 mt-0.5">
-                {{ [formBuyerDisplay!.city, formBuyerDisplay!.pin].filter(Boolean).join(' - ') }}
-              </p>
-              <p v-if="formBuyerDisplay!.is_consumer" class="text-xs text-emerald-700 font-semibold mt-1">Consumer (B2C)</p>
-              <p v-else-if="formBuyerDisplay!.gst" class="text-xs font-mono font-semibold mt-1">GSTIN: {{ formBuyerDisplay!.gst }}</p>
-              <p v-if="formBuyerDisplay!.state" class="text-xs text-slate-500 mt-0.5">
-                {{ getStateName(formBuyerDisplay!.gst || formBuyerDisplay!.state) }} ({{ formBuyerDisplay!.state }})
-              </p>
-              <p v-if="!formBuyerDisplay!.addr" class="text-xs text-amber-700 mt-2">Address missing — Parties me edit karein</p>
-            </div>
-            <div class="p-3 rounded-xl border border-emerald-200 bg-emerald-50/60">
-              <h3 class="text-xs font-bold text-emerald-900 uppercase tracking-wider mb-2">Ship To (Consignee)</h3>
-              <template v-if="form.sameAsBuyer">
-                <p class="text-sm text-slate-600 italic mb-1">Same as billing address</p>
-                <p class="font-semibold text-navy text-sm">{{ formBuyerDisplay!.name }}</p>
-                <p v-if="formBuyerDisplay!.addr" class="text-xs text-slate-700 mt-1 whitespace-pre-wrap">{{ formBuyerDisplay!.addr }}</p>
-                <p v-if="formBuyerDisplay!.city || formBuyerDisplay!.pin" class="text-xs text-slate-600 mt-0.5">
+          <label class="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
+            <input type="checkbox" v-model="form.sameAsBuyer" id="sameAsBuyer" class="rounded border-slate-300 text-accent focus:ring-accent" />
+            Consignee same as Buyer
+          </label>
+
+          <!-- Billing & shipping address preview — collapsed -->
+          <details v-if="showFormAddresses" class="rounded-lg border border-slate-200 bg-slate-50/50 group">
+            <summary class="flex justify-between items-center px-2.5 py-1.5 text-xs font-semibold text-slate-600 cursor-pointer list-none select-none">
+              <span class="truncate">
+                Addresses
+                <span class="font-normal text-slate-500">
+                  — {{ formBuyerDisplay!.name }}
+                  <template v-if="formBuyerDisplay!.city"> · {{ formBuyerDisplay!.city }}</template>
+                </span>
+              </span>
+              <span class="transition-transform group-open:rotate-180 shrink-0">▾</span>
+            </summary>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 px-2.5 pb-2.5">
+              <div class="p-2 rounded-lg border border-blue-200 bg-blue-50/60">
+                <h3 class="text-[10px] font-bold text-blue-900 uppercase tracking-wider mb-1">Bill To</h3>
+                <p class="font-semibold text-navy text-xs">{{ formBuyerDisplay!.name }}</p>
+                <p v-if="formBuyerDisplay!.addr" class="text-[10px] text-slate-700 mt-0.5 whitespace-pre-wrap line-clamp-2">{{ formBuyerDisplay!.addr }}</p>
+                <p v-if="formBuyerDisplay!.city || formBuyerDisplay!.pin" class="text-[10px] text-slate-600">
                   {{ [formBuyerDisplay!.city, formBuyerDisplay!.pin].filter(Boolean).join(' - ') }}
                 </p>
-              </template>
-              <template v-else-if="formShipDisplay">
-                <p class="font-semibold text-navy text-sm">{{ formShipDisplay.name }}</p>
-                <p v-if="formShipDisplay.addr" class="text-xs text-slate-700 mt-1 whitespace-pre-wrap">{{ formShipDisplay.addr }}</p>
-                <p v-if="formShipDisplay.city || formShipDisplay.pin" class="text-xs text-slate-600 mt-0.5">
-                  {{ [formShipDisplay.city, formShipDisplay.pin].filter(Boolean).join(' - ') }}
-                </p>
-                <p v-if="formShipDisplay.gstin" class="text-xs font-mono font-semibold mt-1">GSTIN: {{ formShipDisplay.gstin }}</p>
-                <p v-if="formShipDisplay.state" class="text-xs text-slate-500 mt-0.5">
-                  {{ getStateName(formShipDisplay.gstin || formShipDisplay.state) }} ({{ formShipDisplay.state }})
-                </p>
-              </template>
-              <template v-else>
-                <p class="text-sm text-amber-700">Alag consignee — neeche shipping details bharein</p>
-              </template>
+                <p v-if="formBuyerDisplay!.gst" class="text-[10px] font-mono font-semibold mt-0.5">{{ formBuyerDisplay!.gst }}</p>
+              </div>
+              <div class="p-2 rounded-lg border border-emerald-200 bg-emerald-50/60">
+                <h3 class="text-[10px] font-bold text-emerald-900 uppercase tracking-wider mb-1">Ship To</h3>
+                <template v-if="form.sameAsBuyer">
+                  <p class="text-[10px] text-slate-500 italic">Same as billing</p>
+                  <p class="font-semibold text-navy text-xs">{{ formBuyerDisplay!.name }}</p>
+                </template>
+                <template v-else-if="formShipDisplay">
+                  <p class="font-semibold text-navy text-xs">{{ formShipDisplay.name }}</p>
+                  <p v-if="formShipDisplay.addr" class="text-[10px] text-slate-700 mt-0.5 whitespace-pre-wrap line-clamp-2">{{ formShipDisplay.addr }}</p>
+                  <p v-if="formShipDisplay.city || formShipDisplay.pin" class="text-[10px] text-slate-600">
+                    {{ [formShipDisplay.city, formShipDisplay.pin].filter(Boolean).join(' - ') }}
+                  </p>
+                </template>
+                <template v-else>
+                  <p class="text-[10px] text-amber-700">Alag consignee — neeche details bharein</p>
+                </template>
+              </div>
+            </div>
+          </details>
+
+          <!-- Separate Consignee details -->
+          <div v-if="!form.sameAsBuyer" class="p-2.5 bg-slate-50 rounded-lg border border-slate-200 space-y-2">
+            <h3 class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Consignee Shipping Details</h3>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div><label class="pp-label !mb-0.5">Consignee Name</label><input v-model="form.ship.name" class="pp-input !py-1.5 !text-sm" /></div>
+              <div><label class="pp-label !mb-0.5">GSTIN</label><input v-model="form.ship.gstin" @input="onShipGstinInput" class="pp-input !py-1.5 !text-sm uppercase" placeholder="05ABCDE1234F1Z5" /></div>
+            </div>
+            <div><label class="pp-label !mb-0.5">Address</label><input v-model="form.ship.addr" class="pp-input !py-1.5 !text-sm" /></div>
+            <div class="grid grid-cols-3 gap-2">
+              <div><label class="pp-label !mb-0.5">City</label><input v-model="form.ship.city" class="pp-input !py-1.5 !text-sm" /></div>
+              <div><label class="pp-label !mb-0.5">PIN</label><input v-model="form.ship.pin" class="pp-input !py-1.5 !text-sm" /></div>
+              <div><label class="pp-label !mb-0.5">State</label><input v-model="form.ship.state" @input="detectGstType" class="pp-input !py-1.5 !text-sm" placeholder="05" /></div>
             </div>
           </div>
 
-          <!-- Shipping toggle & grid -->
-          <div class="border-t border-slate-100 pt-4">
-            <div class="flex items-center gap-2 mb-3">
-              <input type="checkbox" v-model="form.sameAsBuyer" id="sameAsBuyer" class="rounded border-slate-300 text-accent focus:ring-accent" />
-              <label for="sameAsBuyer" class="text-sm font-semibold text-slate-700 cursor-pointer">Consignee same as Buyer (Shipping matches Billing)</label>
-            </div>
-
-            <!-- Separate Consignee details -->
-            <div v-if="!form.sameAsBuyer" class="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
-              <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider">Consignee Shipping Details</h3>
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div><label class="pp-label">Consignee Name</label><input v-model="form.ship.name" class="pp-input" /></div>
-                <div><label class="pp-label">GSTIN</label><input v-model="form.ship.gstin" @input="onShipGstinInput" class="pp-input uppercase" placeholder="05ABCDE1234F1Z5" /></div>
-              </div>
-              <div><label class="pp-label">Address</label><input v-model="form.ship.addr" class="pp-input" /></div>
-              <div class="grid grid-cols-3 gap-3">
-                <div><label class="pp-label">City</label><input v-model="form.ship.city" class="pp-input" /></div>
-                <div><label class="pp-label">PIN</label><input v-model="form.ship.pin" class="pp-input" /></div>
-                <div><label class="pp-label">State Code</label><input v-model="form.ship.state" @input="detectGstType" class="pp-input" placeholder="05" /></div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Transport — open by default -->
-          <details open class="border-t border-slate-100 pt-4 group">
-            <summary class="flex justify-between items-center text-sm font-bold text-slate-600 cursor-pointer list-none select-none">
-              <span>Dispatch &amp; Transport Details</span>
-              <span class="transition-transform group-open:rotate-180">▼</span>
+          <!-- Transport — collapsed by default (defaults already filled) -->
+          <details class="rounded-lg border border-slate-200 group">
+            <summary class="flex justify-between items-center px-2.5 py-1.5 text-xs font-semibold text-slate-600 cursor-pointer list-none select-none">
+              <span class="truncate">
+                Dispatch &amp; Transport
+                <span class="font-normal text-slate-500">
+                  — {{ form.dispatch || 'Road' }}
+                  <template v-if="form.vehicle"> · {{ form.vehicle }}</template>
+                  <template v-if="form.transporterName"> · {{ form.transporterName }}</template>
+                  <template v-if="form.dest"> · {{ form.dest }}</template>
+                </span>
+              </span>
+              <span class="transition-transform group-open:rotate-180 shrink-0">▾</span>
             </summary>
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
-              <div><label class="pp-label">Dispatch via</label><input v-model="form.dispatch" class="pp-input" placeholder="Road" /></div>
-              <div><label class="pp-label">Vehicle Number</label><input v-model="form.vehicle" class="pp-input uppercase" placeholder="UK 04 CA 5262" /></div>
-              <div><label class="pp-label">Transporter Name</label><input v-model="form.transporterName" class="pp-input" /></div>
-              <div><label class="pp-label">E-Way Bill No.</label><input v-model="form.eway" class="pp-input" /></div>
-              <div><label class="pp-label">Destination</label><input v-model="form.dest" class="pp-input" /></div>
-              <div><label class="pp-label">Distance (km)</label><input v-model.number="form.distance" type="number" class="pp-input" /></div>
-            </div>
-            <div class="mt-3">
-              <button
-                type="button"
-                class="pp-btn pp-btn-ghost !px-2 !py-1 text-xs text-slate-600"
-                :aria-expanded="transportExtraOpen"
-                @click="transportExtraOpen = !transportExtraOpen"
-              >
-                <span class="inline-block w-3 text-center font-bold">{{ transportExtraOpen ? '▾' : '▸' }}</span>
-                More transport fields
-                <span
-                  v-if="!transportExtraOpen && hasTransportExtraValues()"
-                  class="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle"
-                  title="LR / Transporter ID / Document filled"
-                />
-              </button>
-              <div v-if="transportExtraOpen" class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-2">
-                <div><label class="pp-label">LR/RR No.</label><input v-model="form.lr" class="pp-input" /></div>
-                <div><label class="pp-label">Transporter ID</label><input v-model="form.transporterId" class="pp-input uppercase" /></div>
-                <div><label class="pp-label">Document No.</label><input v-model="form.docNo" class="pp-input" /></div>
+            <div class="px-2.5 pb-2.5 space-y-2">
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div><label class="pp-label !mb-0.5">Dispatch via</label><input v-model="form.dispatch" class="pp-input !py-1.5 !text-sm" placeholder="Road" /></div>
+                <div><label class="pp-label !mb-0.5">Vehicle Number</label><input v-model="form.vehicle" class="pp-input !py-1.5 !text-sm uppercase" placeholder="UK 04 CA 5262" /></div>
+                <div><label class="pp-label !mb-0.5">Transporter Name</label><input v-model="form.transporterName" class="pp-input !py-1.5 !text-sm" /></div>
+                <div><label class="pp-label !mb-0.5">E-Way Bill No.</label><input v-model="form.eway" class="pp-input !py-1.5 !text-sm" /></div>
+                <div><label class="pp-label !mb-0.5">Destination</label><input v-model="form.dest" class="pp-input !py-1.5 !text-sm" /></div>
+                <div><label class="pp-label !mb-0.5">Distance (km)</label><input v-model.number="form.distance" type="number" class="pp-input !py-1.5 !text-sm" /></div>
+              </div>
+              <div>
+                <button
+                  type="button"
+                  class="pp-btn pp-btn-ghost !px-1.5 !py-0.5 text-[11px] text-slate-600"
+                  :aria-expanded="transportExtraOpen"
+                  @click="transportExtraOpen = !transportExtraOpen"
+                >
+                  <span class="inline-block w-3 text-center font-bold">{{ transportExtraOpen ? '▾' : '▸' }}</span>
+                  More transport fields
+                  <span
+                    v-if="!transportExtraOpen && hasTransportExtraValues()"
+                    class="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle"
+                    title="LR / Transporter ID / Document filled"
+                  />
+                </button>
+                <div v-if="transportExtraOpen" class="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-1.5">
+                  <div><label class="pp-label !mb-0.5">LR/RR No.</label><input v-model="form.lr" class="pp-input !py-1.5 !text-sm" /></div>
+                  <div><label class="pp-label !mb-0.5">Transporter ID</label><input v-model="form.transporterId" class="pp-input !py-1.5 !text-sm uppercase" /></div>
+                  <div><label class="pp-label !mb-0.5">Document No.</label><input v-model="form.docNo" class="pp-input !py-1.5 !text-sm" /></div>
+                </div>
               </div>
             </div>
           </details>
@@ -1938,8 +1926,8 @@ onMounted(async () => {
 
         <!-- Items Entry Table -->
         <div class="pp-card overflow-hidden">
-          <div class="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
-            <h2 class="font-bold text-navy">Goods Description &amp; Rows</h2>
+          <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
+            <h2 class="font-bold text-navy text-sm">Goods Description &amp; Rows</h2>
             <div class="flex gap-2">
               <button type="button" @click="openQuickItem" class="pp-btn pp-btn-ghost !px-2.5 !py-1 text-xs">+ Add Item</button>
               <button @click="addRow()" class="pp-btn pp-btn-ghost !px-2.5 !py-1 text-xs">+ Add Row</button>
@@ -2090,9 +2078,9 @@ onMounted(async () => {
       </div>
 
       <!-- Right Totals Side-Card -->
-      <div class="space-y-6">
-        <div class="pp-card p-5 space-y-4">
-          <h2 class="font-bold text-navy border-b border-slate-100 pb-2">Invoice Summary</h2>
+      <div class="space-y-3">
+        <div class="pp-card !p-3 space-y-2">
+          <h2 class="font-bold text-navy border-b border-slate-100 pb-1.5 text-sm">Invoice Summary</h2>
           <div class="space-y-2 text-sm">
             <div class="flex justify-between text-slate-500">
               <span>Sub Total:</span>
