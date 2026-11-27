@@ -223,6 +223,8 @@ async function saveEditReel() {
 }
 
 const reelFilters = reactive({
+  /** Partial match on reel number (and mill / remark). */
+  q: '',
   paper_type: '',
   gsm: '',
   bf: '',
@@ -262,6 +264,7 @@ const activeReels = computed(() => production.reels.filter((r) => r.status === '
 const reelFilterOptions = computed(() => {
   const uniq = (values: string[]) => Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
   return {
+    reel_no: uniq(production.reels.map((r) => r.reel_no)),
     paper_type: uniq(production.reels.map((r) => paperTypeOf(r))),
     gsm: uniq(production.reels.map((r) => r.gsm)),
     bf: uniq(production.reels.map((r) => r.bf)),
@@ -276,14 +279,18 @@ const colorOptions = computed(() => {
   return Array.from(new Set([...base, ...reelFilterOptions.value.color]))
 })
 
-const filteredReelsBase = computed(() => production.reels.filter((reel) =>
-  (!reelFilters.paper_type || paperTypeOf(reel) === reelFilters.paper_type) &&
-  (!reelFilters.gsm || reel.gsm === reelFilters.gsm) &&
-  (!reelFilters.bf || reel.bf === reelFilters.bf) &&
-  (!reelFilters.deckle || reel.deckle_size === reelFilters.deckle) &&
-  (!reelFilters.color || normalizeReelColor(reel.color) === reelFilters.color) &&
-  (reelFilters.showConsumed || reel.status === 'active'),
-))
+const filteredReelsBase = computed(() => {
+  const q = reelFilters.q.trim().toLowerCase()
+  return production.reels.filter((reel) =>
+    (!reelFilters.paper_type || paperTypeOf(reel) === reelFilters.paper_type) &&
+    (!reelFilters.gsm || reel.gsm === reelFilters.gsm) &&
+    (!reelFilters.bf || reel.bf === reelFilters.bf) &&
+    (!reelFilters.deckle || reel.deckle_size === reelFilters.deckle) &&
+    (!reelFilters.color || normalizeReelColor(reel.color) === reelFilters.color) &&
+    (reelFilters.showConsumed || reel.status === 'active') &&
+    (!q || `${reel.reel_no} ${reel.supplier_name || ''} ${reel.remark || ''}`.toLowerCase().includes(q)),
+  )
+})
 
 type ReelSortKey =
   | 'reel_no'
@@ -522,6 +529,7 @@ const reelBalanceReportRows = breakdownSort.sortedFrom(reelBalanceReportRowsBase
 
 function reelPdfFilterNote(): string {
   const bits: string[] = []
+  if (reelFilters.q.trim()) bits.push(`Reel “${reelFilters.q.trim()}”`)
   if (reelFilters.paper_type) bits.push(`Type ${reelFilters.paper_type}`)
   if (reelFilters.gsm) bits.push(`GSM ${reelFilters.gsm}`)
   if (reelFilters.bf) bits.push(`BF ${reelFilters.bf}`)
@@ -1584,7 +1592,7 @@ onMounted(async () => {
         >
           <span v-if="selectableFilteredReels.length">
             Active reels: <b>{{ selectableFilteredReels.length }}</b>
-            — pehli column <b>Select</b> tick karke Full consume, ya Remaining KG → Update.
+            — <b>Reel No</b> se search karke pehli column <b>Select</b> tick, Full consume, ya Remaining KG → Update.
             Selected: <b>{{ selectedActiveReels.length }}</b>
           </span>
           <span v-else>
@@ -1592,7 +1600,21 @@ onMounted(async () => {
             Pehle right side <b>Add Reel (stock)</b> se reel add karo, phir list mein Select dikhega.
           </span>
         </div>
-        <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
+        <div class="grid grid-cols-2 md:grid-cols-7 gap-3 mb-4">
+        <div class="col-span-2 md:col-span-1">
+          <label class="pp-label">Reel No</label>
+          <input
+            v-model="reelFilters.q"
+            list="reelNoSearchList"
+            type="search"
+            class="pp-input"
+            placeholder="Search reel no…"
+            autocomplete="off"
+          />
+          <datalist id="reelNoSearchList">
+            <option v-for="no in reelFilterOptions.reel_no" :key="no" :value="no" />
+          </datalist>
+        </div>
         <div>
           <label class="pp-label">Paper Type</label>
           <select v-model="reelFilters.paper_type" class="pp-input">
